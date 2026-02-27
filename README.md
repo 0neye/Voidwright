@@ -47,18 +47,52 @@ Notes:
 
 ## Script 1: Download `.ship.png` images from Discord
 
-This script targets guild ID `546229904488923141` and scans all accessible text channels, their threads (active + archived), and forum threads (active + archived) where the bot can read history.
+This script targets guild ID `546229904488923141` and scans only configured channel IDs. By default, it uses this built-in allowlist:
+
+- `546229904488923145`
+- `546947839008440330`
+- `546907635149045775`
+- `1297445027835936779`
+- `1101149194498089051`
+- `546329445032787987`
+- `546327169014431746`
+- `546327605738209291`
+- `546333653605679104`
+- `546333675906662400`
+- `1318750623302418452`
+- `561981489357651980`
+- `1240185912525324300`
+- `546555689464627212`
 
 ```bash
 python scripts/download_ship_images.py --output-dir downloaded_ships --verbose
 ```
 
+Optional channel flags:
+
+```bash
+# Repeat --channel-id as needed
+python scripts/download_ship_images.py --channel-id 546229904488923145 --channel-id 546947839008440330
+
+# Or load IDs from file (one ID per line; blank lines and # comments allowed)
+python scripts/download_ship_images.py --channels-file channel_ids.txt
+
+# Combine both
+python scripts/download_ship_images.py --channel-id 546229904488923145 --channels-file channel_ids.txt
+```
+
 Behavior:
-- Enumerates all accessible text channels in the guild.
-- Enumerates active and archived threads for those text channels, and active/archived threads in accessible forum channels.
-- Walks complete history for each channel/thread with `history(limit=None, oldest_first=True)` (discord.py handles pagination/rate limits).
+- Resolves each configured ID in the guild and handles:
+  - `TextChannel`: scans the channel itself plus active + archived threads.
+  - `ForumChannel`: scans active + archived forum threads.
+  - `Thread`: scans the thread directly.
+  - Missing/inaccessible IDs are logged as warnings and skipped.
+- Walks history with `history(limit=None, oldest_first=True, after=...)` to support resume.
 - Downloads only attachments ending in `.ship.png`.
 - Preserves original filenames; if a filename already exists locally, appends `__msg<message_id>`.
+- Persists resume state to `downloaded_ships/state.json` (or `<output-dir>/state.json`) with per-target `last_message_id` checkpoints and tracked downloaded filenames/attachment IDs.
+- Saves state frequently during scanning and after downloads, so restart/resume continues near the last processed message.
+- Retries transient network/history/download failures with exponential backoff (e.g. DNS/socket/aiohttp/discord HTTP errors).
 - Logs periodic progress.
 
 Permissions/intents notes:
