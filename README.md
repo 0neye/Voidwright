@@ -6,6 +6,7 @@ Utilities for:
 
 ## Files
 
+- `main.py`: top-level pipeline runner that can execute download then extract.
 - `scripts/download_ship_images.py`: connects to Discord and downloads matching files.
 - `scripts/extract_ship_data.py`: parses downloaded `.ship.png` files into JSON.
 - `ship_parser/cosmoteer_ship_parser.py`: vendored/adapted minimal PNG payload parser (with attribution).
@@ -24,6 +25,25 @@ pip install -r requirements.txt
 ```env
 DISCORD_BOT_TOKEN=your_bot_token_here
 ```
+
+## Pipeline runner
+
+Run the full pipeline (download first, then extract):
+
+```bash
+python main.py --download-output-dir downloaded_ships --extract-output-dir extracted_ship_data --verbose
+```
+
+Available flags:
+- `--download-output-dir` (default: `downloaded_ships`)
+- `--extract-output-dir` (default: `extracted_ship_data`)
+- `--skip-download`
+- `--skip-extract`
+- `--verbose`
+
+Notes:
+- Extraction input is the download output directory.
+- `.env` token loading is only used by the download step.
 
 ## Script 1: Download `.ship.png` images from Discord
 

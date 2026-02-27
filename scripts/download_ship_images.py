@@ -21,6 +21,7 @@ def configure_logging(verbose: bool) -> None:
     logging.basicConfig(
         level=level,
         format="%(asctime)s | %(levelname)s | %(message)s",
+        force=True,
     )
 
 
@@ -274,9 +275,8 @@ class ShipImageDownloader(discord.Client):
             logging.warning("HTTP error listing archived threads for #%s: %s", channel.name, exc)
 
 
-def main() -> int:
-    args = parse_args()
-    configure_logging(args.verbose)
+def run_download(output_dir: str | Path = "downloaded_ships", verbose: bool = False) -> int:
+    configure_logging(verbose)
 
     load_dotenv()
     token = getenv(TOKEN_ENV_VAR)
@@ -288,9 +288,14 @@ def main() -> int:
     intents.guilds = True
     intents.messages = True
 
-    client = ShipImageDownloader(output_dir=Path(args.output_dir), intents=intents)
+    client = ShipImageDownloader(output_dir=Path(output_dir), intents=intents)
     client.run(token)
     return 0
+
+
+def main() -> int:
+    args = parse_args()
+    return run_download(output_dir=args.output_dir, verbose=args.verbose)
 
 
 if __name__ == "__main__":

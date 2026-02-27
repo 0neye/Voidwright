@@ -16,6 +16,7 @@ def configure_logging(verbose: bool) -> None:
     logging.basicConfig(
         level=level,
         format="%(asctime)s | %(levelname)s | %(message)s",
+        force=True,
     )
 
 
@@ -50,46 +51,54 @@ def output_name_for(source: Path) -> str:
     return f"{base}.ship.json"
 
 
-def main() -> int:
-    args = parse_args()
-    configure_logging(args.verbose)
+def run_extract(
+    input_dir: str | Path = "downloaded_ships",
+    output_dir: str | Path = "extracted_ship_data",
+    verbose: bool = False,
+) -> int:
+    configure_logging(verbose)
 
-    input_dir = Path(args.input_dir)
-    output_dir = Path(args.output_dir)
+    input_path = Path(input_dir)
+    output_path = Path(output_dir)
 
-    if not input_dir.exists():
-        logging.error("Input directory does not exist: %s", input_dir)
+    if not input_path.exists():
+        logging.error("Input directory does not exist: %s", input_path)
         return 1
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path.mkdir(parents=True, exist_ok=True)
 
     images = sorted(
-        path for path in input_dir.rglob("*") if path.is_file() and path.name.lower().endswith(".ship.png")
+        path for path in input_path.rglob("*") if path.is_file() and path.name.lower().endswith(".ship.png")
     )
 
-    logging.info("Found %d .ship.png file(s) under %s", len(images), input_dir)
+    logging.info("Found %d .ship.png file(s) under %s", len(images), input_path)
 
     success = 0
     failures = 0
 
     for index, image_path in enumerate(images, start=1):
-        output_path = output_dir / output_name_for(image_path)
+        image_output_path = output_path / output_name_for(image_path)
         logging.info("[%d/%d] Parsing %s", index, len(images), image_path)
 
         try:
             ship_data = parse_ship_png(image_path)
-            output_path.write_text(
+            image_output_path.write_text(
                 json.dumps(ship_data, indent=2, sort_keys=True, ensure_ascii=True),
                 encoding="utf-8",
             )
             success += 1
-            logging.info("Wrote %s", output_path)
+            logging.info("Wrote %s", image_output_path)
         except Exception as exc:  # noqa: BLE001
             failures += 1
             logging.exception("Failed to parse %s: %s", image_path, exc)
 
     logging.info("Done. Parsed successfully: %d | Failed: %d", success, failures)
     return 0 if failures == 0 else 2
+
+
+def main() -> int:
+    args = parse_args()
+    return run_extract(input_dir=args.input_dir, output_dir=args.output_dir, verbose=args.verbose)
 
 
 if __name__ == "__main__":
