@@ -27,7 +27,7 @@ DISCORD_BOT_TOKEN=your_bot_token_here
 
 ## Script 1: Download `.ship.png` images from Discord
 
-This script targets guild ID `546229904488923141` and scans all text channels where the bot has `View Channel` and `Read Message History` permissions.
+This script targets guild ID `546229904488923141` and scans all accessible text channels, their threads (active + archived), and forum threads (active + archived) where the bot can read history.
 
 ```bash
 python scripts/download_ship_images.py --output-dir downloaded_ships --verbose
@@ -35,10 +35,16 @@ python scripts/download_ship_images.py --output-dir downloaded_ships --verbose
 
 Behavior:
 - Enumerates all accessible text channels in the guild.
-- Walks complete channel history with `history(limit=None, oldest_first=True)` (discord.py handles pagination/rate limits).
+- Enumerates active and archived threads for those text channels, and active/archived threads in accessible forum channels.
+- Walks complete history for each channel/thread with `history(limit=None, oldest_first=True)` (discord.py handles pagination/rate limits).
 - Downloads only attachments ending in `.ship.png`.
 - Preserves original filenames; if a filename already exists locally, appends `__msg<message_id>`.
 - Logs periodic progress.
+
+Permissions/intents notes:
+- Keep `Server Members Intent` disabled; this script only requires `Guilds` and `Messages` intents.
+- The bot needs `View Channel` and `Read Message History` in each text/forum context to scan messages.
+- For private threads, the bot can only scan archived threads it has joined.
 
 ## Script 2: Extract JSON ship data from downloaded images
 

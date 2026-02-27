@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
+from typing import AsyncIterator, Iterable
 
 import discord
 from dotenv import load_dotenv
@@ -25,7 +26,9 @@ def configure_logging(verbose: bool) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Download every .ship.png attachment from all accessible text channels."
+        description=(
+            "Download every .ship.png attachment from accessible text channels, threads, and forums."
+        )
     )
     parser.add_argument(
         "--output-dir",
@@ -73,18 +76,31 @@ class ShipImageDownloader(discord.Client):
             await self.close()
             return
 
-        channels: list[discord.TextChannel] = []
+        text_channels: list[discord.TextChannel] = []
         for channel in guild.text_channels:
             perms = channel.permissions_for(me)
             if perms.view_channel and perms.read_message_history:
-                channels.append(channel)
+                text_channels.append(channel)
 
-        logging.info("Scanning %d accessible text channel(s) in guild %s", len(channels), guild.id)
+        forum_channels: list[discord.ForumChannel] = []
+        for forum in guild.forums:
+            perms = forum.permissions_for(me)
+            if perms.view_channel and perms.read_message_history:
+                forum_channels.append(forum)
+
+        scan_targets = await self._collect_scan_targets(text_channels, forum_channels, me)
+        logging.info(
+            "Scanning %d target(s) in guild %s (%d text channel(s), %d forum channel(s), threads included)",
+            len(scan_targets),
+            guild.id,
+            len(text_channels),
+            len(forum_channels),
+        )
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        for idx, channel in enumerate(channels, start=1):
-            logging.info("[%d/%d] Channel #%s (%s)", idx, len(channels), channel.name, channel.id)
-            await self._scan_channel(channel)
+        for idx, target in enumerate(scan_targets, start=1):
+            logging.info("[%d/%d] %s", idx, len(scan_targets), target["label"])
+            await self._scan_message_source(target["source"], target["name"])
 
         logging.info(
             "Completed scan. Messages processed: %d | Matching files downloaded: %d",
@@ -93,12 +109,16 @@ class ShipImageDownloader(discord.Client):
         )
         await self.close()
 
-    async def _scan_channel(self, channel: discord.TextChannel) -> None:
+    async def _scan_message_source(
+        self,
+        source: discord.abc.Messageable,
+        source_name: str,
+    ) -> None:
         scanned_in_channel = 0
         downloaded_in_channel = 0
 
         try:
-            async for message in channel.history(limit=None, oldest_first=True):
+            async for message in source.history(limit=None, oldest_first=True):
                 scanned_in_channel += 1
                 self.seen_messages += 1
 
@@ -116,7 +136,7 @@ class ShipImageDownloader(discord.Client):
                             "Downloaded %s from message %s in #%s",
                             output_path.name,
                             message.id,
-                            channel.name,
+                            source_name,
                         )
                     except discord.HTTPException as exc:
                         logging.warning(
@@ -129,21 +149,129 @@ class ShipImageDownloader(discord.Client):
                 if scanned_in_channel % 500 == 0:
                     logging.info(
                         "Progress #%s: %d messages scanned, %d downloads",
-                        channel.name,
+                        source_name,
                         scanned_in_channel,
                         downloaded_in_channel,
                     )
 
             logging.info(
                 "Finished #%s: %d messages scanned, %d downloads",
-                channel.name,
+                source_name,
                 scanned_in_channel,
                 downloaded_in_channel,
             )
         except discord.Forbidden:
-            logging.warning("Missing permission to read history for #%s", channel.name)
+            logging.warning("Missing permission to read history for #%s", source_name)
         except discord.HTTPException as exc:
-            logging.warning("HTTP error while scanning #%s: %s", channel.name, exc)
+            logging.warning("HTTP error while scanning #%s: %s", source_name, exc)
+
+    async def _collect_scan_targets(
+        self,
+        text_channels: list[discord.TextChannel],
+        forum_channels: list[discord.ForumChannel],
+        me: discord.Member,
+    ) -> list[dict[str, object]]:
+        targets: list[dict[str, object]] = []
+        seen_thread_ids: set[int] = set()
+
+        for channel in text_channels:
+            targets.append(
+                {
+                    "source": channel,
+                    "name": channel.name,
+                    "label": f"Text channel #{channel.name} ({channel.id})",
+                }
+            )
+
+            for thread in self._filter_accessible_threads(channel.threads, me):
+                if thread.id in seen_thread_ids:
+                    continue
+                seen_thread_ids.add(thread.id)
+                targets.append(self._thread_target(thread, f"Thread in #{channel.name}"))
+
+            async for thread in self._iter_archived_threads(channel):
+                if thread.id in seen_thread_ids:
+                    continue
+                if not self._can_read_thread(thread, me):
+                    continue
+                seen_thread_ids.add(thread.id)
+                targets.append(self._thread_target(thread, f"Archived thread in #{channel.name}"))
+
+        for forum in forum_channels:
+            for thread in self._filter_accessible_threads(forum.threads, me):
+                if thread.id in seen_thread_ids:
+                    continue
+                seen_thread_ids.add(thread.id)
+                targets.append(self._thread_target(thread, f"Forum thread in #{forum.name}"))
+
+            async for thread in self._iter_archived_threads(forum):
+                if thread.id in seen_thread_ids:
+                    continue
+                if not self._can_read_thread(thread, me):
+                    continue
+                seen_thread_ids.add(thread.id)
+                targets.append(self._thread_target(thread, f"Archived forum thread in #{forum.name}"))
+
+        return targets
+
+    def _thread_target(self, thread: discord.Thread, prefix: str) -> dict[str, object]:
+        return {
+            "source": thread,
+            "name": thread.name,
+            "label": f"{prefix} #{thread.name} ({thread.id})",
+        }
+
+    def _filter_accessible_threads(
+        self,
+        threads: Iterable[discord.Thread],
+        me: discord.Member,
+    ) -> list[discord.Thread]:
+        return [thread for thread in threads if self._can_read_thread(thread, me)]
+
+    def _can_read_thread(self, thread: discord.Thread, me: discord.Member) -> bool:
+        perms = thread.permissions_for(me)
+        return perms.view_channel and perms.read_message_history
+
+    async def _iter_archived_threads(
+        self,
+        channel: discord.TextChannel | discord.ForumChannel,
+    ) -> AsyncIterator[discord.Thread]:
+        if isinstance(channel, discord.TextChannel):
+            try:
+                async for thread in channel.archived_threads(limit=None, private=False):
+                    yield thread
+            except discord.Forbidden:
+                logging.warning("Missing permission to list archived threads for #%s", channel.name)
+            except discord.HTTPException as exc:
+                logging.warning(
+                    "HTTP error listing archived threads for #%s: %s",
+                    channel.name,
+                    exc,
+                )
+
+            try:
+                async for thread in channel.archived_threads(limit=None, private=True, joined=True):
+                    yield thread
+            except discord.Forbidden:
+                logging.warning(
+                    "Missing permission to list archived private threads for #%s",
+                    channel.name,
+                )
+            except discord.HTTPException as exc:
+                logging.warning(
+                    "HTTP error listing archived private threads for #%s: %s",
+                    channel.name,
+                    exc,
+                )
+            return
+
+        try:
+            async for thread in channel.archived_threads(limit=None):
+                yield thread
+        except discord.Forbidden:
+            logging.warning("Missing permission to list archived threads for #%s", channel.name)
+        except discord.HTTPException as exc:
+            logging.warning("HTTP error listing archived threads for #%s: %s", channel.name, exc)
 
 
 def main() -> int:
