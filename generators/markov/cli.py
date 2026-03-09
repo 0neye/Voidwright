@@ -10,6 +10,7 @@ from .model import (
     RelativeMarkovModel,
     TrainingConfig,
     build_model_from_corpus,
+    build_model_from_graph_corpus,
     iter_vanilla_parts_from_ship,
     validate_relative_placement_assumptions,
 )
@@ -125,7 +126,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ── build ──
     build = subparsers.add_parser("build", help="Train/build Markov artifacts from the canonical corpus.")
-    build.add_argument("--input-dir", type=Path, required=True)
+    build.add_argument(
+        "--input-dir",
+        type=Path,
+        default=None,
+        help="Directory with extracted raw ship JSON files (legacy training path).",
+    )
+    build.add_argument(
+        "--graph-input-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help=(
+            "Directory with pre-generated ship graph JSON files "
+            "(produced by scripts/generate_ship_graphs.py). "
+            "Uses BFS-based touching-anchor ordering for better structural coherence. "
+            "Mutually exclusive with --input-dir."
+        ),
+    )
     build.add_argument("--output", type=Path, required=True)
     build.add_argument("--markov-order", type=int, default=2)
     build.add_argument("--min-parts-per-ship", type=int, default=2)
@@ -311,26 +329,55 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_build(args: argparse.Namespace) -> int:
+    graph_input_dir = getattr(args, "graph_input_dir", None)
+    input_dir = getattr(args, "input_dir", None)
+
+    if graph_input_dir is not None and input_dir is not None:
+        print("[build] ERROR: --graph-input-dir and --input-dir are mutually exclusive")
+        return 1
+    if graph_input_dir is None and input_dir is None:
+        print("[build] ERROR: one of --input-dir or --graph-input-dir is required")
+        return 1
+
     allowlist = _load_allowlist(args.allowlist, args.allowlist_file)
     if allowlist is not None:
         print(f"[build] allowlist active: {len(allowlist)} part IDs")
-    model = build_model_from_corpus(
-        args.input_dir,
-        TrainingConfig(
-            markov_order=args.markov_order,
-            min_parts_per_ship=args.min_parts_per_ship,
-            max_parts_per_ship=args.max_parts_per_ship,
-            anchor_window=args.anchor_window,
-            part_allowlist=allowlist,
-        ),
+
+    training_config = TrainingConfig(
+        markov_order=args.markov_order,
+        min_parts_per_ship=args.min_parts_per_ship,
+        max_parts_per_ship=args.max_parts_per_ship,
+        anchor_window=args.anchor_window,
+        part_allowlist=allowlist,
     )
+
+    if graph_input_dir is not None:
+        print(f"[build] training from graph corpus: {graph_input_dir}")
+        model = build_model_from_graph_corpus(graph_input_dir, training_config)
+    else:
+        print(f"[build] training from raw ship corpus: {input_dir}")
+        model = build_model_from_corpus(input_dir, training_config)
+
     model.save(args.output)
-    print(f"[build] model saved to {args.output}")
+    stats = model.payload.get("stats", {})
+    touching_frac = (
+        stats.get("touching_transitions", 0) / stats.get("transition_tokens", 1)
+        if stats.get("transition_tokens", 0) > 0 else 0.0
+    )
+    print(
+        f"[build] model saved to {args.output}  "
+        f"ships={stats.get('ships_used','?')}  "
+        f"tokens={stats.get('transition_tokens','?')}  "
+        f"touching={touching_frac:.1%}"
+    )
     if args.validation_output is not None:
-        payload = validate_relative_placement_assumptions(args.input_dir)
-        args.validation_output.parent.mkdir(parents=True, exist_ok=True)
-        args.validation_output.write_text(json.dumps(payload, indent=2) + "\n")
-        print(f"[build] validation written to {args.validation_output}")
+        if input_dir is not None:
+            payload = validate_relative_placement_assumptions(input_dir)
+            args.validation_output.parent.mkdir(parents=True, exist_ok=True)
+            args.validation_output.write_text(json.dumps(payload, indent=2) + "\n")
+            print(f"[build] validation written to {args.validation_output}")
+        else:
+            print("[build] NOTE: --validation-output is only supported with --input-dir (skipped for graph corpus)")
     return 0
 
 

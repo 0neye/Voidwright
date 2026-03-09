@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import random
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -816,6 +816,222 @@ def build_model_from_corpus(input_dir: Path, config: TrainingConfig) -> Relative
             "Relative placement uses origin-to-origin deltas between an anchor part and the next emitted part.",
             "Sampling rejects overlaps using full vanilla footprint geometry from game-file exports.",
             "This first pass intentionally defers door synthesis, accessibility cleanup, and gameplay-grade legality checks.",
+        ],
+    }
+    return RelativeMarkovModel(payload)
+
+
+def iter_vanilla_parts_from_graph(
+    graph_data: dict,
+    geometry_cache: Optional[Dict[str, object]] = None,
+) -> Tuple[List[ShipPart], Dict[int, int]]:
+    """Extract vanilla ShipParts from a pre-generated structural part graph dict.
+
+    Returns (parts, node_id_to_part_idx) where node_id_to_part_idx maps
+    A_structural_part_graph node IDs to indices in the returned parts list.
+    Non-vanilla and geometry-unknown nodes are silently skipped.
+    """
+    geometry_cache = geometry_cache or load_vanilla_part_geometry()
+    nodes = graph_data.get("graphs", {}).get("A_structural_part_graph", {}).get("nodes", [])
+    parts: List[ShipPart] = []
+    node_id_to_idx: Dict[int, int] = {}
+    for node in nodes:
+        part_id = node.get("part_id", "")
+        if not is_vanilla_part_id(part_id) or part_id not in geometry_cache:
+            continue
+        rotation = int(node.get("rotation", 0)) % 4
+        if rotation not in geometry_cache[part_id].rotations:
+            continue
+        location = node.get("location")
+        if not isinstance(location, list) or len(location) != 2:
+            continue
+        node_id = node["id"]
+        node_id_to_idx[node_id] = len(parts)
+        parts.append(ShipPart(
+            part_id=part_id,
+            rotation=rotation,
+            x=int(location[0]),
+            y=int(location[1]),
+        ))
+    return parts, node_id_to_idx
+
+
+def order_ship_parts_from_graph(
+    parts: List[ShipPart],
+    node_id_to_idx: Dict[int, int],
+    edges: List[dict],
+    anchor_window: int = 128,
+) -> List[Tuple[ShipPart, Optional[ShipPart]]]:
+    """Order parts for Markov training using structural graph touching edges.
+
+    BFS from the geometrically-central part following touching edges ensures
+    each anchor is a real touching neighbour. Disconnected components are
+    appended using geometric nearest-neighbour anchoring as a fallback.
+    """
+    if not parts:
+        return []
+    n = len(parts)
+
+    # Build adjacency restricted to vanilla-filtered parts (part-index space).
+    adj: Dict[int, List[int]] = defaultdict(list)
+    for edge in edges:
+        src = node_id_to_idx.get(edge["source"])
+        tgt = node_id_to_idx.get(edge["target"])
+        if src is not None and tgt is not None:
+            adj[src].append(tgt)
+            adj[tgt].append(src)
+    for k in adj:
+        adj[k].sort()  # deterministic BFS order
+
+    root = choose_root(parts)
+    root_idx = parts.index(root)
+
+    visited = [False] * n
+    visited[root_idx] = True
+    ordered: List[Tuple[ShipPart, Optional[ShipPart]]] = [(root, None)]
+    placed: List[ShipPart] = [root]
+    placed_at: Dict[int, int] = {root_idx: 0}  # part_idx -> index in placed
+    queue: deque = deque([root_idx])
+
+    while queue:
+        cur_idx = queue.popleft()
+        for neighbor_idx in adj[cur_idx]:
+            if visited[neighbor_idx]:
+                continue
+            visited[neighbor_idx] = True
+            anchor = placed[placed_at[cur_idx]]
+            placed_at[neighbor_idx] = len(placed)
+            placed.append(parts[neighbor_idx])
+            ordered.append((parts[neighbor_idx], anchor))
+            queue.append(neighbor_idx)
+
+    # Append disconnected parts using geometric proximity as fallback.
+    for rem_idx in range(n):
+        if visited[rem_idx]:
+            continue
+        candidates = placed[-anchor_window:] if len(placed) > anchor_window else placed
+        anchor = min(candidates, key=lambda p: _distance(p, parts[rem_idx]))
+        placed_at[rem_idx] = len(placed)
+        placed.append(parts[rem_idx])
+        ordered.append((parts[rem_idx], anchor))
+        visited[rem_idx] = True
+
+    return ordered
+
+
+def build_model_from_graph_corpus(graph_dir: Path, config: TrainingConfig) -> RelativeMarkovModel:
+    """Build a Markov model from pre-generated ship graph JSON files.
+
+    Reads A_structural_part_graph nodes and edges to extract vanilla parts and
+    their adjacency, then uses BFS-based ordering so anchor assignments are
+    touching neighbours. This produces more structurally coherent transition
+    tokens compared to raw-ship geometric-proximity anchoring.
+    """
+    geometry_cache = load_vanilla_part_geometry()
+    stats = TrainingStats()
+    start_counts: Counter = Counter()
+    transition_counts: Dict[str, Counter] = defaultdict(Counter)
+    part_frequency: Counter = Counter()
+
+    graph_files = sorted(f for f in graph_dir.glob("*.json") if f.name != "manifest.json")
+
+    for graph_path in graph_files:
+        stats.ships_seen += 1
+        try:
+            with graph_path.open() as fh:
+                graph_data = json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        # Count excluded parts for stats.
+        all_nodes = graph_data.get("graphs", {}).get("A_structural_part_graph", {}).get("nodes", [])
+        for node in all_nodes:
+            pid = node.get("part_id", "")
+            if not is_vanilla_part_id(pid):
+                stats.non_vanilla_parts_excluded += 1
+            elif pid not in geometry_cache:
+                stats.unknown_vanilla_geometry_excluded += 1
+
+        parts, node_id_to_idx = iter_vanilla_parts_from_graph(graph_data, geometry_cache=geometry_cache)
+
+        # Apply training-time allowlist, remapping node_id_to_idx.
+        if config.part_allowlist is not None:
+            new_parts: List[ShipPart] = []
+            new_node_id_to_idx: Dict[int, int] = {}
+            for node_id, old_idx in sorted(node_id_to_idx.items(), key=lambda kv: kv[1]):
+                if parts[old_idx].part_id in config.part_allowlist:
+                    new_node_id_to_idx[node_id] = len(new_parts)
+                    new_parts.append(parts[old_idx])
+            parts = new_parts
+            node_id_to_idx = new_node_id_to_idx
+
+        stats.vanilla_parts_seen += len(parts)
+        if len(parts) < config.min_parts_per_ship:
+            stats.ships_skipped_too_small += 1
+            continue
+        if len(parts) > config.max_parts_per_ship:
+            stats.ships_skipped_too_large += 1
+            continue
+        stats.ships_used += 1
+        stats.vanilla_parts_used += len(parts)
+
+        edges = graph_data.get("graphs", {}).get("A_structural_part_graph", {}).get("edges", [])
+        ordered = order_ship_parts_from_graph(parts, node_id_to_idx, edges, anchor_window=config.anchor_window)
+
+        history: List[str] = []
+        for idx, (part, anchor) in enumerate(ordered):
+            if idx == 0:
+                token = RelativePlacementToken(
+                    part_id=part.part_id,
+                    rotation=part.rotation,
+                    anchor_part_id=ROOT_ANCHOR,
+                    anchor_rotation=0,
+                    dx=0,
+                    dy=0,
+                )
+                key = token.as_key()
+                start_counts[key] += 1
+                history.append(key)
+                part_frequency[part.part_id] += 1
+                stats.root_tokens += 1
+                continue
+            assert anchor is not None
+            token = RelativePlacementToken(
+                part_id=part.part_id,
+                rotation=part.rotation,
+                anchor_part_id=anchor.part_id,
+                anchor_rotation=anchor.rotation,
+                dx=part.x - anchor.x,
+                dy=part.y - anchor.y,
+            )
+            key = token.as_key()
+            transition_counts[state_key(history, config.markov_order)][key] += 1
+            history.append(key)
+            part_frequency[part.part_id] += 1
+            stats.transition_tokens += 1
+            if parts_touch(anchor, part, geometry_cache):
+                stats.touching_transitions += 1
+            else:
+                stats.non_touching_transitions += 1
+        transition_counts[state_key(history, config.markov_order)][END_TOKEN] += 1
+        stats.end_tokens += 1
+
+    payload = {
+        "schema_version": 2,
+        "model_type": "relative_markov_first_pass",
+        "config": _config_as_dict(config),
+        "corpus": {"graph_dir": str(graph_dir), "source": "pre-generated ship graphs"},
+        "stats": asdict(stats),
+        "start_counts": dict(start_counts),
+        "transition_counts": {k: dict(v) for k, v in transition_counts.items()},
+        "part_frequency": dict(part_frequency),
+        "notes": [
+            "Vanilla-only corpus model built from pre-generated ship graph JSONs.",
+            "Ordering uses BFS traversal over A_structural_part_graph touching edges.",
+            "Anchors are touching graph neighbours (BFS parent), improving structural connectivity.",
+            "Disconnected components fall back to geometric nearest-neighbour anchoring.",
+            "Relative placement uses origin-to-origin deltas between anchor and next part.",
+            "Sampling rejects overlaps using full vanilla footprint geometry from game-file exports.",
         ],
     }
     return RelativeMarkovModel(payload)
