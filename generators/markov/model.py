@@ -98,6 +98,7 @@ class GenerationConfig:
     bounds_max_y: int = 64
     rng_seed: Optional[int] = None
     part_allowlist: Optional[frozenset] = None  # if set, only tokens with these part_ids are sampled
+    mirror_symmetry: bool = False  # if True, enforce left-right mirror symmetry across x = -0.5
 
 
 @dataclass
@@ -168,21 +169,46 @@ class RelativeMarkovModel:
                 return False
         return True
 
+    def _within_primary_bounds(self, part: ShipPart, config: GenerationConfig) -> bool:
+        """Bounds check for PRIMARY placements in mirror mode: x ≤ -1."""
+        for x, y in part.footprint_cells(self.geometry_cache):
+            if not (config.bounds_min_x <= x <= -1 and config.bounds_min_y <= y <= config.bounds_max_y):
+                return False
+        return True
+
+    def _within_mirror_bounds(self, part: ShipPart, config: GenerationConfig) -> bool:
+        """Bounds check for MIRROR placements: x ≥ 0 and within overall bounds."""
+        for x, y in part.footprint_cells(self.geometry_cache):
+            if not (0 <= x <= config.bounds_max_x and config.bounds_min_y <= y <= config.bounds_max_y):
+                return False
+        return True
+
     def generate(self, config: GenerationConfig) -> dict:
         rng = random.Random(config.rng_seed)
+        # placed: all parts (primary + mirrors in mirror mode)
         placed: List[ShipPart] = []
+        # primary_indices: indices into `placed` for primary (left-side) parts only.
+        # Used as the anchor pool in mirror mode so the Markov chain builds on the
+        # primary half; mirrors on the right are structural copies, not generators.
+        primary_indices: List[int] = []
         occupied_cells: set[Coord] = set()
-        history: List[str] = []
+        history: List[str] = []  # Markov token history; mirrors are NOT added
         placement_trace: List[dict] = []
         attempts = 0
         rejected_missing_anchor = 0
         rejected_overlap = 0
         rejected_bounds = 0
+        rejected_mirror = 0
         stop_reason = "unknown"
 
         allowlist = config.part_allowlist  # None or frozenset[str]
         rejected_allowlist = 0
+        mirror_mode = config.mirror_symmetry
 
+        if mirror_mode:
+            from .symmetry import mirror_part as _mirror_part, primary_root_x as _primary_root_x
+
+        # ── Root ──────────────────────────────────────────────────────────────
         root_key = None
         root = None
         root_attempts = max(64, len(self.start_counts) // 100)
@@ -204,18 +230,52 @@ class RelativeMarkovModel:
                     f"Check that the allowlist contains parts present in the model's training corpus."
                 )
             raise RuntimeError("could not sample a root token with known vanilla geometry")
-        root_part = ShipPart(part_id=root.part_id, rotation=root.rotation, x=0, y=0)
-        root_cells = root_part.footprint_cells(self.geometry_cache)
-        placed.append(root_part)
-        occupied_cells.update(root_cells)
-        history.append(root_key)
-        placement_trace.append({
-            "token": root.to_dict(),
-            "anchor_index": None,
-            "placed_index": 0,
-            "world_origin": [0, 0],
-        })
 
+        if mirror_mode:
+            # Place root flush against the mirror axis (rightmost cell at x = -1).
+            rx = _primary_root_x(root.part_id, root.rotation, self.geometry_cache)
+            root_part = ShipPart(part_id=root.part_id, rotation=root.rotation, x=rx, y=0)
+            root_cells = root_part.footprint_cells(self.geometry_cache)
+            mirror_root = _mirror_part(root_part, self.geometry_cache)
+            root_primary_idx = len(placed)
+            placed.append(root_part)
+            occupied_cells.update(root_cells)
+            primary_indices.append(root_primary_idx)
+            placement_trace.append({
+                "token": root.to_dict(),
+                "anchor_index": None,
+                "placed_index": root_primary_idx,
+                "world_origin": [root_part.x, root_part.y],
+                "is_mirror": False,
+            })
+            if mirror_root is not None:
+                mirror_cells = mirror_root.footprint_cells(self.geometry_cache)
+                mirror_idx = len(placed)
+                placed.append(mirror_root)
+                occupied_cells.update(mirror_cells)
+                placement_trace.append({
+                    "token": root.to_dict(),
+                    "anchor_index": None,
+                    "placed_index": mirror_idx,
+                    "world_origin": [mirror_root.x, mirror_root.y],
+                    "is_mirror": True,
+                    "mirror_of": root_primary_idx,
+                })
+        else:
+            root_part = ShipPart(part_id=root.part_id, rotation=root.rotation, x=0, y=0)
+            root_cells = root_part.footprint_cells(self.geometry_cache)
+            placed.append(root_part)
+            primary_indices.append(0)
+            occupied_cells.update(root_cells)
+            placement_trace.append({
+                "token": root.to_dict(),
+                "anchor_index": None,
+                "placed_index": 0,
+                "world_origin": [0, 0],
+            })
+        history.append(root_key)
+
+        # ── Main loop ─────────────────────────────────────────────────────────
         while len(placed) < config.max_parts and attempts < config.max_attempts:
             state = self._state_key(history, self.order)
             options = self.transition_counts.get(state)
@@ -241,15 +301,25 @@ class RelativeMarkovModel:
                     continue
                 if token.part_id not in self.geometry_cache or token.rotation not in self.geometry_cache[token.part_id].rotations:
                     continue
-                anchor_indexes = [
-                    i
-                    for i, part in enumerate(placed)
-                    if part.part_id == token.anchor_part_id and part.rotation == token.anchor_rotation
-                ]
+
+                # In mirror mode anchor lookup is restricted to primary (left-side)
+                # parts so the Markov chain never tries to build off a mirror copy.
+                if mirror_mode:
+                    anchor_indexes = [
+                        i for i in primary_indices
+                        if placed[i].part_id == token.anchor_part_id and placed[i].rotation == token.anchor_rotation
+                    ]
+                else:
+                    anchor_indexes = [
+                        i
+                        for i, part in enumerate(placed)
+                        if part.part_id == token.anchor_part_id and part.rotation == token.anchor_rotation
+                    ]
                 anchor_indexes.sort(reverse=True)
                 if not anchor_indexes:
                     rejected_missing_anchor += 1
                     continue
+
                 accepted = False
                 for idx in anchor_indexes:
                     anchor = placed[idx]
@@ -260,21 +330,69 @@ class RelativeMarkovModel:
                         y=anchor.y + token.dy,
                     )
                     candidate_cells = candidate.footprint_cells(self.geometry_cache)
-                    if candidate_cells & occupied_cells:
-                        rejected_overlap += 1
-                        continue
-                    if not self._placement_within_bounds(candidate, config):
-                        rejected_bounds += 1
-                        continue
-                    placed.append(candidate)
-                    occupied_cells.update(candidate_cells)
-                    history.append(candidate_key)
-                    placement_trace.append({
-                        "token": token.to_dict(),
-                        "anchor_index": idx,
-                        "placed_index": len(placed) - 1,
-                        "world_origin": [candidate.x, candidate.y],
-                    })
+
+                    if mirror_mode:
+                        # Primary placement must stay on the left half (x ≤ -1).
+                        if not self._within_primary_bounds(candidate, config):
+                            rejected_bounds += 1
+                            continue
+                        if candidate_cells & occupied_cells:
+                            rejected_overlap += 1
+                            continue
+                        # Compute mirror and validate it before committing.
+                        mirror_candidate = _mirror_part(candidate, self.geometry_cache)
+                        if mirror_candidate is None:
+                            rejected_mirror += 1
+                            continue
+                        mirror_cells = mirror_candidate.footprint_cells(self.geometry_cache)
+                        if mirror_cells & occupied_cells:
+                            rejected_mirror += 1
+                            continue
+                        if not self._within_mirror_bounds(mirror_candidate, config):
+                            rejected_mirror += 1
+                            continue
+                        # Both sides are valid — commit primary then mirror.
+                        primary_idx = len(placed)
+                        placed.append(candidate)
+                        occupied_cells.update(candidate_cells)
+                        primary_indices.append(primary_idx)
+                        history.append(candidate_key)
+                        placement_trace.append({
+                            "token": token.to_dict(),
+                            "anchor_index": idx,
+                            "placed_index": primary_idx,
+                            "world_origin": [candidate.x, candidate.y],
+                            "is_mirror": False,
+                        })
+                        mirror_idx = len(placed)
+                        placed.append(mirror_candidate)
+                        occupied_cells.update(mirror_cells)
+                        placement_trace.append({
+                            "token": token.to_dict(),
+                            "anchor_index": None,
+                            "placed_index": mirror_idx,
+                            "world_origin": [mirror_candidate.x, mirror_candidate.y],
+                            "is_mirror": True,
+                            "mirror_of": primary_idx,
+                        })
+                    else:
+                        if candidate_cells & occupied_cells:
+                            rejected_overlap += 1
+                            continue
+                        if not self._placement_within_bounds(candidate, config):
+                            rejected_bounds += 1
+                            continue
+                        placed.append(candidate)
+                        occupied_cells.update(candidate_cells)
+                        primary_indices.append(len(placed) - 1)
+                        history.append(candidate_key)
+                        placement_trace.append({
+                            "token": token.to_dict(),
+                            "anchor_index": idx,
+                            "placed_index": len(placed) - 1,
+                            "world_origin": [candidate.x, candidate.y],
+                        })
+
                     accepted = True
                     token_key = candidate_key
                     break
@@ -298,29 +416,49 @@ class RelativeMarkovModel:
         max_x = max(cell[0] for cell in all_cells)
         min_y = min(cell[1] for cell in all_cells)
         max_y = max(cell[1] for cell in all_cells)
+
+        primary_count = len(primary_indices)
+        mirror_count = len(placed) - primary_count
+
+        stats: dict = {
+            "parts_generated": len(placed),
+            "occupied_cells": len(all_cells),
+            "attempts": attempts,
+            "stop_reason": stop_reason,
+            "rejections": {
+                "missing_anchor": rejected_missing_anchor,
+                "overlap": rejected_overlap,
+                "bounds": rejected_bounds,
+                "allowlist": rejected_allowlist,
+            },
+            "bounds": {"min_x": min_x, "max_x": max_x, "min_y": min_y, "max_y": max_y},
+        }
+        if mirror_mode:
+            stats["mirror"] = {
+                "primary_parts": primary_count,
+                "mirror_parts": mirror_count,
+                "rejected_mirror": rejected_mirror,
+            }
+
+        notes = [
+            "Vanilla-only first-pass relative-placement Markov sample.",
+            "Overlap rejection is footprint-aware using vanilla game-file geometry.",
+            "Doors and accessibility cleanup are intentionally deferred to later passes.",
+        ]
+        if mirror_mode:
+            notes.append(
+                "Mirror symmetry: left-right across axis x = -0.5 (between columns -1 and 0). "
+                "Primary placements on left half (x ≤ -1); mirrors placed on right half (x ≥ 0). "
+                "Only primary parts serve as Markov anchors."
+            )
+
         return {
             "generator": "relative_markov_first_pass",
             "config": _config_as_dict(config),
-            "stats": {
-                "parts_generated": len(placed),
-                "occupied_cells": len(all_cells),
-                "attempts": attempts,
-                "stop_reason": stop_reason,
-                "rejections": {
-                    "missing_anchor": rejected_missing_anchor,
-                    "overlap": rejected_overlap,
-                    "bounds": rejected_bounds,
-                    "allowlist": rejected_allowlist,
-                },
-                "bounds": {"min_x": min_x, "max_x": max_x, "min_y": min_y, "max_y": max_y},
-            },
+            "stats": stats,
             "parts": [asdict(part) for part in placed],
             "placement_trace": placement_trace,
-            "notes": [
-                "Vanilla-only first-pass relative-placement Markov sample.",
-                "Overlap rejection is footprint-aware using vanilla game-file geometry.",
-                "Doors and accessibility cleanup are intentionally deferred to later passes.",
-            ],
+            "notes": notes,
         }
 
 

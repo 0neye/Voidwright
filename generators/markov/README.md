@@ -23,6 +23,7 @@ Implemented here:
 - export generated ships to `.ship.png` files loadable in-game
 - roundtrip validation: encode → extract → compare parts list
 - **allowlist support**: restrict both training and generation to a user-specified set of part IDs
+- **mirror symmetry mode**: generate left-right symmetric ships (see below)
 
 Explicitly deferred:
 - door synthesis during generation
@@ -159,6 +160,75 @@ python scripts/build_markov_generator.py generate \
   indicates the allowlist exhausted reachable transitions.
 - Use `python scripts/build_markov_generator.py build ... --allowlist ...` for the most reliable
   results: the model will learn transitions only within the allowed set.
+
+## Mirror symmetry mode
+
+Pass `--mirror-symmetry` to `generate` to produce ships with strict left-right symmetry.
+
+```bash
+python scripts/build_markov_generator.py generate \
+  --model out/markov/markov-model.v2.json \
+  --output out/markov/samples-mirror \
+  --export-png-dir out/markov/exported-ships-mirror \
+  --count 20 \
+  --max-parts 200 \
+  --mirror-symmetry \
+  --seed 2025
+```
+
+### How it works
+
+Mirror mode is implemented entirely at **generation time** — no retraining required.
+
+**Axis convention:** the mirror axis sits at x = −0.5, between grid columns −1 and 0.
+All primary placements have their rightmost footprint cell at x ≤ −1 (left half).
+Their mirrors land at x ≥ 0 (right half).  No part ever straddles the axis.
+
+**Root placement:** the root part is placed flush against the axis, with its rightmost
+cell at x = −1.  For a part of width W this means `origin_x = −W`.
+
+**Mirror transform:**
+- `mirror_x = −origin_x − W`  (derived from cell-mirror formula: cell x ↦ −x − 1)
+- `mirror_rotation = (4 − rotation) % 4`  (reverses CW handedness: 0↔0, 1↔3, 2↔2, 3↔1)
+- `mirror_y = origin_y`  (y is unchanged)
+
+This is verified against vanilla footprint geometry: the mirrored part's footprint cells
+exactly equal the horizontal reflections of the primary part's cells.
+
+**Anchor pool:** only primary (left-side) parts serve as Markov anchors for future
+placements.  Mirror copies on the right are structural duplicates and are not fed back
+into the token history.  This keeps the Markov chain building naturally on one side.
+
+**Symmetry enforcement:** if a candidate placement's mirror would overlap an already-placed
+part or fall outside world bounds, the primary placement is also rejected — both sides are
+committed atomically.  This guarantees exact cell-level symmetry.
+
+**`--max-parts` counts all parts** (primary + mirrors).  A 200-part run produces
+~100 unique shapes on each side.
+
+### Rotation table
+
+| original rotation | mirror rotation | meaning |
+|---|---|---|
+| 0 (default / up) | 0 | symmetric under H-flip |
+| 1 (90° CW) | 3 (270° CW) | left-facing ↔ right-facing |
+| 2 (180°) | 2 | symmetric under H-flip |
+| 3 (270° CW) | 1 (90° CW) | right-facing ↔ left-facing |
+
+### Limitations
+
+- Only **left-right** (vertical-axis) symmetry is implemented.  Top-bottom and diagonal
+  symmetry are not supported.
+- The axis position is **fixed at x = −0.5**.  There is no way to shift it.
+- Ships generated with mirror mode often stop early
+  (`placement_rejected_by_caps_or_anchor_missing`) because the Markov model was not
+  trained to know which left-side placements will yield a valid mirrored right side.
+  This typically results in smaller ships than non-mirror mode; increase `--max-attempts`
+  to compensate.
+- Rotations are transformed with `(4−r)%4`.  This is correct for all vanilla parts
+  tested.  If a mod part had an inherently asymmetric footprint under horizontal flip
+  that doesn't correspond to any of its four standard rotations, the mirror would be
+  approximate rather than exact; a per-part override table could be added if needed.
 
 ## `.ship.png` export
 

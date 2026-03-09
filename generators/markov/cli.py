@@ -121,6 +121,18 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="Path to a file of allowed part IDs, one per line. Can be combined with --allowlist.",
     )
+    generate.add_argument(
+        "--mirror-symmetry",
+        action="store_true",
+        default=False,
+        help=(
+            "Enforce left-right mirror symmetry across the ship centerline. "
+            "The axis sits between grid columns -1 and 0 (x = -0.5). "
+            "Primary parts are placed on the left half (x ≤ -1) and automatically "
+            "mirrored to the right half (x ≥ 0). "
+            "--max-parts counts the combined total (primary + mirrors)."
+        ),
+    )
 
     # ── export ──
     export = subparsers.add_parser(
@@ -204,6 +216,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
     allowlist = _load_allowlist(args.allowlist, args.allowlist_file)
     if allowlist is not None:
         print(f"[generate] allowlist active: {len(allowlist)} part IDs")
+    if args.mirror_symmetry:
+        print("[generate] mirror symmetry: ON  (axis at x = -0.5, primary half x ≤ -1)")
 
     export_dir = args.export_png_dir
     if export_dir is not None:
@@ -221,6 +235,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
             bounds_max_y=args.bounds_max_y,
             rng_seed=args.seed + idx,
             part_allowlist=allowlist,
+            mirror_symmetry=args.mirror_symmetry,
         )
         try:
             payload = model.generate(config)
@@ -230,7 +245,11 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
         out_path = args.output / f"sample-{idx:03d}.json"
         out_path.write_text(json.dumps(payload, indent=2) + "\n")
-        print(f"[generate] sample-{idx:03d}: {payload['stats']['parts_generated']} parts ({payload['stats']['stop_reason']})")
+        mirror_info = ""
+        if args.mirror_symmetry:
+            ms = payload["stats"].get("mirror", {})
+            mirror_info = f"  primary={ms.get('primary_parts','?')} mirror={ms.get('mirror_parts','?')}"
+        print(f"[generate] sample-{idx:03d}: {payload['stats']['parts_generated']} parts ({payload['stats']['stop_reason']}){mirror_info}")
 
         if export_dir is not None:
             png_path = export_dir / f"sample-{idx:03d}.ship.png"
