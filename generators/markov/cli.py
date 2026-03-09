@@ -10,6 +10,7 @@ from .model import (
     RelativeMarkovModel,
     TrainingConfig,
     build_model_from_corpus,
+    iter_vanilla_parts_from_ship,
     validate_relative_placement_assumptions,
 )
 
@@ -33,6 +34,84 @@ def _load_allowlist(allowlist_arg: Optional[list], allowlist_file_arg: Optional[
                 else:
                     ids.add(line)
     return frozenset(ids) if ids else None
+
+
+# ── requirements helpers ───────────────────────────────────────────────────────
+
+
+def _load_requirements(require_arg: Optional[list], requirements_file_arg: Optional[Path]) -> Optional[dict]:
+    """Parse part requirements into {part_id: min_count}.
+
+    --require accepts repeated ``PART_ID COUNT`` pairs.
+    --requirements-file accepts a JSON object ``{"part_id": count, ...}``
+    or a plain-text file with one ``PART_ID COUNT`` per line (# comments ok).
+    """
+    reqs: dict[str, int] = {}
+    if require_arg:
+        # Each entry is [part_id, count_str]
+        for part_id, count_str in require_arg:
+            count = int(count_str)
+            if count <= 0:
+                raise ValueError(f"requirement count must be > 0, got {count} for {part_id}")
+            reqs[part_id.strip()] = max(reqs.get(part_id.strip(), 0), count)
+    if requirements_file_arg is not None:
+        text = requirements_file_arg.read_text().strip()
+        if text.startswith("{"):
+            data = json.loads(text)
+            for pid, cnt in data.items():
+                reqs[pid.strip()] = max(reqs.get(pid.strip(), 0), int(cnt))
+        else:
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) != 2:
+                    raise ValueError(f"requirements file: expected 'PART_ID COUNT', got: {line!r}")
+                pid, cnt = parts
+                reqs[pid.strip()] = max(reqs.get(pid.strip(), 0), int(cnt))
+    return reqs if reqs else None
+
+
+# ── seed helpers ──────────────────────────────────────────────────────────────
+
+
+def _load_seed_parts_from_json(path: Path) -> list:
+    """Load seed parts from a generated ship JSON or Cosmoteer ship JSON."""
+    data = json.loads(path.read_text())
+    # Generated format: {"parts": [{part_id, rotation, x, y}, ...]}
+    if "parts" in data and isinstance(data["parts"], list):
+        raw = data["parts"]
+        if raw and isinstance(raw[0], dict) and "part_id" in raw[0]:
+            return raw  # already in our format
+        # Cosmoteer format nested under "parts" key (unlikely but handle gracefully)
+        return [
+            {"part_id": p["ID"], "rotation": int(p.get("Rotation", 0)), "x": int(p["Location"][0]), "y": int(p["Location"][1])}
+            for p in raw
+            if isinstance(p, dict) and "ID" in p and "Location" in p
+        ]
+    # Cosmoteer extracted format: {"Parts": [{ID, Location, Rotation}, ...]}
+    if "Parts" in data:
+        return [
+            {"part_id": p["ID"], "rotation": int(p.get("Rotation", 0)), "x": int(p["Location"][0]), "y": int(p["Location"][1])}
+            for p in data["Parts"]
+            if isinstance(p, dict) and "ID" in p and isinstance(p.get("Location"), list) and len(p["Location"]) == 2
+        ]
+    raise ValueError(f"Could not parse seed parts from {path}: unrecognized format (expected 'parts' or 'Parts' key)")
+
+
+def _load_seed_parts_from_png(path: Path) -> list:
+    """Load seed parts from a .ship.png by parsing its embedded payload."""
+    import sys
+    import os
+    # Ensure ship_parser is importable
+    root = Path(__file__).resolve().parent.parent.parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from ship_parser.cosmoteer_ship_parser import parse_ship_png
+    ship_data = parse_ship_png(path)
+    parts = iter_vanilla_parts_from_ship(ship_data)
+    return [{"part_id": p.part_id, "rotation": p.rotation, "x": p.x, "y": p.y} for p in parts]
 
 
 # ── argument parser ────────────────────────────────────────────────────────────
@@ -133,6 +212,51 @@ def build_parser() -> argparse.ArgumentParser:
             "--max-parts counts the combined total (primary + mirrors)."
         ),
     )
+    generate.add_argument(
+        "--require",
+        nargs=2,
+        metavar=("PART_ID", "COUNT"),
+        action="append",
+        default=None,
+        help=(
+            "Require at least COUNT of PART_ID somewhere on the final ship "
+            "(total, counting both primary and mirror halves). "
+            "May be repeated: --require cosmoteer.control_room 1 --require cosmoteer.reactor_small 2"
+        ),
+    )
+    generate.add_argument(
+        "--requirements-file",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "Path to a requirements file. Accepted formats: "
+            'JSON object {"part_id": count, ...} or plain text with one "PART_ID COUNT" per line '
+            "(# comments allowed). Combined with --require."
+        ),
+    )
+    generate.add_argument(
+        "--seed-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "Path to an existing ship JSON to use as a seed layout. "
+            "Accepts generated JSON (with 'parts' key) or Cosmoteer extracted JSON (with 'Parts' key). "
+            "Non-vanilla and geometry-unknown parts are silently skipped."
+        ),
+    )
+    generate.add_argument(
+        "--seed-png",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "Path to a .ship.png to use as a seed layout. "
+            "The embedded ship payload is parsed and vanilla parts are extracted. "
+            "Cannot be combined with --seed-json."
+        ),
+    )
 
     # ── export ──
     export = subparsers.add_parser(
@@ -219,6 +343,27 @@ def cmd_generate(args: argparse.Namespace) -> int:
     if args.mirror_symmetry:
         print("[generate] mirror symmetry: ON  (axis at x = -0.5, primary half x ≤ -1)")
 
+    # Load requirements
+    requirements = _load_requirements(getattr(args, "require", None), getattr(args, "requirements_file", None))
+    if requirements:
+        print(f"[generate] requirements active: {len(requirements)} part(s)")
+        for pid, cnt in sorted(requirements.items()):
+            print(f"[generate]   {pid}: at least {cnt}")
+
+    # Load seed parts (JSON takes priority over PNG; only one may be set)
+    seed_parts = None
+    seed_json = getattr(args, "seed_json", None)
+    seed_png = getattr(args, "seed_png", None)
+    if seed_json is not None and seed_png is not None:
+        print("[generate] ERROR: --seed-json and --seed-png are mutually exclusive")
+        return 1
+    if seed_json is not None:
+        seed_parts = _load_seed_parts_from_json(seed_json)
+        print(f"[generate] seed: loaded {len(seed_parts)} parts from {seed_json.name}")
+    elif seed_png is not None:
+        seed_parts = _load_seed_parts_from_png(seed_png)
+        print(f"[generate] seed: loaded {len(seed_parts)} vanilla parts from {seed_png.name}")
+
     export_dir = args.export_png_dir
     if export_dir is not None:
         export_dir.mkdir(parents=True, exist_ok=True)
@@ -236,20 +381,41 @@ def cmd_generate(args: argparse.Namespace) -> int:
             rng_seed=args.seed + idx,
             part_allowlist=allowlist,
             mirror_symmetry=args.mirror_symmetry,
+            part_requirements=requirements,
         )
         try:
-            payload = model.generate(config)
+            payload = model.generate(config, seed_parts=seed_parts)
         except RuntimeError as exc:
             print(f"[generate] sample-{idx:03d} FAILED: {exc}")
             continue
 
         out_path = args.output / f"sample-{idx:03d}.json"
         out_path.write_text(json.dumps(payload, indent=2) + "\n")
+
+        # Build status line
+        stats = payload["stats"]
         mirror_info = ""
         if args.mirror_symmetry:
-            ms = payload["stats"].get("mirror", {})
+            ms = stats.get("mirror", {})
             mirror_info = f"  primary={ms.get('primary_parts','?')} mirror={ms.get('mirror_parts','?')}"
-        print(f"[generate] sample-{idx:03d}: {payload['stats']['parts_generated']} parts ({payload['stats']['stop_reason']}){mirror_info}")
+        req_info = ""
+        if requirements:
+            rs = stats.get("requirements", {})
+            sat = rs.get("satisfied", "?")
+            req_info = f"  reqs={'OK' if sat else 'UNMET'}"
+        seed_info = ""
+        if seed_parts is not None:
+            ss = stats.get("seed", {})
+            seed_info = f"  seed_placed={ss.get('seed_parts_placed','?')}"
+        print(f"[generate] sample-{idx:03d}: {stats['parts_generated']} parts ({stats['stop_reason']}){mirror_info}{req_info}{seed_info}")
+
+        # Print requirements progress if any unmet
+        if requirements:
+            rs = stats.get("requirements", {})
+            if not rs.get("satisfied"):
+                for pid, prog in rs.get("progress", {}).items():
+                    if not prog.get("satisfied"):
+                        print(f"[generate]   UNMET {pid}: need {prog['required']}, got {prog['actual']}")
 
         if export_dir is not None:
             png_path = export_dir / f"sample-{idx:03d}.ship.png"

@@ -18,6 +18,11 @@ def _config_as_dict(cfg) -> dict:
             d[k] = sorted(v)
     return d
 
+
+def _reqs_satisfied(part_counts: Dict[str, int], requirements: dict) -> bool:
+    """Return True if all (part_id -> min_count) requirements are met."""
+    return all(part_counts.get(pid, 0) >= req for pid, req in requirements.items())
+
 Coord = Tuple[int, int]
 END_TOKEN = "__END__"
 ROOT_ANCHOR = "__ROOT__"
@@ -99,6 +104,7 @@ class GenerationConfig:
     rng_seed: Optional[int] = None
     part_allowlist: Optional[frozenset] = None  # if set, only tokens with these part_ids are sampled
     mirror_symmetry: bool = False  # if True, enforce left-right mirror symmetry across x = -0.5
+    part_requirements: Optional[dict] = None  # {part_id: min_count} total-ship-count semantics
 
 
 @dataclass
@@ -183,7 +189,19 @@ class RelativeMarkovModel:
                 return False
         return True
 
-    def generate(self, config: GenerationConfig) -> dict:
+    def generate(self, config: GenerationConfig, *, seed_parts=None) -> dict:
+        """Generate a ship layout.
+
+        Parameters
+        ----------
+        config:
+            Generation configuration.
+        seed_parts:
+            Optional list of seed parts to pre-place before Markov generation
+            begins.  Each item may be a dict ``{part_id, rotation, x, y}`` or a
+            :class:`ShipPart` instance.  Non-vanilla parts, parts with unknown
+            geometry, and parts that overlap existing cells are silently skipped.
+        """
         rng = random.Random(config.rng_seed)
         # placed: all parts (primary + mirrors in mirror mode)
         placed: List[ShipPart] = []
@@ -199,6 +217,7 @@ class RelativeMarkovModel:
         rejected_overlap = 0
         rejected_bounds = 0
         rejected_mirror = 0
+        rejected_requirements = 0
         stop_reason = "unknown"
 
         allowlist = config.part_allowlist  # None or frozenset[str]
@@ -206,74 +225,198 @@ class RelativeMarkovModel:
         mirror_mode = config.mirror_symmetry
 
         if mirror_mode:
-            from .symmetry import mirror_part as _mirror_part, primary_root_x as _primary_root_x
+            from .symmetry import (
+                mirror_part as _mirror_part,
+                primary_root_x as _primary_root_x,
+                is_primary_placement as _is_primary_placement,
+            )
 
-        # ── Root ──────────────────────────────────────────────────────────────
-        root_key = None
-        root = None
-        root_attempts = max(64, len(self.start_counts) // 100)
-        for _ in range(root_attempts):
-            candidate_root_key = WeightedSampler.sample(self.start_counts, rng)
-            candidate_root = RelativePlacementToken.from_key(candidate_root_key)
-            if allowlist is not None and candidate_root.part_id not in allowlist:
-                rejected_allowlist += 1
-                continue
-            if candidate_root.part_id in self.geometry_cache and candidate_root.rotation in self.geometry_cache[candidate_root.part_id].rotations:
-                root_key = candidate_root_key
-                root = candidate_root
-                break
-        if root_key is None or root is None:
-            if allowlist is not None:
+        # part_counts tracks TOTAL placed parts (primary + mirrors) for requirements.
+        part_counts: Dict[str, int] = {}
+
+        # ── Seed ──────────────────────────────────────────────────────────────
+        seed_stats: Optional[dict] = None
+        seeded = seed_parts is not None and len(seed_parts) > 0
+
+        if seeded:
+            seed_skipped_geometry = 0
+            seed_skipped_overlap = 0
+            seed_skipped_allowlist = 0
+
+            for raw in seed_parts:
+                if isinstance(raw, dict):
+                    sp = ShipPart(
+                        part_id=raw["part_id"],
+                        rotation=int(raw.get("rotation", 0)) % 4,
+                        x=int(raw["x"]),
+                        y=int(raw["y"]),
+                    )
+                else:
+                    sp = raw  # already ShipPart
+
+                if sp.part_id not in self.geometry_cache or sp.rotation not in self.geometry_cache[sp.part_id].rotations:
+                    seed_skipped_geometry += 1
+                    continue
+                if allowlist is not None and sp.part_id not in allowlist:
+                    seed_skipped_allowlist += 1
+                    continue
+                cells = sp.footprint_cells(self.geometry_cache)
+                if cells & occupied_cells:
+                    seed_skipped_overlap += 1
+                    continue
+
+                idx = len(placed)
+                placed.append(sp)
+                occupied_cells.update(cells)
+                part_counts[sp.part_id] = part_counts.get(sp.part_id, 0) + 1
+
+                is_primary = True
+                if mirror_mode:
+                    is_primary = _is_primary_placement(sp, self.geometry_cache)
+                if is_primary:
+                    primary_indices.append(idx)
+
+                placement_trace.append({
+                    "token": None,
+                    "anchor_index": None,
+                    "placed_index": idx,
+                    "world_origin": [sp.x, sp.y],
+                    "is_seed": True,
+                    "is_mirror": not is_primary,
+                })
+
+            seed_stats = {
+                "seed_parts_input": len(seed_parts),
+                "seed_parts_placed": len(placed),
+                "seed_skipped_geometry": seed_skipped_geometry,
+                "seed_skipped_overlap": seed_skipped_overlap,
+                "seed_skipped_allowlist": seed_skipped_allowlist,
+            }
+
+            if not placed:
                 raise RuntimeError(
-                    f"could not sample a root token matching the allowlist after {root_attempts} attempts. "
-                    f"Rejected {rejected_allowlist} allowlist mismatches. "
-                    f"Check that the allowlist contains parts present in the model's training corpus."
+                    "seed provided but no valid vanilla seed parts could be placed "
+                    f"({seed_skipped_geometry} skipped: no geometry, "
+                    f"{seed_skipped_allowlist} skipped: not in allowlist, "
+                    f"{seed_skipped_overlap} skipped: overlap)"
                 )
-            raise RuntimeError("could not sample a root token with known vanilla geometry")
 
-        if mirror_mode:
-            # Place root flush against the mirror axis (rightmost cell at x = -1).
-            rx = _primary_root_x(root.part_id, root.rotation, self.geometry_cache)
-            root_part = ShipPart(part_id=root.part_id, rotation=root.rotation, x=rx, y=0)
-            root_cells = root_part.footprint_cells(self.geometry_cache)
-            mirror_root = _mirror_part(root_part, self.geometry_cache)
-            root_primary_idx = len(placed)
-            placed.append(root_part)
-            occupied_cells.update(root_cells)
-            primary_indices.append(root_primary_idx)
-            placement_trace.append({
-                "token": root.to_dict(),
-                "anchor_index": None,
-                "placed_index": root_primary_idx,
-                "world_origin": [root_part.x, root_part.y],
-                "is_mirror": False,
-            })
-            if mirror_root is not None:
-                mirror_cells = mirror_root.footprint_cells(self.geometry_cache)
-                mirror_idx = len(placed)
-                placed.append(mirror_root)
-                occupied_cells.update(mirror_cells)
+            # Initialize Markov history for the seeded case.
+            #
+            # Rather than reconstructing token sequences from the seed (which
+            # can produce state keys that don't exist in transition_counts for
+            # uncommon seed parts), we sample a "virtual root" from start_counts.
+            # The virtual root sets the Markov state to something the model
+            # knows how to continue from, without physically placing any new
+            # parts (the seed already occupies cells).  The seed merely
+            # constrains the collision map.
+            if not primary_indices:
+                # No primary parts (e.g., all seed parts on wrong side in mirror mode).
+                raise RuntimeError(
+                    "seed provided but no primary-side parts were found; "
+                    "in mirror mode all seed parts must have all footprint cells at x ≤ -1 "
+                    "to serve as Markov anchors."
+                )
+            # Collect part_ids that are actually present in the primary seed parts.
+            seed_part_ids = frozenset(placed[i].part_id for i in primary_indices)
+            virtual_root_key = None
+            # First pass: prefer a root whose part_id is in the seed (so that
+            # order-1 transitions can anchor off an existing seed part).
+            vr_attempts = max(256, len(self.start_counts) // 20)
+            for _ in range(vr_attempts):
+                candidate_key = WeightedSampler.sample(self.start_counts, rng)
+                candidate = RelativePlacementToken.from_key(candidate_key)
+                if allowlist is not None and candidate.part_id not in allowlist:
+                    continue
+                if candidate.part_id not in self.geometry_cache or candidate.rotation not in self.geometry_cache[candidate.part_id].rotations:
+                    continue
+                if candidate.part_id in seed_part_ids:
+                    virtual_root_key = candidate_key
+                    break
+            # Second pass: any valid root (fallback if no seed part_id is a known root).
+            if virtual_root_key is None:
+                for _ in range(vr_attempts):
+                    candidate_key = WeightedSampler.sample(self.start_counts, rng)
+                    candidate = RelativePlacementToken.from_key(candidate_key)
+                    if allowlist is not None and candidate.part_id not in allowlist:
+                        continue
+                    if candidate.part_id in self.geometry_cache and candidate.rotation in self.geometry_cache[candidate.part_id].rotations:
+                        virtual_root_key = candidate_key
+                        break
+            if virtual_root_key is None:
+                raise RuntimeError("could not sample a virtual root token for seeded generation")
+            history = [virtual_root_key]
+
+        else:
+            # ── Root (normal non-seeded start) ────────────────────────────────
+            root_key = None
+            root = None
+            root_attempts = max(64, len(self.start_counts) // 100)
+            for _ in range(root_attempts):
+                candidate_root_key = WeightedSampler.sample(self.start_counts, rng)
+                candidate_root = RelativePlacementToken.from_key(candidate_root_key)
+                if allowlist is not None and candidate_root.part_id not in allowlist:
+                    rejected_allowlist += 1
+                    continue
+                if candidate_root.part_id in self.geometry_cache and candidate_root.rotation in self.geometry_cache[candidate_root.part_id].rotations:
+                    root_key = candidate_root_key
+                    root = candidate_root
+                    break
+            if root_key is None or root is None:
+                if allowlist is not None:
+                    raise RuntimeError(
+                        f"could not sample a root token matching the allowlist after {root_attempts} attempts. "
+                        f"Rejected {rejected_allowlist} allowlist mismatches. "
+                        f"Check that the allowlist contains parts present in the model's training corpus."
+                    )
+                raise RuntimeError("could not sample a root token with known vanilla geometry")
+
+            if mirror_mode:
+                # Place root flush against the mirror axis (rightmost cell at x = -1).
+                rx = _primary_root_x(root.part_id, root.rotation, self.geometry_cache)
+                root_part = ShipPart(part_id=root.part_id, rotation=root.rotation, x=rx, y=0)
+                root_cells = root_part.footprint_cells(self.geometry_cache)
+                mirror_root = _mirror_part(root_part, self.geometry_cache)
+                root_primary_idx = len(placed)
+                placed.append(root_part)
+                occupied_cells.update(root_cells)
+                primary_indices.append(root_primary_idx)
+                part_counts[root_part.part_id] = part_counts.get(root_part.part_id, 0) + 1
                 placement_trace.append({
                     "token": root.to_dict(),
                     "anchor_index": None,
-                    "placed_index": mirror_idx,
-                    "world_origin": [mirror_root.x, mirror_root.y],
-                    "is_mirror": True,
-                    "mirror_of": root_primary_idx,
+                    "placed_index": root_primary_idx,
+                    "world_origin": [root_part.x, root_part.y],
+                    "is_mirror": False,
                 })
-        else:
-            root_part = ShipPart(part_id=root.part_id, rotation=root.rotation, x=0, y=0)
-            root_cells = root_part.footprint_cells(self.geometry_cache)
-            placed.append(root_part)
-            primary_indices.append(0)
-            occupied_cells.update(root_cells)
-            placement_trace.append({
-                "token": root.to_dict(),
-                "anchor_index": None,
-                "placed_index": 0,
-                "world_origin": [0, 0],
-            })
-        history.append(root_key)
+                if mirror_root is not None:
+                    mirror_cells = mirror_root.footprint_cells(self.geometry_cache)
+                    mirror_idx = len(placed)
+                    placed.append(mirror_root)
+                    occupied_cells.update(mirror_cells)
+                    part_counts[mirror_root.part_id] = part_counts.get(mirror_root.part_id, 0) + 1
+                    placement_trace.append({
+                        "token": root.to_dict(),
+                        "anchor_index": None,
+                        "placed_index": mirror_idx,
+                        "world_origin": [mirror_root.x, mirror_root.y],
+                        "is_mirror": True,
+                        "mirror_of": root_primary_idx,
+                    })
+            else:
+                root_part = ShipPart(part_id=root.part_id, rotation=root.rotation, x=0, y=0)
+                root_cells = root_part.footprint_cells(self.geometry_cache)
+                placed.append(root_part)
+                primary_indices.append(0)
+                occupied_cells.update(root_cells)
+                part_counts[root_part.part_id] = part_counts.get(root_part.part_id, 0) + 1
+                placement_trace.append({
+                    "token": root.to_dict(),
+                    "anchor_index": None,
+                    "placed_index": 0,
+                    "world_origin": [0, 0],
+                })
+            history.append(root_key)
 
         # ── Main loop ─────────────────────────────────────────────────────────
         while len(placed) < config.max_parts and attempts < config.max_attempts:
@@ -289,12 +432,20 @@ class RelativeMarkovModel:
                 break
 
             token_key = None
+            # Track whether every inner-loop candidate was END_TOKEN suppressed by
+            # requirements; if so, keep the outer loop going rather than stopping.
+            all_end_tokens_by_req = True
             for _ in range(config.max_resample_per_step):
                 attempts += 1
                 candidate_key = WeightedSampler.sample(options, rng)
                 if candidate_key == END_TOKEN:
+                    # Suppress END_TOKEN if part requirements are not yet satisfied.
+                    if config.part_requirements is not None and not _reqs_satisfied(part_counts, config.part_requirements):
+                        rejected_requirements += 1
+                        continue  # keep all_end_tokens_by_req = True
                     token_key = END_TOKEN
                     break
+                all_end_tokens_by_req = False
                 token = RelativePlacementToken.from_key(candidate_key)
                 if allowlist is not None and token.part_id not in allowlist:
                     rejected_allowlist += 1
@@ -356,6 +507,7 @@ class RelativeMarkovModel:
                         placed.append(candidate)
                         occupied_cells.update(candidate_cells)
                         primary_indices.append(primary_idx)
+                        part_counts[candidate.part_id] = part_counts.get(candidate.part_id, 0) + 1
                         history.append(candidate_key)
                         placement_trace.append({
                             "token": token.to_dict(),
@@ -367,6 +519,7 @@ class RelativeMarkovModel:
                         mirror_idx = len(placed)
                         placed.append(mirror_candidate)
                         occupied_cells.update(mirror_cells)
+                        part_counts[mirror_candidate.part_id] = part_counts.get(mirror_candidate.part_id, 0) + 1
                         placement_trace.append({
                             "token": token.to_dict(),
                             "anchor_index": None,
@@ -385,6 +538,7 @@ class RelativeMarkovModel:
                         placed.append(candidate)
                         occupied_cells.update(candidate_cells)
                         primary_indices.append(len(placed) - 1)
+                        part_counts[candidate.part_id] = part_counts.get(candidate.part_id, 0) + 1
                         history.append(candidate_key)
                         placement_trace.append({
                             "token": token.to_dict(),
@@ -398,7 +552,12 @@ class RelativeMarkovModel:
                     break
                 if accepted:
                     break
+
             if token_key is None:
+                if all_end_tokens_by_req and rejected_requirements > 0:
+                    # The model wants to emit END but requirements are unsatisfied.
+                    # Keep the outer loop running; max_attempts will stop us if stuck.
+                    continue
                 stop_reason = "placement_rejected_by_caps_or_anchor_missing"
                 break
             if token_key == END_TOKEN:
@@ -410,6 +569,13 @@ class RelativeMarkovModel:
                 stop_reason = "max_parts"
             elif attempts >= config.max_attempts:
                 stop_reason = "max_attempts"
+
+        # Refine stop_reason if requirements not satisfied
+        if config.part_requirements and not _reqs_satisfied(part_counts, config.part_requirements):
+            if stop_reason == "end_token":
+                stop_reason = "requirements_unsatisfied"  # shouldn't happen; belt+suspenders
+            elif stop_reason == "max_attempts":
+                stop_reason = "max_attempts_requirements_unsatisfied"
 
         all_cells = sorted(occupied_cells)
         min_x = min(cell[0] for cell in all_cells)
@@ -430,6 +596,7 @@ class RelativeMarkovModel:
                 "overlap": rejected_overlap,
                 "bounds": rejected_bounds,
                 "allowlist": rejected_allowlist,
+                "requirements": rejected_requirements,
             },
             "bounds": {"min_x": min_x, "max_x": max_x, "min_y": min_y, "max_y": max_y},
         }
@@ -439,6 +606,17 @@ class RelativeMarkovModel:
                 "mirror_parts": mirror_count,
                 "rejected_mirror": rejected_mirror,
             }
+        if config.part_requirements:
+            progress = {
+                pid: {"required": req, "actual": part_counts.get(pid, 0), "satisfied": part_counts.get(pid, 0) >= req}
+                for pid, req in config.part_requirements.items()
+            }
+            stats["requirements"] = {
+                "satisfied": _reqs_satisfied(part_counts, config.part_requirements),
+                "progress": progress,
+            }
+        if seed_stats is not None:
+            stats["seed"] = seed_stats
 
         notes = [
             "Vanilla-only first-pass relative-placement Markov sample.",
@@ -450,6 +628,16 @@ class RelativeMarkovModel:
                 "Mirror symmetry: left-right across axis x = -0.5 (between columns -1 and 0). "
                 "Primary placements on left half (x ≤ -1); mirrors placed on right half (x ≥ 0). "
                 "Only primary parts serve as Markov anchors."
+            )
+        if config.part_requirements:
+            notes.append(
+                "Part requirements use total-ship-count semantics (primary + mirror parts both count). "
+                "END_TOKEN is suppressed until all requirements are satisfied or max_attempts is reached."
+            )
+        if seeded:
+            notes.append(
+                "Seeded generation: existing ship parts were pre-placed before Markov sampling began. "
+                "Markov history was reconstructed from the ordered primary seed parts."
             )
 
         return {

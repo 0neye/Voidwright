@@ -4,11 +4,18 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Dict, Iterator, List, Optional, Set, Tuple
 
+# Ensure project root is importable so we can reuse canonical game-file geometry.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from generators.markov.door_rules import load_vanilla_part_geometry  # noqa: E402
 
 Coord = Tuple[int, int]
 
@@ -19,175 +26,29 @@ class PartMeta:
     height: int
     traversable: bool = False
     note: str = ""
+    footprint_tiles: frozenset = frozenset()  # local (dx, dy) offsets relative to part origin
 
 
-# Compact explicit metadata for common/validated IDs seen in the corpus.
-PART_META: Dict[str, PartMeta] = {
-    "cosmoteer.armor": PartMeta(1, 1, False),
-    "cosmoteer.armor_2x1": PartMeta(2, 1, False),
-    "cosmoteer.armor_wedge": PartMeta(1, 1, False, "wedge approximated as full 1x1 tile"),
-    "cosmoteer.armor_tri": PartMeta(1, 1, False, "triangle approximated as full 1x1 tile"),
-    "cosmoteer.armor_1x2_wedge": PartMeta(1, 2, False, "wedge approximated as full rectangle"),
-    "cosmoteer.armor_1x2_wedge_L": PartMeta(1, 2, False, "wedge approximated as full rectangle"),
-    "cosmoteer.armor_1x2_wedge_R": PartMeta(1, 2, False, "wedge approximated as full rectangle"),
-    "cosmoteer.armor_1x3_wedge": PartMeta(1, 3, False, "wedge approximated as full rectangle"),
-    "cosmoteer.armor_structure_hybrid_1x1": PartMeta(1, 1, False),
-    "cosmoteer.armor_structure_hybrid_1x2": PartMeta(1, 2, False),
-    "cosmoteer.armor_structure_hybrid_1x3": PartMeta(1, 3, False),
-    "cosmoteer.armor_structure_hybrid_tri": PartMeta(1, 1, False, "triangle approximated as full 1x1 tile"),
-    "cosmoteer.structure": PartMeta(1, 1, False),
-    "cosmoteer.structure_wedge": PartMeta(1, 1, False, "wedge approximated as full 1x1 tile"),
-    "cosmoteer.structure_tri": PartMeta(1, 1, False, "triangle approximated as full 1x1 tile"),
-    "cosmoteer.structure_1x2_wedge": PartMeta(1, 2, False, "wedge approximated as full rectangle"),
-    "cosmoteer.structure_1x2_wedge_L": PartMeta(1, 2, False, "wedge approximated as full rectangle"),
-    "cosmoteer.structure_1x2_wedge_R": PartMeta(1, 2, False, "wedge approximated as full rectangle"),
-    "cosmoteer.structure_1x3_wedge": PartMeta(1, 3, False, "wedge approximated as full rectangle"),
-    "cosmoteer.corridor": PartMeta(1, 1, True),
-    "cosmoteer.conveyor": PartMeta(1, 1, True),
-    "cosmoteer.airlock": PartMeta(1, 2, True),
-    "cosmoteer.fire_extinguisher": PartMeta(1, 1, True),
-    "cosmoteer.heat_pipe_adaptive": PartMeta(1, 1, True),
-    "cosmoteer.heat_pipe_adaptive_structure": PartMeta(1, 1, False),
-    "cosmoteer.heat_pipe_crossing": PartMeta(1, 1, True),
-    "cosmoteer.radiator": PartMeta(2, 1, True),
-    "cosmoteer.heat_exchanger": PartMeta(2, 2, True),
-    "cosmoteer.thermal_battery": PartMeta(2, 2, True),
-    "cosmoteer.thermal_amplification_pump": PartMeta(2, 2, True),
-    "cosmoteer.thermal_dilation_pump": PartMeta(2, 2, True),
-    "cosmoteer.power_storage": PartMeta(2, 2, True),
-    "cosmoteer.reactor_small": PartMeta(2, 2, True),
-    "cosmoteer.reactor_med": PartMeta(3, 3, True),
-    "cosmoteer.reactor_large": PartMeta(5, 5, True),
-    "cosmoteer.engine_room": PartMeta(3, 3, True),
-    "cosmoteer.control_room_small": PartMeta(2, 2, True),
-    "cosmoteer.control_room_med": PartMeta(3, 3, True),
-    "cosmoteer.control_room_large": PartMeta(4, 4, True),
-    "cosmoteer.crew_quarters_small": PartMeta(2, 1, True),
-    "cosmoteer.crew_quarters_med": PartMeta(3, 2, True),
-    "cosmoteer.crew_quarters_large": PartMeta(4, 3, True),
-    "ultranova.crew_quarters_walkthrough": PartMeta(2, 1, True),
-    "janiTNT.1x1quarters": PartMeta(1, 1, True),
-    "janiTNT.crew_quarters_4x1": PartMeta(4, 1, True),
-    "cosmoteer.storage_2x2": PartMeta(2, 2, True),
-    "cosmoteer.storage_3x2": PartMeta(3, 2, True),
-    "cosmoteer.storage_3x3": PartMeta(3, 3, True),
-    "cosmoteer.storage_4x3": PartMeta(4, 3, True),
-    "cosmoteer.storage_4x4": PartMeta(4, 4, True),
-    "cosmoteer.ammo_storage": PartMeta(2, 2, True),
-    "cosmoteer.ammo_factory": PartMeta(3, 2, True),
-    "cosmoteer.factory_ammo": PartMeta(3, 2, True),
-    "cosmoteer.factory_emp": PartMeta(3, 2, True),
-    "cosmoteer.factory_he": PartMeta(3, 2, True),
-    "cosmoteer.factory_mine": PartMeta(3, 2, True),
-    "cosmoteer.factory_nuke": PartMeta(3, 2, True),
-    "cosmoteer.factory_thermal": PartMeta(3, 2, True),
-    "cosmoteer.mine_factory": PartMeta(3, 2, True),
-    "cosmoteer.missile_factory": PartMeta(3, 2, True),
-    "cosmoteer.missile_factory_emp": PartMeta(3, 2, True),
-    "cosmoteer.missile_factory_he": PartMeta(3, 2, True),
-    "cosmoteer.missile_factory_nuke": PartMeta(3, 2, True),
-    "cosmoteer.hyperdrive_small": PartMeta(3, 3, True),
-    "cosmoteer.hyperdrive_med": PartMeta(5, 5, True),
-    "cosmoteer.ftl_drive": PartMeta(5, 5, True),
-    "cosmoteer.sensor_array": PartMeta(3, 3, True),
-    "cosmoteer.shield_gen_small": PartMeta(2, 2, True),
-    "cosmoteer.shield_gen_large": PartMeta(3, 3, True),
-    "Bonible.HardlightShield2": PartMeta(2, 2, True),
-    "swefpifh.Kebechet_GenSmall_ModularShield": PartMeta(2, 2, True),
-    "cosmoteer.point_defense": PartMeta(1, 1, False),
-    "cosmoteer.cannon_deck": PartMeta(2, 1, False),
-    "cosmoteer.cannon_med": PartMeta(2, 2, False),
-    "cosmoteer.cannon_large": PartMeta(3, 3, False),
-    "cosmoteer.flak_cannon_large": PartMeta(3, 3, False),
-    "cosmoteer.chaingun": PartMeta(2, 2, False),
-    "cosmoteer.chaingun_magazine": PartMeta(1, 1, False),
-    "cosmoteer.disruptor": PartMeta(2, 2, False),
-    "danger.autocannon": PartMeta(2, 2, False),
-    "cosmoteer.electro_bolter": PartMeta(2, 2, False),
-    "cosmoteer.laser_blaster_small": PartMeta(2, 2, False),
-    "cosmoteer.laser_blaster_large": PartMeta(3, 3, False),
-    "cosmoteer.ion_beam_emitter": PartMeta(3, 3, False),
-    "cosmoteer.ion_beam_prism": PartMeta(1, 1, False),
-    "cosmoteer.ion_beam_prism_45": PartMeta(1, 1, False),
-    "cosmoteer.railgun_accelerator": PartMeta(1, 1, False),
-    "cosmoteer.railgun_loader": PartMeta(2, 2, False),
-    "cosmoteer.railgun_launcher": PartMeta(3, 3, False),
-    "cosmoteer.missile_launcher": PartMeta(2, 3, False),
-    "cosmoteer.missile_storage": PartMeta(2, 2, True),
-    "cosmoteer.mining_laser_small": PartMeta(1, 2, False),
-    "cosmoteer.tractor_beam_emitter": PartMeta(2, 2, False),
-    "cosmoteer.manipulator_beam_emitter": PartMeta(2, 2, False),
-    "cosmoteer.resonance_beam_turret": PartMeta(3, 3, False),
-    "rustydios.missile_silo": PartMeta(2, 3, False),
-    "cosmoteer.roof_headlight": PartMeta(1, 1, False),
-    "cosmoteer.roof_light": PartMeta(1, 1, False),
-    "cosmoteer.explosive_charge": PartMeta(1, 1, False),
-    "jfjohnny5.armor_heavy_2x1": PartMeta(2, 1, False),
-    "cosmoteer.thruster_small": PartMeta(1, 1, False),
-    "cosmoteer.thruster_small_2way": PartMeta(1, 1, False),
-    "cosmoteer.thruster_med": PartMeta(1, 2, False),
-    "cosmoteer.thruster_large": PartMeta(2, 3, False),
-    "cosmoteer.thruster_huge": PartMeta(3, 5, False),
-    "janiTNT.pulse_thruster_huge": PartMeta(3, 5, False),
-    "cosmoteer.thruster_boost": PartMeta(1, 2, False),
-    "cosmoteer.thruster_rocket_battery": PartMeta(2, 2, False),
-    "cosmoteer.thruster_rocket_extender": PartMeta(1, 1, False),
-    "cosmoteer.thruster_rocket_nozzle": PartMeta(2, 1, False),
-}
-
-
+# Kept as last-resort hints for unknown/non-vanilla part IDs.
 TRAVERSABLE_HINTS = (
-    "corridor",
-    "conveyor",
-    "crew_quarters",
-    "quarters",
-    "storage",
-    "reactor",
-    "engine_room",
-    "control_room",
-    "heat_pipe",
-    "radiator",
-    "heat_exchanger",
-    "thermal_",
-    "power_storage",
-    "factory",
-    "ammo_factory",
-    "ammo_storage",
-    "airlock",
-    "hyperdrive",
-    "ftl_drive",
-    "shield_gen",
-    "sensor_array",
+    "corridor", "conveyor", "crew_quarters", "quarters", "storage", "reactor",
+    "engine_room", "control_room", "heat_pipe", "radiator", "heat_exchanger",
+    "thermal_", "power_storage", "factory", "ammo_factory", "ammo_storage",
+    "airlock", "hyperdrive", "ftl_drive", "shield_gen", "sensor_array",
     "fire_extinguisher",
 )
 
 NON_TRAVERSABLE_HINTS = (
-    "armor",
-    "structure",
-    "thruster",
-    "point_defense",
-    "cannon",
-    "chaingun",
-    "laser_blaster",
-    "disruptor",
-    "railgun",
-    "ion_beam",
-    "tractor_beam",
-    "manipulator_beam",
-    "mining_laser",
-    "resonance_beam",
-    "electro_bolter",
-    "explosive_charge",
-    "missile_launcher",
-    "missile_silo",
-    "missile_storage",
+    "armor", "structure", "thruster", "point_defense", "cannon", "chaingun",
+    "laser_blaster", "disruptor", "railgun", "ion_beam", "tractor_beam",
+    "manipulator_beam", "mining_laser", "resonance_beam", "electro_bolter",
+    "explosive_charge", "missile_launcher", "missile_silo", "missile_storage",
     "roof_",
 )
 
-
 DOOR_ORIENTATION_DELTAS = {
-    0: (1, 0),  # assumed east-west door between (x,y) and (x+1,y)
-    1: (0, 1),  # assumed north-south door between (x,y) and (x,y+1)
+    0: (1, 0),
+    1: (0, 1),
 }
 
 
@@ -195,7 +56,7 @@ def normalize_part_id(part: dict) -> Optional[str]:
     return part.get("ID") or part.get("IDString")
 
 
-def normalize_parts(parts: Sequence[dict]) -> List[dict]:
+def normalize_parts(parts) -> List[dict]:
     normalized: List[dict] = []
     for part in parts:
         if not isinstance(part, dict):
@@ -216,42 +77,52 @@ def normalize_parts(parts: Sequence[dict]) -> List[dict]:
 def normalize_doors(value) -> List[dict]:
     if not isinstance(value, list):
         return []
-    doors: List[dict] = []
-    for door in value:
-        if isinstance(door, dict) and "Cell" in door and "Orientation" in door:
-            doors.append(door)
-    return doors
+    return [d for d in value if isinstance(d, dict) and "Cell" in d and "Orientation" in d]
 
 
-def infer_meta(part_id: str) -> Tuple[PartMeta, bool]:
-    if part_id in PART_META:
-        return PART_META[part_id], False
+def infer_meta(part_id: str, rotation: int) -> Tuple[PartMeta, bool]:
+    """Return (PartMeta, is_inferred).
 
+    Uses canonical game-file geometry for vanilla parts (exact footprint tiles,
+    exact size, correct traversability). Falls back to regex/name heuristics for
+    unknown or non-vanilla parts.
+    """
+    geometry_cache = load_vanilla_part_geometry()
+    vanilla = geometry_cache.get(part_id)
+    if vanilla is not None:
+        rot = vanilla.rotations.get(rotation % 4) or next(iter(vanilla.rotations.values()))
+        traversable = bool(rot.unblocked_tiles)
+        return PartMeta(
+            width=rot.width,
+            height=rot.height,
+            traversable=traversable,
+            note="game-file geometry",
+            footprint_tiles=rot.footprint_tiles,
+        ), False
+
+    # Unknown/non-vanilla fallback: regex dimension parse + name hints.
     match = re.search(r"_(\d+)x(\d+)(?:_|$)", part_id)
     if match:
         width, height = int(match.group(1)), int(match.group(2))
     else:
         width, height = 1, 1
-
     lower = part_id.lower()
     traversable = any(token in lower for token in TRAVERSABLE_HINTS)
     if any(token in lower for token in NON_TRAVERSABLE_HINTS):
         traversable = False
-
+    tiles = frozenset((dx, dy) for dx in range(width) for dy in range(height))
     note = "regex/fallback inferred"
-    if width == height == 1:
-        note = "defaulted to 1x1 fallback"
-    return PartMeta(width, height, traversable, note), True
-
-
-def rotate_dims(width: int, height: int, rotation: int) -> Tuple[int, int]:
-    return (height, width) if rotation % 2 else (width, height)
+    return PartMeta(width, height, traversable, note, tiles), True
 
 
 def part_cells(part: dict, meta: PartMeta) -> Set[Coord]:
     x0, y0 = map(int, part["Location"])
-    width, height = rotate_dims(meta.width, meta.height, int(part.get("Rotation", 0)))
-    return {(x0 + dx, y0 + dy) for dx in range(width) for dy in range(height)}
+    if meta.footprint_tiles:
+        return {(x0 + dx, y0 + dy) for dx, dy in meta.footprint_tiles}
+    # Fallback for any part where footprint_tiles was not populated.
+    rotation = int(part.get("Rotation", 0))
+    w, h = (meta.height, meta.width) if rotation % 2 else (meta.width, meta.height)
+    return {(x0 + dx, y0 + dy) for dx in range(w) for dy in range(h)}
 
 
 def structural_edges(part_records: List[dict], cell_to_parts: Dict[Coord, Set[int]]) -> List[dict]:
@@ -289,8 +160,7 @@ def cell_graph(
     doors: List[dict],
 ) -> dict:
     nodes = []
-    traversable_cells = set()
-
+    traversable_cells: Set[Coord] = set()
     part_by_index = {record["index"]: record for record in part_records}
 
     for (x, y), owners in sorted(cell_to_parts.items()):
@@ -311,7 +181,6 @@ def cell_graph(
 
     edges: Dict[Tuple[str, str, str], dict] = {}
 
-    # Conservative intra-part traversability: adjacent cells inside the same traversable part.
     for record in part_records:
         if not record["traversable"]:
             continue
@@ -325,7 +194,7 @@ def cell_graph(
                 b = f"{neighbor[0]},{neighbor[1]}"
                 if a > b:
                     a, b = b, a
-                edges[(a, b, "intra_part")]= {
+                edges[(a, b, "intra_part")] = {
                     "source": a,
                     "target": b,
                     "kind": "intra_part",
@@ -333,7 +202,6 @@ def cell_graph(
                     "part_index": record["index"],
                 }
 
-    # Door links between adjacent occupied cells.
     valid_doors = 0
     dangling_doors = 0
     for idx, door in enumerate(doors):
@@ -382,10 +250,11 @@ def process_ship(ship_path: Path) -> dict:
 
     part_records = []
     cell_to_parts: Dict[Coord, Set[int]] = defaultdict(set)
-    unknown_ids = Counter()
+    unknown_ids: Counter = Counter()
 
     for index, part in enumerate(parts):
-        meta, inferred = infer_meta(part["ID"])
+        rotation = int(part.get("Rotation", 0)) % 4
+        meta, inferred = infer_meta(part["ID"], rotation)
         if inferred:
             unknown_ids[part["ID"]] += 1
         cells = part_cells(part, meta)
@@ -393,11 +262,9 @@ def process_ship(ship_path: Path) -> dict:
             "index": index,
             "part_id": part["ID"],
             "location": list(map(int, part["Location"])),
-            "rotation": int(part.get("Rotation", 0)),
+            "rotation": rotation,
             "width": meta.width,
             "height": meta.height,
-            "rotated_width": rotate_dims(meta.width, meta.height, int(part.get("Rotation", 0)))[0],
-            "rotated_height": rotate_dims(meta.width, meta.height, int(part.get("Rotation", 0)))[1],
             "traversable": meta.traversable,
             "meta_note": meta.note,
             "cells": cells,
@@ -413,11 +280,9 @@ def process_ship(ship_path: Path) -> dict:
             "location": record["location"],
             "rotation": record["rotation"],
             "footprint": {
-                "base_width": record["width"],
-                "base_height": record["height"],
-                "rotated_width": record["rotated_width"],
-                "rotated_height": record["rotated_height"],
                 "cell_count": len(record["cells"]),
+                "width": record["width"],
+                "height": record["height"],
             },
             "traversable": record["traversable"],
             "meta_note": record["meta_note"],
@@ -436,12 +301,11 @@ def process_ship(ship_path: Path) -> dict:
             "version": data.get("Version"),
             "flight_direction": data.get("FlightDirection"),
         },
-        "schema_version": 1,
+        "schema_version": 2,
         "assumptions": {
-            "rotation_model": "Location treated as top-left anchor of the unrotated footprint; odd rotations swap width/height.",
-            "wedge_model": "Wedge/triangle parts are approximated by their bounding rectangles for occupancy/touch analysis.",
-            "door_model": "Door orientation 0 is assumed east-west and 1 north-south, based on validation against occupied-cell adjacency.",
-            "traversability_model": "Cell traversability is conservative and metadata-driven; it should be treated as an analysis heuristic, not exact in-game pathing.",
+            "geometry_model": "Vanilla part footprints use exact game-file tile data via load_vanilla_part_geometry(). Non-vanilla/unknown parts use regex dimension inference with rectangular approximation.",
+            "door_model": "Door orientation 0 is east-west, orientation 1 is north-south.",
+            "traversability_model": "Cell traversability uses game-file unblocked_footprint_tiles for vanilla parts; name-hint heuristics for others.",
         },
         "graphs": {
             "A_structural_part_graph": {
@@ -471,6 +335,8 @@ def generate_all(input_dir: Path, output_dir: Path, limit: Optional[int] = None)
     manifest = {
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
+        "schema_version": 2,
+        "geometry_source": "game-file canonical (load_vanilla_part_geometry)",
         "ships_processed": 0,
         "ships_with_unknown_part_ids": 0,
         "total_unknown_part_instances": 0,
@@ -517,8 +383,11 @@ def generate_all(input_dir: Path, output_dir: Path, limit: Optional[int] = None)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate structural and cell graphs for extracted Cosmoteer ship JSONs.")
-    parser.add_argument("--input-dir", default="extracted_ship_data", help="Directory containing extracted *.json ship files")
+    parser = argparse.ArgumentParser(
+        description="Generate structural and cell graphs for extracted Cosmoteer ship JSONs. "
+                    "Uses canonical game-file geometry for vanilla parts."
+    )
+    parser.add_argument("--input-dir", default="extracted_ship_data", help="Directory with extracted *.json ship files")
     parser.add_argument("--output-dir", default="generated_ship_graphs", help="Directory to write per-ship graph JSON files")
     parser.add_argument("--limit", type=int, default=None, help="Optional limit for partial validation runs")
     args = parser.parse_args()
