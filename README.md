@@ -1,8 +1,11 @@
-# ship-diffusion
+# ship-generator
 
 Utilities for:
-- downloading every accessible Discord `.ship.png` attachment from a target guild, and
-- extracting ship JSON data from downloaded files.
+- downloading every accessible Discord `.ship.png` attachment from a target guild,
+- extracting ship JSON data from downloaded files,
+- canonicalizing the extracted corpus,
+- inferring reusable door-placement rules from the canonical deduped corpus, and
+- building a first-pass vanilla-only relative-placement Markov ship generator.
 
 ## Files
 
@@ -107,10 +110,53 @@ python scripts/extract_ship_data.py --input-dir downloaded_ships --output-dir ex
 ```
 
 Behavior:
-- Recursively finds `*.ship.png` in the input directory.
+- Recursively finds both `*.ship.png` and `*.ship__msg<digits>.png` in the input directory.
 - Parses embedded ship payload from PNG text chunks.
-- Writes one JSON file per input using the same base name:
+- Writes one JSON file per input by preserving the full PNG basename and swapping only the final `.png` for `.json`:
   - `foo.ship.png` -> `foo.ship.json`
+  - `foo.ship__msg123.png` -> `foo.ship__msg123.json`
+
+## Door rule inference
+
+Infer reusable door-placement rules from the canonical corpus only:
+
+```bash
+python scripts/infer_door_rules.py \
+  --input-dir extracted_ship_data_canonical \
+  --output generators/markov/data/door-placement-rules.v1.json
+```
+
+This step streams one canonical ship JSON at a time, derives observed door placements relative to neighboring part footprints/rotations, saves a machine-readable rules file for later runtime filtering, and validates the inferred rules back against the same canonical corpus.
+
+## First-pass vanilla-only Markov generator
+
+Build the relative-placement Markov artifact from the canonical corpus only:
+
+```bash
+python scripts/build_markov_generator.py build \
+  --input-dir extracted_ship_data_canonical \
+  --output out/markov/markov-model.v2.json \
+  --validation-output out/markov/coordinate-validation.v2.json
+```
+
+Generate sample layouts from a built artifact:
+
+```bash
+python scripts/build_markov_generator.py generate \
+  --model out/markov/markov-model.v2.json \
+  --output out/markov/samples-v2 \
+  --count 5
+```
+
+Validate the relative-coordinate assumption against the real canonical corpus:
+
+```bash
+python scripts/build_markov_generator.py validate \
+  --input-dir extracted_ship_data_canonical \
+  --output out/markov/coordinate-validation.v2.json
+```
+
+See `generators/markov/README.md` for model details, limitations, and artifact conventions.
 
 ## Attribution
 

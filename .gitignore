@@ -14,6 +14,27 @@ venv/
 .pytest_cache/
 .mypy_cache/
 
-# Generated outputs
+# Generated / local-only data corpora
 downloaded_ships/
 extracted_ship_data/
+extracted_ship_data_canonical/
+extracted_ship_data_validation/
+generated_ship_graphs/
+generated_ship_graphs_canonical/
+out/
+
+# Derived rules / model data / exported ship files
+for-0neye/*.ship.png
+generators/markov/data/door-placement-rules*.json
+DOOR_RULE_INFERENCE_REPORT.md
+EXTRACTION_RUN_REPORT.md
+SHIP_CANONICALIZATION_REPORT.md
+SHIP_GRAPH_CANONICAL_REPORT.md
+SHIP_GRAPH_REPORT.md
+
+# Keep the vanilla game-data JSON used for validation/export.
+!generators/markov/data/
+!generators/markov/data/vanilla-parts-from-game-files.json
+
+# Scratch / local editor state
+.claude/

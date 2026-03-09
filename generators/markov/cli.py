@@ -1,0 +1,321 @@
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Optional
+
+from .model import (
+    GenerationConfig,
+    RelativeMarkovModel,
+    TrainingConfig,
+    build_model_from_corpus,
+    validate_relative_placement_assumptions,
+)
+
+
+# ── allowlist helpers ─────────────────────────────────────────────────────────
+
+
+def _load_allowlist(allowlist_arg: Optional[list], allowlist_file_arg: Optional[Path]) -> Optional[frozenset]:
+    """Combine --allowlist and --allowlist-file into a frozenset, or return None."""
+    ids: set[str] = set()
+    if allowlist_arg:
+        ids.update(a.strip() for a in allowlist_arg if a.strip())
+    if allowlist_file_arg is not None:
+        text = allowlist_file_arg.read_text()
+        for line in text.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                # Support JSON array or plain line-delimited
+                if line.startswith("["):
+                    ids.update(json.loads(line))
+                else:
+                    ids.add(line)
+    return frozenset(ids) if ids else None
+
+
+# ── argument parser ────────────────────────────────────────────────────────────
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Build or sample the first-pass vanilla-only relative Markov ship generator."
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # ── build ──
+    build = subparsers.add_parser("build", help="Train/build Markov artifacts from the canonical corpus.")
+    build.add_argument("--input-dir", type=Path, required=True)
+    build.add_argument("--output", type=Path, required=True)
+    build.add_argument("--markov-order", type=int, default=2)
+    build.add_argument("--min-parts-per-ship", type=int, default=2)
+    build.add_argument("--max-parts-per-ship", type=int, default=5000)
+    build.add_argument("--anchor-window", type=int, default=128)
+    build.add_argument("--validation-output", type=Path, default=None)
+    build.add_argument(
+        "--allowlist",
+        nargs="+",
+        metavar="PART_ID",
+        default=None,
+        help=(
+            "Restrict training to only these part IDs (space-separated). "
+            "Parts not in this list are ignored during training."
+        ),
+    )
+    build.add_argument(
+        "--allowlist-file",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "Path to a file containing part IDs to allow, one per line. "
+            "Lines starting with # are ignored. "
+            "Can be combined with --allowlist."
+        ),
+    )
+
+    # ── generate ──
+    generate = subparsers.add_parser("generate", help="Generate sample ships from a built artifact.")
+    generate.add_argument("--model", type=Path, required=True)
+    generate.add_argument("--output", type=Path, required=True)
+    generate.add_argument("--count", type=int, default=1)
+    generate.add_argument("--max-parts", type=int, default=250)
+    generate.add_argument("--max-attempts", type=int, default=3000)
+    generate.add_argument("--max-resample-per-step", type=int, default=32)
+    generate.add_argument("--bounds-min-x", type=int, default=-64)
+    generate.add_argument("--bounds-max-x", type=int, default=64)
+    generate.add_argument("--bounds-min-y", type=int, default=-64)
+    generate.add_argument("--bounds-max-y", type=int, default=64)
+    generate.add_argument("--seed", type=int, default=1337)
+    generate.add_argument(
+        "--export-png-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help=(
+            "If set, also export each generated ship as a .ship.png to this directory. "
+            "Each sample-NNN.json produces a sample-NNN.ship.png."
+        ),
+    )
+    generate.add_argument(
+        "--no-validate",
+        action="store_true",
+        default=False,
+        help="Skip roundtrip validation when exporting PNGs (faster).",
+    )
+    generate.add_argument(
+        "--allowlist",
+        nargs="+",
+        metavar="PART_ID",
+        default=None,
+        help=(
+            "Restrict generation to only these part IDs (space-separated). "
+            "Transitions sampling tokens not in this list are skipped."
+        ),
+    )
+    generate.add_argument(
+        "--allowlist-file",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Path to a file of allowed part IDs, one per line. Can be combined with --allowlist.",
+    )
+
+    # ── export ──
+    export = subparsers.add_parser(
+        "export",
+        help="Export already-generated sample JSON files to .ship.png files.",
+    )
+    export.add_argument(
+        "--input-dir",
+        type=Path,
+        required=True,
+        help="Directory containing sample-NNN.json files produced by 'generate'.",
+    )
+    export.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="Directory to write .ship.png files into.",
+    )
+    export.add_argument(
+        "--name-prefix",
+        type=str,
+        default="gen",
+        help="Prefix for embedded ship names (default: 'gen').",
+    )
+    export.add_argument(
+        "--no-validate",
+        action="store_true",
+        default=False,
+        help="Skip roundtrip validation (faster).",
+    )
+    export.add_argument(
+        "--report",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Write a JSON export report to this file.",
+    )
+
+    # ── validate ──
+    validate = subparsers.add_parser(
+        "validate",
+        help="Validate coordinate assumptions against the real canonical corpus.",
+    )
+    validate.add_argument("--input-dir", type=Path, required=True)
+    validate.add_argument("--output", type=Path, required=True)
+    validate.add_argument("--sample-limit", type=int, default=None)
+
+    return parser
+
+
+# ── command handlers ───────────────────────────────────────────────────────────
+
+
+def cmd_build(args: argparse.Namespace) -> int:
+    allowlist = _load_allowlist(args.allowlist, args.allowlist_file)
+    if allowlist is not None:
+        print(f"[build] allowlist active: {len(allowlist)} part IDs")
+    model = build_model_from_corpus(
+        args.input_dir,
+        TrainingConfig(
+            markov_order=args.markov_order,
+            min_parts_per_ship=args.min_parts_per_ship,
+            max_parts_per_ship=args.max_parts_per_ship,
+            anchor_window=args.anchor_window,
+            part_allowlist=allowlist,
+        ),
+    )
+    model.save(args.output)
+    print(f"[build] model saved to {args.output}")
+    if args.validation_output is not None:
+        payload = validate_relative_placement_assumptions(args.input_dir)
+        args.validation_output.parent.mkdir(parents=True, exist_ok=True)
+        args.validation_output.write_text(json.dumps(payload, indent=2) + "\n")
+        print(f"[build] validation written to {args.validation_output}")
+    return 0
+
+
+def cmd_generate(args: argparse.Namespace) -> int:
+    model = RelativeMarkovModel.load(args.model)
+    args.output.mkdir(parents=True, exist_ok=True)
+    allowlist = _load_allowlist(args.allowlist, args.allowlist_file)
+    if allowlist is not None:
+        print(f"[generate] allowlist active: {len(allowlist)} part IDs")
+
+    export_dir = args.export_png_dir
+    if export_dir is not None:
+        export_dir.mkdir(parents=True, exist_ok=True)
+        from .export import export_ship_png as _export_ship_png
+
+    for idx in range(args.count):
+        config = GenerationConfig(
+            max_parts=args.max_parts,
+            max_attempts=args.max_attempts,
+            max_resample_per_step=args.max_resample_per_step,
+            bounds_min_x=args.bounds_min_x,
+            bounds_max_x=args.bounds_max_x,
+            bounds_min_y=args.bounds_min_y,
+            bounds_max_y=args.bounds_max_y,
+            rng_seed=args.seed + idx,
+            part_allowlist=allowlist,
+        )
+        try:
+            payload = model.generate(config)
+        except RuntimeError as exc:
+            print(f"[generate] sample-{idx:03d} FAILED: {exc}")
+            continue
+
+        out_path = args.output / f"sample-{idx:03d}.json"
+        out_path.write_text(json.dumps(payload, indent=2) + "\n")
+        print(f"[generate] sample-{idx:03d}: {payload['stats']['parts_generated']} parts ({payload['stats']['stop_reason']})")
+
+        if export_dir is not None:
+            png_path = export_dir / f"sample-{idx:03d}.ship.png"
+            try:
+                result = _export_ship_png(
+                    payload,
+                    png_path,
+                    name=f"gen-{idx:03d}",
+                    validate=not args.no_validate,
+                )
+                status = "OK" if result.get("valid") else ("?" if result.get("valid") is None else "WARN")
+                rt = result.get("roundtrip", {})
+                print(
+                    f"[export]  sample-{idx:03d}.ship.png [{status}] "
+                    f"parts_in={rt.get('parts_in','?')} parts_out={rt.get('parts_out','?')} "
+                    f"size={result.get('parts_exported','?')}pts "
+                    f"png={rt.get('png_bytes','?')}B"
+                )
+                if rt.get("warnings"):
+                    for w in rt["warnings"]:
+                        print(f"[export]    WARN: {w}")
+            except Exception as exc:
+                print(f"[export]  sample-{idx:03d}.ship.png FAILED: {exc}")
+
+    return 0
+
+
+def cmd_export(args: argparse.Namespace) -> int:
+    from .export import export_batch
+
+    results = export_batch(
+        args.input_dir,
+        args.output_dir,
+        validate=not args.no_validate,
+        name_prefix=args.name_prefix,
+    )
+
+    ok_count = sum(1 for r in results if r.get("valid") is True)
+    warn_count = sum(1 for r in results if r.get("valid") is False)
+    err_count = sum(1 for r in results if "error" in r)
+    print(f"[export] {len(results)} files processed: {ok_count} OK, {warn_count} validation issues, {err_count} errors")
+
+    for r in results:
+        src = Path(r.get("source", "?")).name
+        if "error" in r:
+            print(f"  ERROR {src}: {r['error']}")
+        else:
+            status = "OK" if r.get("valid") else ("?" if r.get("valid") is None else "WARN")
+            rt = r.get("roundtrip", {})
+            print(
+                f"  [{status}] {src} → {Path(r.get('output_path','?')).name} "
+                f"parts_in={rt.get('parts_in','?')} parts_out={rt.get('parts_out','?')}"
+            )
+            for w in (rt.get("warnings") or []):
+                print(f"    WARN: {w}")
+
+    if args.report is not None:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(json.dumps(results, indent=2) + "\n")
+        print(f"[export] report written to {args.report}")
+
+    return 0 if err_count == 0 else 1
+
+
+def cmd_validate(args: argparse.Namespace) -> int:
+    payload = validate_relative_placement_assumptions(args.input_dir, sample_limit=args.sample_limit)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(payload, indent=2) + "\n")
+    return 0
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.command == "build":
+        return cmd_build(args)
+    if args.command == "generate":
+        return cmd_generate(args)
+    if args.command == "export":
+        return cmd_export(args)
+    if args.command == "validate":
+        return cmd_validate(args)
+    parser.error(f"unknown command: {args.command}")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

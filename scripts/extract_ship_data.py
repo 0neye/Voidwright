@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""Parse downloaded `.ship.png` files and write matching `.ship.json` outputs."""
+"""Parse downloaded ship PNG files and write matching JSON outputs."""
 
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
+import os
+import sys
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from ship_parser import parse_ship_png
 
@@ -22,12 +29,12 @@ def configure_logging(verbose: bool) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Extract ship JSON payloads from downloaded .ship.png files."
+        description="Extract ship JSON payloads from downloaded ship PNG files (.ship.png and .ship__msg<digits>.png)."
     )
     parser.add_argument(
         "--input-dir",
         default="downloaded_ships",
-        help="Directory containing downloaded .ship.png files (default: downloaded_ships)",
+        help="Directory containing downloaded ship PNG files (default: downloaded_ships)",
     )
     parser.add_argument(
         "--output-dir",
@@ -42,13 +49,33 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def is_supported_ship_png(path: Path) -> bool:
+    name = path.name.lower()
+    return name.endswith(".ship.png") or (
+        name.endswith(".png") and ".ship__msg" in name
+    )
+
+
 def output_name_for(source: Path) -> str:
     name = source.name
-    if name.lower().endswith(".ship.png"):
-        base = name[: -len(".ship.png")]
-    else:
-        base = source.stem
-    return f"{base}.ship.json"
+    if name.lower().endswith(".png"):
+        return f"{name[:-len('.png')]}.json"
+    return f"{name}.json"
+
+
+def _extract_single(image_path: str, output_path: str) -> tuple[bool, str, str | None]:
+    source = Path(image_path)
+    destination = Path(output_path)
+
+    try:
+        ship_data = parse_ship_png(source)
+        destination.write_text(
+            json.dumps(ship_data, indent=2, sort_keys=True, ensure_ascii=True),
+            encoding="utf-8",
+        )
+        return True, str(source), None
+    except Exception as exc:  # noqa: BLE001
+        return False, str(source), repr(exc)
 
 
 def run_extract(
@@ -68,29 +95,46 @@ def run_extract(
     output_path.mkdir(parents=True, exist_ok=True)
 
     images = sorted(
-        path for path in input_path.rglob("*") if path.is_file() and path.name.lower().endswith(".ship.png")
+        path for path in input_path.rglob("*") if path.is_file() and is_supported_ship_png(path)
     )
 
-    logging.info("Found %d .ship.png file(s) under %s", len(images), input_path)
+    logging.info(
+        "Found %d supported ship PNG file(s) under %s (.ship.png and .ship__msg<digits>.png)",
+        len(images),
+        input_path,
+    )
 
     success = 0
     failures = 0
 
-    for index, image_path in enumerate(images, start=1):
-        image_output_path = output_path / output_name_for(image_path)
-        logging.info("[%d/%d] Parsing %s", index, len(images), image_path)
+    worker_count = min(8, max(1, os.cpu_count() or 1), len(images))
+    logging.info("Using %d worker(s)", worker_count)
 
-        try:
-            ship_data = parse_ship_png(image_path)
-            image_output_path.write_text(
-                json.dumps(ship_data, indent=2, sort_keys=True, ensure_ascii=True),
-                encoding="utf-8",
-            )
-            success += 1
-            logging.info("Wrote %s", image_output_path)
-        except Exception as exc:  # noqa: BLE001
-            failures += 1
-            logging.exception("Failed to parse %s: %s", image_path, exc)
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_to_paths = {
+            executor.submit(_extract_single, str(image_path), str(output_path / output_name_for(image_path))): image_path
+            for image_path in images
+        }
+
+        completed = 0
+        for future in as_completed(future_to_paths):
+            completed += 1
+            image_path = future_to_paths[future]
+
+            try:
+                ok, source, error = future.result()
+            except Exception as exc:  # noqa: BLE001
+                failures += 1
+                logging.exception("[%d/%d] Worker crashed for %s: %s", completed, len(images), image_path, exc)
+                continue
+
+            if ok:
+                success += 1
+                if verbose or completed == len(images) or completed % 100 == 0:
+                    logging.info("[%d/%d] Wrote %s", completed, len(images), output_path / output_name_for(Path(source)))
+            else:
+                failures += 1
+                logging.error("[%d/%d] Failed to parse %s: %s", completed, len(images), source, error)
 
     logging.info("Done. Parsed successfully: %d | Failed: %d", success, failures)
     return 0 if failures == 0 else 2

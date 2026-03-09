@@ -7,7 +7,12 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import socket
+import subprocess
+import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import AsyncIterator, Iterable
 
@@ -35,6 +40,9 @@ DEFAULT_CHANNEL_ALLOWLIST = [
     546555689464627212,
 ]
 SAVE_EVERY_MESSAGES = 100
+STARTUP_TIMEOUT_SECONDS = 60
+STARTUP_MAX_RETRIES = 12
+STARTUP_RETRY_DELAY_SECONDS = 10
 RETRYABLE_EXCEPTIONS = (
     aiohttp.ClientError,
     discord.HTTPException,
@@ -142,7 +150,13 @@ def resolve_channel_ids(channel_ids: list[int], channels_file: str | None) -> li
 
 
 class ShipImageDownloader(discord.Client):
-    def __init__(self, output_dir: Path, channel_ids: list[int], **kwargs: object) -> None:
+    def __init__(
+        self,
+        output_dir: Path,
+        channel_ids: list[int],
+        startup_ready_file: Path | None = None,
+        **kwargs: object,
+    ) -> None:
         super().__init__(**kwargs)
         self.output_dir = output_dir
         self.guild_id = GUILD_ID
@@ -158,8 +172,16 @@ class ShipImageDownloader(discord.Client):
         self.downloaded_filenames: set[str] = set()
         self.downloaded_attachment_ids: set[str] = set()
         self._messages_since_save = 0
+        self.ready_event: asyncio.Event = asyncio.Event()
+        self.startup_ready_file = startup_ready_file
 
     async def on_ready(self) -> None:
+        self.ready_event.set()
+        if self.startup_ready_file is not None:
+            try:
+                self.startup_ready_file.write_text("ready\n", encoding="utf-8")
+            except OSError as exc:
+                logging.warning("Could not write startup ready marker %s: %s", self.startup_ready_file, exc)
         logging.info("Logged in as %s (%s)", self.user, self.user.id if self.user else "unknown")
 
         guild = self.get_guild(self.guild_id)
@@ -549,11 +571,40 @@ class ShipImageDownloader(discord.Client):
         self.downloaded_filenames.add(output_name)
 
 
+def _run_single_download(
+    output_dir: str,
+    channel_ids: list[int],
+    token: str,
+    verbose: bool,
+    startup_ready_file: Path | None = None,
+) -> int:
+    configure_logging(verbose)
+    intents = discord.Intents.none()
+    intents.guilds = True
+    intents.messages = True
+    client = ShipImageDownloader(
+        output_dir=Path(output_dir),
+        channel_ids=channel_ids,
+        startup_ready_file=startup_ready_file,
+        intents=intents,
+    )
+    try:
+        client.run(token)
+    except discord.LoginFailure as exc:
+        logging.error("Discord login failed: %s", exc)
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        logging.error("Discord client exited with error: %s", exc)
+        return 1
+    return 0
+
+
 def run_download(
     output_dir: str | Path = "downloaded_ships",
     verbose: bool = False,
     channel_ids: list[int] | None = None,
     channels_file: str | None = None,
+    startup_timeout_seconds: int = STARTUP_TIMEOUT_SECONDS,
 ) -> int:
     configure_logging(verbose)
 
@@ -566,20 +617,93 @@ def run_download(
     resolved_channel_ids = resolve_channel_ids(channel_ids or [], channels_file)
     logging.info("Configured %d channel ID(s) for scanning", len(resolved_channel_ids))
 
-    intents = discord.Intents.none()
-    intents.guilds = True
-    intents.messages = True
+    resolved_output_dir = str(Path(output_dir))
 
-    client = ShipImageDownloader(
-        output_dir=Path(output_dir),
-        channel_ids=resolved_channel_ids,
-        intents=intents,
-    )
-    client.run(token)
-    return 0
+    for attempt in range(1, STARTUP_MAX_RETRIES + 1):
+        ready_fd, ready_path_str = tempfile.mkstemp(prefix="ship_download_ready_", suffix=".tmp")
+        os.close(ready_fd)
+        ready_path = Path(ready_path_str)
+        ready_path.unlink(missing_ok=True)
+
+        child_env = os.environ.copy()
+        child_env["SHIP_DOWNLOAD_WORKER"] = "1"
+        child_env["SHIP_DOWNLOAD_OUTPUT_DIR"] = resolved_output_dir
+        child_env["SHIP_DOWNLOAD_CHANNEL_IDS"] = json.dumps(resolved_channel_ids)
+        child_env["SHIP_DOWNLOAD_READY_FILE"] = str(ready_path)
+        child_env["SHIP_DOWNLOAD_VERBOSE"] = "1" if verbose else "0"
+        child_env[TOKEN_ENV_VAR] = token
+
+        process = subprocess.Popen(  # noqa: S603
+            [sys.executable, str(Path(__file__).resolve())],
+            env=child_env,
+        )
+        start_ts = time.monotonic()
+        while True:
+            if ready_path.exists():
+                break
+            if process.poll() is not None:
+                break
+            if time.monotonic() - start_ts >= startup_timeout_seconds:
+                break
+            time.sleep(1)
+
+        timed_out = not ready_path.exists() and process.poll() is None
+        if timed_out:
+            logging.warning(
+                "Download attempt %d/%d timed out waiting %ss for Discord ready; retrying",
+                attempt,
+                STARTUP_MAX_RETRIES,
+                startup_timeout_seconds,
+            )
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+            ready_path.unlink(missing_ok=True)
+            if attempt < STARTUP_MAX_RETRIES:
+                time.sleep(STARTUP_RETRY_DELAY_SECONDS)
+                continue
+            logging.error("All startup attempts failed due timeout")
+            return 1
+
+        result = process.wait()
+        ready_path.unlink(missing_ok=True)
+        if result != 0:
+            return result
+        return 0
+
+    return 1
 
 
 def main() -> int:
+    if getenv("SHIP_DOWNLOAD_WORKER") == "1":
+        output_dir = getenv("SHIP_DOWNLOAD_OUTPUT_DIR", "downloaded_ships")
+        raw_channel_ids = getenv("SHIP_DOWNLOAD_CHANNEL_IDS", "[]")
+        ready_file_value = getenv("SHIP_DOWNLOAD_READY_FILE")
+        verbose_value = getenv("SHIP_DOWNLOAD_VERBOSE", "0") == "1"
+        token = getenv(TOKEN_ENV_VAR)
+        if not token:
+            logging.error("Missing %s in worker environment", TOKEN_ENV_VAR)
+            return 1
+        try:
+            channel_ids = json.loads(raw_channel_ids)
+        except json.JSONDecodeError:
+            logging.error("Invalid worker channel list payload")
+            return 1
+        if not isinstance(channel_ids, list) or not all(isinstance(v, int) for v in channel_ids):
+            logging.error("Worker channel list is malformed")
+            return 1
+        ready_file = Path(ready_file_value) if ready_file_value else None
+        return _run_single_download(
+            output_dir=output_dir,
+            channel_ids=channel_ids,
+            token=token,
+            verbose=verbose_value,
+            startup_ready_file=ready_file,
+        )
+
     args = parse_args()
     return run_download(
         output_dir=args.output_dir,
