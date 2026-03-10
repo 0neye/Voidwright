@@ -139,12 +139,34 @@ def roundtrip_validate(generated_json: dict) -> dict:
         ext_loc = ext.get("Location", []) if isinstance(ext, dict) else []
         orig_rot = orig.get("Rotation", 0)
         ext_rot = ext.get("Rotation", 0) if isinstance(ext, dict) else -1
+        orig_flip_x = orig.get("FlipX", False)
+        ext_flip_x = ext.get("FlipX", False) if isinstance(ext, dict) else False
+        orig_flip_y = orig.get("FlipY", False)
+        ext_flip_y = ext.get("FlipY", False) if isinstance(ext, dict) else False
 
-        if orig_id != ext_id or orig_loc != ext_loc or orig_rot != ext_rot:
+        if (
+            orig_id != ext_id
+            or orig_loc != ext_loc
+            or orig_rot != ext_rot
+            or orig_flip_x != ext_flip_x
+            or orig_flip_y != ext_flip_y
+        ):
             mismatches.append({
                 "index": i,
-                "orig": {"ID": orig_id, "Location": orig_loc, "Rotation": orig_rot},
-                "extracted": {"ID": ext_id, "Location": ext_loc, "Rotation": ext_rot},
+                "orig": {
+                    "ID": orig_id,
+                    "Location": orig_loc,
+                    "Rotation": orig_rot,
+                    "FlipX": orig_flip_x,
+                    "FlipY": orig_flip_y,
+                },
+                "extracted": {
+                    "ID": ext_id,
+                    "Location": ext_loc,
+                    "Rotation": ext_rot,
+                    "FlipX": ext_flip_x,
+                    "FlipY": ext_flip_y,
+                },
             })
 
     parts_match = parts_in == parts_out and len(mismatches) == 0

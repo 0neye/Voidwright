@@ -3,7 +3,7 @@ import unittest
 from common.geometry import load_vanilla_part_geometry
 from markov.model import ShipPart
 from markov.symmetry import mirror_rotation
-from generator.backends.markov.export import generated_parts_to_cosmoteer_parts
+from generator.backends.markov.export import generated_parts_to_cosmoteer_parts, roundtrip_validate
 
 
 class MirrorRotationTests(unittest.TestCase):
@@ -76,6 +76,25 @@ class MirrorRotationTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_roundtrip_validation_checks_flip_flags(self) -> None:
+        report = roundtrip_validate(
+            {
+                "name": "flip-check",
+                "parts": [
+                    {
+                        "part_id": "cosmoteer.armor_1x2_wedge",
+                        "rotation": 3,
+                        "x": 4,
+                        "y": -2,
+                        "flip_x": True,
+                        "flip_y": False,
+                    }
+                ],
+            }
+        )
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["mismatches"], [])
 
 
 if __name__ == "__main__":
