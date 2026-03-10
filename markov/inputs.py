@@ -105,6 +105,8 @@ def load_seed_parts_from_json(seed_json_path: Path) -> list[dict]:
                 "rotation": int(part.get("Rotation", 0)),
                 "x": int(part["Location"][0]),
                 "y": int(part["Location"][1]),
+                "flip_x": bool(part.get("FlipX", False)),
+                "flip_y": bool(part.get("FlipY", False)),
             }
             for part in raw_parts
             if isinstance(part, dict) and "ID" in part and "Location" in part
@@ -116,6 +118,8 @@ def load_seed_parts_from_json(seed_json_path: Path) -> list[dict]:
                 "rotation": int(part.get("Rotation", 0)),
                 "x": int(part["Location"][0]),
                 "y": int(part["Location"][1]),
+                "flip_x": bool(part.get("FlipX", False)),
+                "flip_y": bool(part.get("FlipY", False)),
             }
             for part in data["Parts"]
             if isinstance(part, dict)
@@ -143,6 +147,8 @@ def load_seed_parts_from_png(seed_png_path: Path, vanilla_part_loader) -> list[d
             "rotation": ship_part.rotation,
             "x": ship_part.x,
             "y": ship_part.y,
+            "flip_x": ship_part.flip_x,
+            "flip_y": ship_part.flip_y,
         }
         for ship_part in vanilla_part_loader(ship_data)
     ]

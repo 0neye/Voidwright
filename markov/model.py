@@ -82,6 +82,8 @@ class ShipPart:
     rotation: int
     x: int
     y: int
+    flip_x: bool = False
+    flip_y: bool = False
 
     def footprint_cells(self, geometry_cache: Dict[str, object]) -> frozenset[Coord]:
         """Return the occupied world cells for this placed part."""
@@ -274,6 +276,8 @@ class RelativeMarkovModel:
                         rotation=int(raw.get("rotation", 0)) % 4,
                         x=int(raw["x"]),
                         y=int(raw["y"]),
+                        flip_x=bool(raw.get("flip_x", raw.get("FlipX", False))),
+                        flip_y=bool(raw.get("flip_y", raw.get("FlipY", False))),
                     )
                 else:
                     sp = raw
@@ -770,7 +774,14 @@ def iter_vanilla_parts_from_ship(
         if rotation not in geometry_cache[part_id].rotations:
             continue
         vanilla_parts.append(
-            ShipPart(part_id=part_id, rotation=rotation, x=int(location[0]), y=int(location[1]))
+            ShipPart(
+                part_id=part_id,
+                rotation=rotation,
+                x=int(location[0]),
+                y=int(location[1]),
+                flip_x=bool(part.get("FlipX", False)),
+                flip_y=bool(part.get("FlipY", False)),
+            )
         )
     return vanilla_parts
 

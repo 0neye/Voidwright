@@ -44,11 +44,16 @@ def generated_parts_to_cosmoteer_parts(parts: list[dict]) -> list[dict]:
     """
     result = []
     for part in parts:
-        result.append({
+        exported = {
             "ID": str(part["part_id"]),
             "Location": [int(part["x"]), int(part["y"])],
             "Rotation": int(part["rotation"]),
-        })
+        }
+        if "flip_x" in part:
+            exported["FlipX"] = bool(part["flip_x"])
+        if "flip_y" in part:
+            exported["FlipY"] = bool(part["flip_y"])
+        result.append(exported)
     return result
 
 

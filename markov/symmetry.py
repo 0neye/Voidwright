@@ -49,11 +49,31 @@ from typing import Dict
 # copy of a part that was placed with rotation r.
 MIRROR_ROTATION: Dict[int, int] = {0: 0, 1: 3, 2: 2, 3: 1}
 
+# Some directional 1x1 wedge sprites use a different visual handedness than the
+# general footprint-based rotation rule. The corpus of mirror-built vanilla
+# ships consistently maps these wedges with 0<->1 and 2<->3 on reflection.
+PART_MIRROR_ROTATION_OVERRIDES: Dict[str, Dict[int, int]] = {
+    "cosmoteer.armor_wedge": {0: 1, 1: 0, 2: 3, 3: 2},
+    "cosmoteer.structure_wedge": {0: 1, 1: 0, 2: 3, 3: 2},
+    "cosmoteer.armor_structure_hybrid_1x1": {0: 1, 1: 0, 2: 3, 3: 2},
+}
 
-def mirror_rotation(r: int) -> int:
+def mirror_rotation(r: int, part_id: str | None = None) -> int:
     """Return the mirrored rotation for rotation *r* (left-right flip)."""
 
-    return MIRROR_ROTATION[r % 4]
+    normalized = r % 4
+    if part_id is not None:
+        part_override = PART_MIRROR_ROTATION_OVERRIDES.get(part_id)
+        if part_override is not None:
+            return part_override[normalized]
+    return MIRROR_ROTATION[normalized]
+
+
+def mirror_flip_x(part_id: str, flip_x: bool) -> bool:
+    """Return the mirrored FlipX state for one part placement."""
+
+    del part_id
+    return not flip_x
 
 
 def mirror_part(part, geometry_cache: dict):
@@ -84,7 +104,7 @@ def mirror_part(part, geometry_cache: dict):
 
     width = rot_geom.width
     mirrored_x = -part.x - width
-    mirrored_rotation = MIRROR_ROTATION[part.rotation % 4]
+    mirrored_rotation = mirror_rotation(part.rotation, part.part_id)
 
     # Guard: if computed mirror rotation has no geometry, fall back to original.
     if mirrored_rotation not in geom.rotations:
@@ -95,6 +115,8 @@ def mirror_part(part, geometry_cache: dict):
         rotation=mirrored_rotation,
         x=mirrored_x,
         y=part.y,
+        flip_x=mirror_flip_x(part.part_id, part.flip_x),
+        flip_y=part.flip_y,
     )
 
 
