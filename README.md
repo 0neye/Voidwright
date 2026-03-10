@@ -38,6 +38,25 @@ pip install -r requirements.txt
 DISCORD_BOT_TOKEN=your_bot_token_here
 ```
 
+## Unified root CLI (new)
+
+The repository now includes a root entry point at `main.py` that delegates to:
+
+- `preprocessing`
+- `training`
+- `generator`
+
+You can use it to discover commands, inspect help, and run an interactive REPL:
+
+```bash
+python main.py commands
+python main.py help
+python main.py help training build markov
+python main.py repl
+```
+
+All existing package-level CLIs (`python -m preprocessing.cli`, `python -m training.cli`, and `python -m generator.cli`) remain supported.
+
 ## Main workflow
 
 ### 1. Optional Discord acquisition
@@ -55,7 +74,7 @@ This step is optional. Everything else starts from local `.ship.png` files or di
 Run the full preprocessing pipeline from local ship images to canonical graph JSON outputs:
 
 ```bash
-python -m preprocessing.cli pipeline downloaded_ships \
+python main.py preprocessing pipeline downloaded_ships \
   --output-dir generated_ship_graphs_canonical \
   --write-extracted-dir extracted_ship_data \
   --write-canonical-dir extracted_ship_data_canonical \
@@ -65,10 +84,10 @@ python -m preprocessing.cli pipeline downloaded_ships \
 You can also run the stages individually:
 
 ```bash
-python -m preprocessing.cli extract downloaded_ships --output-dir extracted_ship_data
-python -m preprocessing.cli canonicalize --input-dir extracted_ship_data --output-dir extracted_ship_data_canonical
-python -m preprocessing.cli graphs --input-dir extracted_ship_data_canonical --output-dir generated_ship_graphs_canonical
-python -m preprocessing.cli door-rules --input-dir extracted_ship_data_canonical
+python main.py preprocessing extract downloaded_ships --output-dir extracted_ship_data
+python main.py preprocessing canonicalize --input-dir extracted_ship_data --output-dir extracted_ship_data_canonical
+python main.py preprocessing graphs --input-dir extracted_ship_data_canonical --output-dir generated_ship_graphs_canonical
+python main.py preprocessing door-rules --input-dir extracted_ship_data_canonical
 ```
 
 ### 3. Train a model
@@ -76,7 +95,7 @@ python -m preprocessing.cli door-rules --input-dir extracted_ship_data_canonical
 Train the Markov backend from preprocessing outputs:
 
 ```bash
-python -m training.cli build markov \
+python main.py training build markov \
   --graph-input-dir generated_ship_graphs_canonical \
   --output models/markov/markov-model.v2.json
 ```
@@ -84,7 +103,7 @@ python -m training.cli build markov \
 If you want the legacy raw-corpus validation pass too:
 
 ```bash
-python -m training.cli build markov \
+python main.py training build markov \
   --input-dir extracted_ship_data_canonical \
   --output models/markov/markov-model.v2.json \
   --validation-output models/markov/coordinate-validation.v2.json
@@ -95,7 +114,7 @@ python -m training.cli build markov \
 Generate finished `.ship.png` outputs with the backend-agnostic generator CLI:
 
 ```bash
-python -m generator.cli generate markov \
+python main.py generator generate markov \
   --model models/markov/markov-model.v2.json \
   --output-dir out/generated-ships \
   --count 5 \
@@ -122,6 +141,7 @@ Optional diagnostics:
 
 - The extractor supports both `*.ship.png` and `*.ship__msg<digits>.png`
 - Canonicalization is content-based and may produce `__dedup-<12 hex>` filenames when different ships want the same canonical name
+- Export and parse paths preserve stored part `Location` values, including `FlipX` and `FlipY` metadata when present
 - The current Markov backend is intentionally conservative and does not synthesize doors during generation
 - Door validation is vanilla-first and treats many non-vanilla situations as intentionally unresolved
 

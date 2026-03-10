@@ -1,6 +1,7 @@
 # AGENTS.md
 
 This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+Any changes to this file should be mirrored in CLAUDE.md.
 
 ## What this repo does
 
