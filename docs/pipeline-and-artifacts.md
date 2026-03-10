@@ -5,33 +5,25 @@
 This repository builds a ship corpus and a first-pass generator around Cosmoteer `.ship.png` files.
 The main workflow is:
 
-1. Download visible ship attachments from a Discord guild
-2. Extract embedded ship JSON payloads from those PNGs
-3. Canonicalize and dedupe the extracted corpus
-4. Infer reusable door-placement rules from the canonical corpus
-5. Build, validate, and sample a vanilla-only Markov ship generator
+1. Optionally download visible ship attachments with a standalone Discord script
+2. Run the preprocessing module on local `.ship.png` inputs
+3. Train a backend-specific model from preprocessing outputs
+4. Generate finished encoded ship files from a trained model
 
 ## Key entrypoints
 
-- `main.py`
-  - Runs the download step and then the extraction step
-  - Supports `--skip-download`, `--skip-extract`, `--download-output-dir`, `--extract-output-dir`, and `--verbose`
 - `scripts/download_ship_images.py`
-  - Downloads `.ship.png` attachments from the configured guild and channel/thread targets
-- `scripts/extract_ship_data.py`
-  - Parses downloaded PNG payloads into `.ship.json` files
-- `scripts/canonicalize_ship_json_corpus.py`
-  - Dedupes extracted JSON by canonicalized content hash
-- `scripts/infer_door_rules.py`
-  - Rebuilds the machine-readable door validation artifact from the canonical corpus
-- `scripts/build_markov_generator.py`
-  - Thin wrapper around the Markov generator CLI
-- `scripts/generate_ship_graphs.py`
-  - Produces structural and cell-graph JSONs for extracted ships
+  - Standalone Discord acquisition utility for building a local `.ship.png` corpus
+- `preprocessing/cli.py`
+  - Local `.ship.png` -> extracted JSON -> canonical JSON -> graph JSON pipeline
+- `training/cli.py`
+  - Backend-agnostic training router
+- `generator/cli.py`
+  - Backend-agnostic generation router
 
 ## Download step
 
-The Discord downloader is stateful and resumable.
+The Discord downloader is stateful and resumable, but it is no longer part of the core preprocessing contract.
 
 - Target guild ID is hard-coded as `546229904488923141`
 - If no explicit channel IDs are supplied, the script uses its built-in allowlist
@@ -52,7 +44,7 @@ Operational notes:
 
 ## Extraction step
 
-The extractor scans recursively for downloaded ship images and writes one JSON file per input image.
+The extractor scans recursively for local ship images and writes one JSON file per input image.
 
 - Accepted inputs:
   - `*.ship.png`
@@ -68,7 +60,7 @@ Extractor implementation notes:
 - It decodes the 4-byte payload length, strips an optional `COSMOSHIP` header, gzip-decompresses the payload, and decodes the Cosmoteer object stream
 - There is an optional Pillow-backed path for PNG decoding plus a pure-Python fallback
 
-Corpus snapshot preserved from the extraction and canonicalization workflow:
+Corpus snapshot preserved from the historical extraction and canonicalization workflow:
 
 - extracted JSON corpus size: `15610`
 - canonical deduped corpus size: `12913`
@@ -102,11 +94,12 @@ Practical implication:
 
 ## Ship graph generation
 
-`scripts/generate_ship_graphs.py` generates graph-oriented views of extracted ships.
+`preprocessing/graphs.py` generates graph-oriented views of canonical ship JSON files.
 See `docs/ship-graphs.md` for schema details and assumptions.
 
-- Input defaults to `extracted_ship_data`
-- Output defaults to `generated_ship_graphs`
+- The full preprocessing pipeline starts from local `.ship.png` files and ends here
+- Final graph outputs are intended to feed the training module
+- Intermediate extracted and canonical outputs can optionally be persisted
 - Produces per-ship JSON plus a `manifest.json`
 - Includes:
   - structural part-touching edges
@@ -116,20 +109,20 @@ See `docs/ship-graphs.md` for schema details and assumptions.
 
 ## Markov artifact conventions
 
-Typical Markov artifacts live under `out/markov/`.
+Preferred model artifacts now live under `models/markov/`.
 
 Common files:
 
-- `out/markov/markov-model.v2.json`
-- `out/markov/coordinate-validation.v2.json`
-- `out/markov/samples-v2/sample-000.json`
-- `out/markov/exported-ships/sample-000.ship.png`
-- `out/markov/export-report.json`
+- `models/markov/markov-model.v2.json`
+- `models/markov/coordinate-validation.v2.json`
+- `out/generated-ships/sample-000.ship.png`
 
-The generator-specific reusable assets live under `generators/markov/`, especially:
+The shared and backend-specific implementation now lives primarily under:
 
-- `generators/markov/model.py`
-- `generators/markov/cli.py`
-- `generators/markov/export.py`
-- `generators/markov/door_rules.py`
-- `generators/markov/data/`
+- `markov/model.py`
+- `markov/symmetry.py`
+- `markov/inputs.py`
+- `preprocessing/door_rules_engine.py`
+- `generator/backends/markov/export.py`
+- `common/cosmoteer/`
+- `common/data/`

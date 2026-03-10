@@ -2,8 +2,20 @@
 
 ## Scope
 
-The generator in `generators/markov/` is a conservative first-pass, vanilla-only relative-placement model.
+The Markov backend is a conservative first-pass, vanilla-only relative-placement
+model. It is split by responsibility across:
+
+- `training/backends/markov/` for CLI-facing build and validation adapters
+- `generator/backends/markov/` for CLI-facing runtime generation and export adapters
+- `markov/` for the shared model, symmetry, and backend-specific input helpers
+
 It is designed to produce structurally plausible layouts, not fully game-ready ships.
+
+The preferred public interfaces are now:
+
+- `python -m training.cli build markov ...`
+- `python -m training.cli validate markov ...`
+- `python -m generator.cli generate markov ...`
 
 Implemented behavior:
 
@@ -79,38 +91,46 @@ The validation pass exists so future work can distinguish model limitations from
 
 ## Build, validate, and generate
 
-Build a fresh artifact from the canonical corpus:
+Build a fresh artifact from preprocessing outputs:
 
 ```bash
-python scripts/build_markov_generator.py build \
-  --input-dir extracted_ship_data_canonical \
-  --output out/markov/markov-model.v2.json \
-  --validation-output out/markov/coordinate-validation.v2.json
-```
-
-Generate JSON samples:
-
-```bash
-python scripts/build_markov_generator.py generate \
-  --model out/markov/markov-model.v2.json \
-  --output out/markov/samples-v2 \
-  --count 5 \
-  --seed 1337 \
-  --max-parts 250 \
-  --max-attempts 3000
+python -m training.cli build markov \
+  --graph-input-dir generated_ship_graphs_canonical \
+  --output models/markov/markov-model.v2.json
 ```
 
 Validate coordinate assumptions directly against the canonical corpus:
 
 ```bash
-python scripts/build_markov_generator.py validate \
+python -m training.cli validate markov \
   --input-dir extracted_ship_data_canonical \
-  --output out/markov/coordinate-validation.v2.json
+  --output models/markov/coordinate-validation.v2.json
+```
+
+Generate finished encoded ship files:
+
+```bash
+python -m generator.cli generate markov \
+  --model models/markov/markov-model.v2.json \
+  --output-dir out/generated-ships \
+  --count 5 \
+  --seed 1337
+```
+
+Optional JSON diagnostics:
+
+```bash
+python -m generator.cli generate markov \
+  --model models/markov/markov-model.v2.json \
+  --output-dir out/generated-ships \
+  --json-output-dir out/generated-json \
+  --count 5
 ```
 
 ## Export behavior
 
-The export pipeline in `generators/markov/export.py` converts generated JSON back into loadable `.ship.png` files.
+The export pipeline in `generator/backends/markov/export.py` converts generated JSON back into loadable `.ship.png` files.
+The new generator CLI always uses this path to emit final encoded ship outputs.
 
 The exporter:
 

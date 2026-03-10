@@ -21,15 +21,17 @@ extracted_ship_data_canonical/
 extracted_ship_data_validation/
 generated_ship_graphs/
 generated_ship_graphs_canonical/
+models/
 out/
 
 # Derived rules / model data / exported ship files
-for-0neye/*.ship.png
-generators/markov/data/door-placement-rules*.json
 
-# Keep the vanilla game-data JSON used for validation/export.
-!generators/markov/data/
-!generators/markov/data/vanilla-parts-from-game-files.json
+
+# Keep the shared vanilla game-data JSON used for validation/export.
+!common/
+!common/data/
+!common/data/vanilla-parts-from-game-files.json
 
 # Scratch / local editor state
 .claude/
+memory/

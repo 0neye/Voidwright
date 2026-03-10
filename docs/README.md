@@ -1,19 +1,18 @@
 # Project Docs
 
-This folder collects durable repository knowledge that was previously scattered across one-off reports.
-It is meant to help future agents understand the current workflow, generator behavior, and known constraints
-without preserving transient run logs or demo-specific output tables.
+This folder keeps durable repository knowledge that should outlive one-off run
+reports and transient implementation notes.
 
 ## Guides
 
-- `docs/pipeline-and-artifacts.md` - end-to-end data pipeline, major scripts, and artifact conventions
-- `docs/ship-graphs.md` - graph outputs, schema, assumptions, and corpus-level graph notes
-- `docs/markov-generator.md` - Markov model architecture, validation assumptions, export behavior, and limits
+- `docs/pipeline-and-artifacts.md` - end-to-end data pipeline, entrypoints, and artifact conventions
+- `docs/ship-graphs.md` - graph outputs, schema, geometry assumptions, and door-edge semantics
+- `docs/markov-generator.md` - Markov architecture, validation assumptions, generation behavior, and export limits
 - `docs/generation-modes.md` - allowlists, mirror symmetry, part requirements, and seeded generation
-- `docs/door-rules.md` - door-rule inference, validation behavior, curated overrides, and current caveats
+- `docs/door-rules.md` - door-rule inference, validation behavior, curated overrides, and caveats
 
 ## Scope
 
-The docs here keep implementation-relevant constraints and usage details.
-They intentionally omit report-only material such as dated sample runs, temporary metrics tables,
-and file-by-file "what changed" summaries.
+These docs focus on stable implementation behavior and repository contracts.
+They intentionally avoid preserving dated sample runs, temporary metrics tables,
+or file-by-file change logs.

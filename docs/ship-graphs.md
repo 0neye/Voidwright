@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`scripts/generate_ship_graphs.py` builds graph-oriented analysis artifacts from extracted ship JSON files.
+`preprocessing/graphs.py` builds graph-oriented analysis artifacts from extracted or canonical ship JSON files.
 It is meant for structural and traversability analysis, not exact gameplay simulation.
 
 The script produces:
@@ -16,7 +16,7 @@ The script produces:
 Default raw-corpus run:
 
 ```bash
-python scripts/generate_ship_graphs.py \
+python -m preprocessing.cli graphs \
   --input-dir extracted_ship_data \
   --output-dir generated_ship_graphs
 ```
@@ -24,7 +24,7 @@ python scripts/generate_ship_graphs.py \
 Canonical-corpus run:
 
 ```bash
-python scripts/generate_ship_graphs.py \
+python -m preprocessing.cli graphs \
   --input-dir extracted_ship_data_canonical \
   --output-dir generated_ship_graphs_canonical
 ```
@@ -81,8 +81,9 @@ The script does not invent free traversal between neighboring separate parts unl
 
 ### Door orientation mapping
 
-- `Orientation = 0` is treated as an east-west connection between `(x, y)` and `(x+1, y)`
-- `Orientation = 1` is treated as a north-south connection between `(x, y)` and `(x, y+1)`
+- `Door.Cell` names the right or bottom occupied cell of the doorway span
+- `Orientation = 0` joins `(x, y-1)` and `(x, y)`
+- `Orientation = 1` joins `(x-1, y)` and `(x, y)`
 
 ### Traversability
 
@@ -93,8 +94,9 @@ The script does not invent free traversal between neighboring separate parts unl
 ## Historical geometry note
 
 Earlier graph generation used a compact local metadata table plus regex or `1x1` fallbacks.
-The current code path imports `load_vanilla_part_geometry()` from `generators/markov/door_rules.py`,
-so vanilla parts can use the same authoritative geometry source as the door-rule tooling.
+The current code path imports shared geometry from `common/geometry.py`, so
+vanilla parts can use the same authoritative geometry source as the door-rule
+tooling.
 
 Unknown or non-vanilla parts still rely on fallback inference.
 

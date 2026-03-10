@@ -1,15 +1,15 @@
 # ship-generator
 
-This repository builds a Cosmoteer ship corpus and a first-pass vanilla-only ship generator.
+This repository is organized around three purpose-specific modules:
 
-It includes tooling for:
+- `preprocessing/`
+  - local `.ship.png` inputs -> extracted JSON -> canonical JSON -> graph JSON
+- `training/`
+  - backend-agnostic model training router with a Markov backend
+- `generator/`
+  - backend-agnostic runtime generation router with a Markov backend
 
-- downloading visible Discord `.ship.png` attachments
-- extracting embedded ship JSON payloads from those PNGs
-- canonicalizing and deduplicating the extracted corpus
-- generating structural and cell-graph analysis artifacts
-- inferring reusable vanilla-first door-placement rules
-- building, validating, sampling, and exporting a relative-placement Markov generator
+Discord acquisition is intentionally separate from preprocessing and stays in `scripts/` as a miscellaneous operational utility.
 
 ## Documentation
 
@@ -21,13 +21,14 @@ Start with the curated docs in `docs/`:
 - `docs/generation-modes.md`
 - `docs/door-rules.md`
 
-Generator-specific details and CLI examples also live in `generators/markov/README.md`.
+Markov backend implementation notes now live in `docs/markov-generator.md` and
+`generator/backends/markov/README.md`.
 
 ## Quick start
 
 1. Create and activate a Python virtual environment
 2. Install dependencies
-3. Add your Discord bot token to `.env` if you plan to use the download step
+3. Add your Discord bot token to `.env` only if you plan to use the standalone Discord download script
 
 ```bash
 pip install -r requirements.txt
@@ -39,102 +40,93 @@ DISCORD_BOT_TOKEN=your_bot_token_here
 
 ## Main workflow
 
-### Download and extract
+### 1. Optional Discord acquisition
 
-Run the top-level pipeline:
+Download visible Discord `.ship.png` attachments into a local folder:
 
 ```bash
-python main.py --download-output-dir downloaded_ships --extract-output-dir extracted_ship_data --verbose
+python scripts/download_ship_images.py --output-dir downloaded_ships --verbose
 ```
 
-Useful flags:
+This step is optional. Everything else starts from local `.ship.png` files or directories.
 
-- `--download-output-dir`
-- `--extract-output-dir`
-- `--skip-download`
-- `--skip-extract`
-- `--verbose`
+### 2. Run preprocessing
 
-Notes:
-
-- `main.py` runs download first and then extraction
-- the download token is only needed for the Discord step
-- extraction reads from the download output directory
-
-### Canonicalize the extracted corpus
+Run the full preprocessing pipeline from local ship images to canonical graph JSON outputs:
 
 ```bash
-python scripts/canonicalize_ship_json_corpus.py \
-  --input-dir extracted_ship_data \
-  --output-dir extracted_ship_data_canonical \
-  --report-json out/ship_canonicalization_report.json
+python -m preprocessing.cli pipeline downloaded_ships \
+  --output-dir generated_ship_graphs_canonical \
+  --write-extracted-dir extracted_ship_data \
+  --write-canonical-dir extracted_ship_data_canonical \
+  --verbose
 ```
 
-### Generate ship graphs
+You can also run the stages individually:
 
 ```bash
-python scripts/generate_ship_graphs.py \
+python -m preprocessing.cli extract downloaded_ships --output-dir extracted_ship_data
+python -m preprocessing.cli canonicalize --input-dir extracted_ship_data --output-dir extracted_ship_data_canonical
+python -m preprocessing.cli graphs --input-dir extracted_ship_data_canonical --output-dir generated_ship_graphs_canonical
+python -m preprocessing.cli door-rules --input-dir extracted_ship_data_canonical
+```
+
+### 3. Train a model
+
+Train the Markov backend from preprocessing outputs:
+
+```bash
+python -m training.cli build markov \
+  --graph-input-dir generated_ship_graphs_canonical \
+  --output models/markov/markov-model.v2.json
+```
+
+If you want the legacy raw-corpus validation pass too:
+
+```bash
+python -m training.cli build markov \
   --input-dir extracted_ship_data_canonical \
-  --output-dir generated_ship_graphs_canonical
+  --output models/markov/markov-model.v2.json \
+  --validation-output models/markov/coordinate-validation.v2.json
 ```
 
-### Infer door rules
+### 4. Generate encoded ships
+
+Generate finished `.ship.png` outputs with the backend-agnostic generator CLI:
 
 ```bash
-python scripts/infer_door_rules.py \
-  --input-dir extracted_ship_data_canonical \
-  --output generators/markov/data/door-placement-rules.v2.json
-```
-
-### Build and sample the Markov generator
-
-Build:
-
-```bash
-python scripts/build_markov_generator.py build \
-  --input-dir extracted_ship_data_canonical \
-  --output out/markov/markov-model.v2.json \
-  --validation-output out/markov/coordinate-validation.v2.json
-```
-
-Generate:
-
-```bash
-python scripts/build_markov_generator.py generate \
-  --model out/markov/markov-model.v2.json \
-  --output out/markov/samples-v2 \
+python -m generator.cli generate markov \
+  --model models/markov/markov-model.v2.json \
+  --output-dir out/generated-ships \
   --count 5 \
   --seed 1337
 ```
 
-Export existing generated samples:
+Optional diagnostics:
 
-```bash
-python scripts/build_markov_generator.py export \
-  --input-dir out/markov/samples-v2 \
-  --output-dir out/markov/exported-ships \
-  --report out/markov/export-report.json
-```
+- `--json-output-dir` writes the generated JSON payloads alongside the exported ships
+- `--seed-json` or `--seed-png` seeds generation from an existing layout
+- `--mirror-symmetry`, `--allowlist`, and `--requirements-file` preserve the existing Markov runtime options
 
-## Key entrypoints
+## Module layout
 
-- `main.py` - top-level download and extract runner
-- `scripts/download_ship_images.py` - Discord ship downloader with resume support
-- `scripts/extract_ship_data.py` - `.ship.png` to `.json` extractor
-- `scripts/canonicalize_ship_json_corpus.py` - content-hash dedupe and canonical naming
-- `scripts/generate_ship_graphs.py` - graph artifact generator
-- `scripts/infer_door_rules.py` - canonical-corpus door-rule inference
-- `scripts/build_markov_generator.py` - thin wrapper around the Markov CLI
-- `ship_parser/cosmoteer_ship_parser.py` - adapted embedded-payload ship parser
-- `ship_parser/cosmoteer_ship_encoder.py` - encoder used by export tooling
+- `common/` - shared helper modules plus shared Cosmoteer geometry and PNG parse/encode support
+- `preprocessing/` - extraction, canonicalization, graph generation, and local pipeline orchestration
+- `training/` - backend router and training adapters
+- `generator/` - backend router and generation adapters
+- `markov/` - shared Markov model, sampling, symmetry, and backend input helpers
+- `scripts/` - miscellaneous operational utilities such as Discord acquisition
+- `models/` - generated model artifacts
 
 ## Notes
 
 - The extractor supports both `*.ship.png` and `*.ship__msg<digits>.png`
 - Canonicalization is content-based and may produce `__dedup-<12 hex>` filenames when different ships want the same canonical name
-- The current generator is intentionally conservative and does not yet synthesize doors during generation
+- The current Markov backend is intentionally conservative and does not synthesize doors during generation
 - Door validation is vanilla-first and treats many non-vanilla situations as intentionally unresolved
 
 ## Attribution
 
-`ship_parser/cosmoteer_ship_parser.py` is an adapted minimal parser implementation intended to match the extraction approach used by the `franklin050187/cosmo-api` project, while keeping only the code needed for this repository.
+`common/cosmoteer/parser.py` is an adapted minimal parser implementation intended
+to match the extraction approach used by the `franklin050187/cosmo-api` project,
+while keeping only the code needed for this repository.

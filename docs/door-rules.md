@@ -2,8 +2,9 @@
 
 ## Purpose
 
-`generators/markov/door_rules.py` contains the reusable door-placement inference and validation logic
-for later generation passes. The current system is intentionally conservative and keeps a distinction
+`preprocessing/door_rules.py` and `preprocessing/door_rules_engine.py` contain
+the reusable door-placement inference and validation logic for later generation
+passes. The current system is intentionally conservative and keeps a distinction
 between confident decisions and unresolved cases.
 
 ## Validation outputs
@@ -35,11 +36,11 @@ Inferred layer:
 
 Default artifact path:
 
-- `generators/markov/data/door-placement-rules.v2.json`
+- `out/preprocessing/door-placement-rules.v2.json`
 
 Geometry source of truth for vanilla parts:
 
-- `generators/markov/data/vanilla-parts-from-game-files.json`
+- `common/data/vanilla-parts-from-game-files.json`
 
 This geometry is used as the authoritative vanilla footprint and walkability source for the current refinement path.
 
@@ -139,9 +140,9 @@ Future agents should not assume:
 Regenerate the rule artifact from the canonical corpus with:
 
 ```bash
-python scripts/infer_door_rules.py \
+python -m preprocessing.cli door-rules \
   --input-dir extracted_ship_data_canonical \
-  --output generators/markov/data/door-placement-rules.v2.json
+  --output out/preprocessing/door-placement-rules.v2.json
 ```
 
 Threshold knobs:
