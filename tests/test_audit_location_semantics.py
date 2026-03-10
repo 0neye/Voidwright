@@ -1,5 +1,4 @@
 import importlib.util
-import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,62 +29,216 @@ def _load_audit_module():
     return module
 
 
-class AuditLocationSemanticsTests(unittest.TestCase):
-    def test_corrected_occupancy_respects_part_coordinate_frame(self) -> None:
-        """Use frame metadata to avoid double-shifting normalized generator parts."""
+def test_corrected_occupancy_respects_part_coordinate_frame() -> None:
+    """Use frame metadata to avoid double-shifting normalized generator parts."""
 
-        audit_module = _load_audit_module()
+    audit_module = _load_audit_module()
 
-        geometry_cache = {
-            "cosmoteer.shield_gen_small": _PartGeometry(
-                rotations={
-                    0: _RotationGeometry(
-                        width=2,
-                        height=3,
-                        footprint_tiles=((0, 0), (1, 0), (0, 1), (1, 1)),
-                    )
-                }
-            )
-        }
-        save_rects = {
-            "cosmoteer.shield_gen_small": SaveRect(
-                part_id="cosmoteer.shield_gen_small",
-                x=0,
-                y=1,
-                width=2,
-                height=2,
-                source_file="shield_gen_small.rules",
-            )
-        }
-
-        extracted_payload_parts = [
-            {
-                "part_id": "cosmoteer.shield_gen_small",
-                "rotation": 0,
-                "x": -4,
-                "y": 1,
-                "coordinate_frame": audit_module.STORED_LOCATION_FRAME,
+    geometry_cache = {
+        "cosmoteer.shield_gen_small": _PartGeometry(
+            rotations={
+                0: _RotationGeometry(
+                    width=2,
+                    height=3,
+                    footprint_tiles=((0, 0), (1, 0), (0, 1), (1, 1)),
+                )
             }
-        ]
-        generated_payload_parts = [
-            {
-                "part_id": "cosmoteer.shield_gen_small",
-                "rotation": 0,
-                "x": -4,
-                "y": 0,
-                "coordinate_frame": audit_module.NORMALIZED_ORIGIN_FRAME,
+        )
+    }
+    save_rects = {
+        "cosmoteer.shield_gen_small": SaveRect(
+            part_id="cosmoteer.shield_gen_small",
+            x=0,
+            y=1,
+            width=2,
+            height=2,
+            source_file="shield_gen_small.rules",
+        )
+    }
+
+    extracted_payload_parts = [
+        {
+            "part_id": "cosmoteer.shield_gen_small",
+            "rotation": 0,
+            "x": -4,
+            "y": 1,
+            "coordinate_frame": audit_module.STORED_LOCATION_FRAME,
+        }
+    ]
+    generated_payload_parts = [
+        {
+            "part_id": "cosmoteer.shield_gen_small",
+            "rotation": 0,
+            "x": -4,
+            "y": 0,
+            "coordinate_frame": audit_module.NORMALIZED_ORIGIN_FRAME,
+        }
+    ]
+
+    extracted_counter, _ = audit_module._occupied_cells(
+        extracted_payload_parts, geometry_cache, save_rects, corrected=True
+    )
+    generated_counter, _ = audit_module._occupied_cells(
+        generated_payload_parts, geometry_cache, save_rects, corrected=True
+    )
+
+    assert extracted_counter == generated_counter
+
+
+def test_corrected_occupancy_matches_for_mixed_payload_frames() -> None:
+    """Mixed payloads should honor coordinate_frame per part consistently.
+
+    Covers all four shield_gen_small rotations to exercise every distinct
+    SaveRect offset:
+      rot=0 → offset (0, 1)  — y-shift
+      rot=1 → offset (0, 0)  — no shift
+      rot=2 → offset (0, 0)  — no shift
+      rot=3 → offset (1, 0)  — x-shift
+    """
+
+    audit_module = _load_audit_module()
+
+    # Geometry matches the live vanilla-parts data for shield_gen_small.
+    # Rotation 0 dimensions (2 wide × 3 tall) are also used by _occupied_cells
+    # when computing the rotated SaveRect offset for all other rotations.
+    geometry_cache = {
+        "cosmoteer.shield_gen_small": _PartGeometry(
+            rotations={
+                0: _RotationGeometry(
+                    width=2,
+                    height=3,
+                    footprint_tiles=((0, 0), (1, 0), (0, 1), (1, 1), (0, 2), (1, 2)),
+                ),
+                1: _RotationGeometry(
+                    width=3,
+                    height=2,
+                    footprint_tiles=((0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)),
+                ),
+                2: _RotationGeometry(
+                    width=2,
+                    height=3,
+                    footprint_tiles=((0, 0), (1, 0), (0, 1), (1, 1), (0, 2), (1, 2)),
+                ),
+                3: _RotationGeometry(
+                    width=3,
+                    height=2,
+                    footprint_tiles=((0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)),
+                ),
             }
-        ]
-
-        extracted_counter, _ = audit_module._occupied_cells(
-            extracted_payload_parts, geometry_cache, save_rects, corrected=True
+        ),
+        "cosmoteer.corridor": _PartGeometry(
+            rotations={
+                0: _RotationGeometry(
+                    width=1,
+                    height=1,
+                    footprint_tiles=((0, 0),),
+                )
+            }
+        ),
+    }
+    save_rects = {
+        "cosmoteer.shield_gen_small": SaveRect(
+            part_id="cosmoteer.shield_gen_small",
+            x=0,
+            y=1,
+            width=2,
+            height=2,
+            source_file="shield_gen_small.rules",
         )
-        generated_counter, _ = audit_module._occupied_cells(
-            generated_payload_parts, geometry_cache, save_rects, corrected=True
-        )
+    }
 
-        self.assertEqual(extracted_counter, generated_counter)
+    # Stored payload: x/y are SaveRect-shifted for shield_gen_small, unshifted
+    # for corridor (no SaveRect in the game files).
+    #
+    # Part positions are chosen to be non-overlapping across all rotations so
+    # that the cell counters form a clean one-to-one map:
+    #   rot=0 origin (-4,  0) → stored (-4,  1)  [y += 1]
+    #   rot=1 origin ( 5, -5) → stored ( 5, -5)  [no offset]
+    #   rot=2 origin ( 0,  8) → stored ( 0,  8)  [no offset]
+    #   rot=3 origin (-10, 3) → stored (-9,  3)  [x += 1]
+    #   corridor origin (-1, 0)                  [no SaveRect]
+    extracted_payload_parts = [
+        {
+            "part_id": "cosmoteer.shield_gen_small",
+            "rotation": 0,
+            "x": -4,
+            "y": 1,
+            "coordinate_frame": audit_module.STORED_LOCATION_FRAME,
+        },
+        {
+            "part_id": "cosmoteer.shield_gen_small",
+            "rotation": 1,
+            "x": 5,
+            "y": -5,
+            "coordinate_frame": audit_module.STORED_LOCATION_FRAME,
+        },
+        {
+            "part_id": "cosmoteer.shield_gen_small",
+            "rotation": 2,
+            "x": 0,
+            "y": 8,
+            "coordinate_frame": audit_module.STORED_LOCATION_FRAME,
+        },
+        {
+            "part_id": "cosmoteer.shield_gen_small",
+            "rotation": 3,
+            "x": -9,
+            "y": 3,
+            "coordinate_frame": audit_module.STORED_LOCATION_FRAME,
+        },
+        {
+            "part_id": "cosmoteer.corridor",
+            "rotation": 0,
+            "x": -1,
+            "y": 0,
+            "coordinate_frame": audit_module.STORED_LOCATION_FRAME,
+        },
+    ]
+    # Generator payload: x/y are already normalized footprint origins and must
+    # not be SaveRect-adjusted by the corrected path.
+    generated_payload_parts = [
+        {
+            "part_id": "cosmoteer.shield_gen_small",
+            "rotation": 0,
+            "x": -4,
+            "y": 0,
+            "coordinate_frame": audit_module.NORMALIZED_ORIGIN_FRAME,
+        },
+        {
+            "part_id": "cosmoteer.shield_gen_small",
+            "rotation": 1,
+            "x": 5,
+            "y": -5,
+            "coordinate_frame": audit_module.NORMALIZED_ORIGIN_FRAME,
+        },
+        {
+            "part_id": "cosmoteer.shield_gen_small",
+            "rotation": 2,
+            "x": 0,
+            "y": 8,
+            "coordinate_frame": audit_module.NORMALIZED_ORIGIN_FRAME,
+        },
+        {
+            "part_id": "cosmoteer.shield_gen_small",
+            "rotation": 3,
+            "x": -10,
+            "y": 3,
+            "coordinate_frame": audit_module.NORMALIZED_ORIGIN_FRAME,
+        },
+        {
+            "part_id": "cosmoteer.corridor",
+            "rotation": 0,
+            "x": -1,
+            "y": 0,
+            "coordinate_frame": audit_module.NORMALIZED_ORIGIN_FRAME,
+        },
+    ]
 
+    extracted_counter, _ = audit_module._occupied_cells(
+        extracted_payload_parts, geometry_cache, save_rects, corrected=True
+    )
+    generated_counter, _ = audit_module._occupied_cells(
+        generated_payload_parts, geometry_cache, save_rects, corrected=True
+    )
 
-if __name__ == "__main__":
-    unittest.main()
+    assert extracted_counter == generated_counter
