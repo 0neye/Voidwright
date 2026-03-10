@@ -63,6 +63,31 @@ def part_cells(part: dict, meta: PartMeta) -> Set[Coord]:
     }
 
 
+def part_walkable_cells(part: dict, meta: PartMeta) -> Set[Coord]:
+    """Return the crew-walkable world cells for one normalized part.
+
+    Args:
+        part: Normalized part placement record
+        meta: Shared geometry and traversability metadata for the part
+
+    Returns:
+        World cells that crew can move through for this placement
+    """
+
+    if not meta.traversable:
+        return set()
+
+    origin_x, origin_y = map(int, part["Location"])
+
+    # Keep the per-tile walkability information from the canonical game data so
+    # partially blocked vanilla parts do not become fully traversable.
+    local_walkable_tiles = meta.unblocked_tiles - meta.blocked_travel_cells
+    if local_walkable_tiles:
+        return {(origin_x + dx, origin_y + dy) for dx, dy in local_walkable_tiles}
+
+    return set()
+
+
 def structural_edges(part_records: List[dict], cell_to_parts: Dict[Coord, Set[int]]) -> List[dict]:
     """Build conservative touching edges between distinct parts."""
 
@@ -107,7 +132,7 @@ def cell_graph(
 
     for (cell_x, cell_y), owners in sorted(cell_to_parts.items()):
         owner_records = [part_by_index[index] for index in sorted(owners)]
-        traversable = any(record["traversable"] for record in owner_records)
+        traversable = any((cell_x, cell_y) in record["walkable_cells"] for record in owner_records)
         if traversable:
             traversable_cells.add((cell_x, cell_y))
         nodes.append(
@@ -125,9 +150,9 @@ def cell_graph(
 
     # Add intra-part traversal edges for traversable parts only.
     for record in part_records:
-        if not record["traversable"]:
+        if not record["walkable_cells"]:
             continue
-        cells = record["cells"]
+        cells = record["walkable_cells"]
         for cell_x, cell_y in cells:
             for delta_x, delta_y in ((1, 0), (0, 1)):
                 neighbor = (cell_x + delta_x, cell_y + delta_y)
@@ -147,6 +172,7 @@ def cell_graph(
 
     valid_door_count = 0
     dangling_door_count = 0
+    blocked_door_count = 0
     for door_index, door in enumerate(doors):
         cell_x, cell_y = map(int, door["Cell"])
         orientation = int(door.get("Orientation", 0))
@@ -158,6 +184,14 @@ def cell_graph(
         if source_coord not in cell_to_parts or target_coord not in cell_to_parts:
             dangling_door_count += 1
             continue
+
+        # Door edges are only traversable when both occupied endpoint cells are
+        # themselves crew-walkable. This keeps partially blocked vanilla parts
+        # from leaking blocked cells back into the reachable graph.
+        if source_coord not in traversable_cells or target_coord not in traversable_cells:
+            blocked_door_count += 1
+            continue
+
         valid_door_count += 1
         source = f"{source_coord[0]},{source_coord[1]}"
         target = f"{target_coord[0]},{target_coord[1]}"
@@ -181,6 +215,7 @@ def cell_graph(
             "door_records": len(doors),
             "valid_door_edges": valid_door_count,
             "dangling_door_records": dangling_door_count,
+            "blocked_door_records": blocked_door_count,
         },
     }
 
@@ -205,6 +240,7 @@ def process_ship(ship_path: Path) -> dict:
         if inferred:
             unknown_part_ids[part["ID"]] += 1
         cells = part_cells(part, meta)
+        walkable_cells = part_walkable_cells(part, meta)
         record = {
             "index": index,
             "part_id": part["ID"],
@@ -215,6 +251,7 @@ def process_ship(ship_path: Path) -> dict:
             "traversable": meta.traversable,
             "meta_note": meta.note,
             "cells": cells,
+            "walkable_cells": walkable_cells,
         }
         part_records.append(record)
         for cell in cells:
@@ -260,8 +297,9 @@ def process_ship(ship_path: Path) -> dict:
                 "Orientation 0 joins (x,y-1)<->(x,y); orientation 1 joins (x-1,y)<->(x,y)."
             ),
             "traversability_model": (
-                "Cell traversability uses game-file unblocked_footprint_tiles for vanilla parts; "
-                "name-hint heuristics for others."
+                "Vanilla part traversability requires positive crew_speed_factor, while "
+                "walkable cells come from game-file unblocked_footprint_tiles. "
+                "Non-vanilla parts still use name-hint heuristics."
             ),
         },
         "graphs": {
@@ -323,6 +361,7 @@ def generate_all(input_dir: Path, output_dir: Path, limit: Optional[int] = None)
                 "door_records": cell_summary["door_records"],
                 "valid_door_edges": cell_summary["valid_door_edges"],
                 "dangling_door_records": cell_summary["dangling_door_records"],
+                "blocked_door_records": cell_summary["blocked_door_records"],
                 "occupied_cells": cell_summary["occupied_cells"],
                 "traversable_cells": cell_summary["traversable_cells"],
             }

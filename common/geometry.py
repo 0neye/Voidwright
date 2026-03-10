@@ -23,52 +23,52 @@ PART_ID_ALIASES = {
     "cosmoteer.electro_bolter": "cosmoteer.disruptor",
 }
 
+# These fallback substrings are only used for unknown or non-vanilla parts.
+# They are intentionally conservative and derived from the vanilla corpus:
+# categories with positive crew_speed_factor go here, while known zero-speed
+# categories stay in NON_TRAVERSABLE_HINTS below.
 TRAVERSABLE_HINTS = (
-    "corridor",
-    "conveyor",
-    "crew_quarters",
-    "quarters",
-    "storage",
-    "reactor",
-    "engine_room",
-    "control_room",
-    "heat_pipe",
-    "radiator",
-    "heat_exchanger",
-    "thermal_",
-    "power_storage",
-    "factory",
-    "ammo_factory",
-    "ammo_storage",
     "airlock",
-    "hyperdrive",
-    "ftl_drive",
-    "shield_gen",
-    "sensor_array",
+    "cannon",
+    "chaingun",
+    "control_room",
+    "conveyor",
+    "corridor",
+    "crew_quarters",
+    "disruptor",
+    "engine_room",
+    "factory",
     "fire_extinguisher",
+    "hyperdrive",
+    "ion_beam_emitter",
+    "laser_blaster",
+    "manipulator_beam",
+    "mining_laser",
+    "missile_launcher",
+    "point_defense",
+    "power_storage",
+    "railgun",
+    "reactor",
+    "resonance_beam",
+    "sensor_array",
+    "shield_gen",
+    "storage_",
+    "thermal_amplification_pump",
+    "thermal_dilation_pump",
+    "thruster",
+    "tractor_beam",
 )
 
 NON_TRAVERSABLE_HINTS = (
     "armor",
-    "structure",
-    "thruster",
-    "point_defense",
-    "cannon",
-    "chaingun",
-    "laser_blaster",
-    "disruptor",
-    "railgun",
-    "ion_beam",
-    "tractor_beam",
-    "manipulator_beam",
-    "mining_laser",
-    "resonance_beam",
-    "electro_bolter",
     "explosive_charge",
-    "missile_launcher",
-    "missile_silo",
-    "missile_storage",
+    "heat_exchanger",
+    "heat_pipe_adaptive",
+    "ion_beam_prism",
+    "radiator",
     "roof_",
+    "structure",
+    "thermal_battery",
 )
 
 
@@ -91,6 +91,9 @@ class VanillaPartGeometry:
 
     part_id: str
     rotations: Dict[int, RotationGeometry]
+    crew_speed_factor: Optional[float] = None
+    crew_congested_speed_factor: Optional[float] = None
+    cell_occupancy_factor: Optional[float] = None
     note: str = "game-file geometry"
 
 
@@ -106,6 +109,14 @@ class PartMeta:
     unblocked_tiles: frozenset[Coord] = frozenset()
     blocked_travel_cells: frozenset[Coord] = frozenset()
     allowed_door_locations: Tuple[Coord, ...] = ()
+
+
+def parse_coord(cell: object) -> Coord:
+    """Convert a raw two-element coordinate payload into a typed Coord."""
+
+    if not isinstance(cell, (list, tuple)) or len(cell) != 2:
+        raise ValueError(f"Expected a two-element coordinate, got {cell!r}")
+    return int(cell[0]), int(cell[1])
 
 
 def is_vanilla_part_id(part_id: str) -> bool:
@@ -132,6 +143,7 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
     for part in payload.get("parts", []):
         part_id = part.get("id")
         per_rotation = ((part.get("geometry") or {}).get("per_rotation") or {})
+        travel_payload = part.get("travel") or {}
         rotations: Dict[int, RotationGeometry] = {}
 
         for key, rotation_payload in per_rotation.items():
@@ -142,25 +154,31 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
                 width=int(size[0]),
                 height=int(size[1]),
                 footprint_tiles=frozenset(
-                    tuple(map(int, cell))
+                    parse_coord(cell)
                     for cell in rotation_payload.get("footprint_tiles", [])
                 ),
                 unblocked_tiles=frozenset(
-                    tuple(map(int, cell))
+                    parse_coord(cell)
                     for cell in rotation_payload.get("unblocked_footprint_tiles", [])
                 ),
                 blocked_travel_cells=frozenset(
-                    tuple(map(int, cell))
+                    parse_coord(cell)
                     for cell in rotation_payload.get("blocked_travel_cells", [])
                 ),
                 allowed_door_locations=tuple(
-                    tuple(map(int, cell))
+                    parse_coord(cell)
                     for cell in rotation_payload.get("allowed_door_locations", [])
                 ),
             )
 
         if part_id and rotations:
-            result[part_id] = VanillaPartGeometry(part_id=part_id, rotations=rotations)
+            result[part_id] = VanillaPartGeometry(
+                part_id=part_id,
+                rotations=rotations,
+                crew_speed_factor=travel_payload.get("crew_speed_factor"),
+                crew_congested_speed_factor=travel_payload.get("crew_congested_speed_factor"),
+                cell_occupancy_factor=travel_payload.get("cell_occupancy_factor"),
+            )
 
     return result
 
@@ -200,7 +218,12 @@ def infer_meta(part_id: str, rotation: int) -> Tuple[PartMeta, bool]:
             or vanilla_geometry.rotations.get(rotation % 4)
             or next(iter(vanilla_geometry.rotations.values()))
         )
-        traversable = bool(rotation_geometry.unblocked_tiles)
+
+        # Vanilla traversability is gated by crew movement speed, while
+        # unblocked tiles still describe which cells inside the footprint are
+        # actually walkable when movement is allowed.
+        crew_speed_factor = vanilla_geometry.crew_speed_factor or 0
+        traversable = crew_speed_factor > 0 and bool(rotation_geometry.unblocked_tiles)
         return (
             PartMeta(
                 width=rotation_geometry.width,
