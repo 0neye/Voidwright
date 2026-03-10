@@ -13,6 +13,8 @@ import zlib
 from pathlib import Path
 from typing import Any
 
+from common.save_rect import origin_to_stored_location
+
 _INT32_KEYS = {
     "FlightDirection",
     "FormationOrder",
@@ -200,11 +202,57 @@ def _encode_object(obj: Any, key_context: str = "") -> bytes:
 def encode_ship_data(ship_dict: dict) -> bytes:
     """Serialize *ship_dict* to a gzip-compressed Cosmoteer object stream."""
 
-    obj_bytes = _encode_object(ship_dict)
+    obj_bytes = _encode_object(_denormalize_ship_part_locations(ship_dict))
     buf = io.BytesIO()
     with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz:
         gz.write(obj_bytes)
     return buf.getvalue()
+
+
+def _denormalize_ship_part_locations(ship_dict: dict) -> dict:
+    """Convert normalized footprint origins into ship-file stored locations."""
+
+    if not isinstance(ship_dict, dict):
+        return ship_dict
+
+    raw_parts = ship_dict.get("Parts")
+    if not isinstance(raw_parts, list):
+        return ship_dict
+
+    encoded_parts: list[Any] = []
+    changed = False
+    for raw_part in raw_parts:
+        if not isinstance(raw_part, dict):
+            encoded_parts.append(raw_part)
+            continue
+
+        part_id = raw_part.get("ID") or raw_part.get("IDString")
+        location = raw_part.get("Location")
+        rotation = int(raw_part.get("Rotation", 0))
+        if (
+            not isinstance(part_id, str)
+            or not isinstance(location, (list, tuple))
+            or len(location) != 2
+        ):
+            encoded_parts.append(raw_part)
+            continue
+
+        stored_x, stored_y = origin_to_stored_location(part_id, rotation, location)
+        stored_location = [stored_x, stored_y]
+        if stored_location != list(location):
+            changed = True
+            part_copy = dict(raw_part)
+            part_copy["Location"] = stored_location
+            encoded_parts.append(part_copy)
+        else:
+            encoded_parts.append(raw_part)
+
+    if not changed:
+        return ship_dict
+
+    ship_copy = dict(ship_dict)
+    ship_copy["Parts"] = encoded_parts
+    return ship_copy
 
 
 def _min_image_dims(payload_size: int) -> tuple[int, int]:

@@ -13,6 +13,8 @@ import struct
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator
 
+from common.save_rect import stored_location_to_origin
+
 try:
     from PIL import Image
 except Exception:  # noqa: BLE001
@@ -419,7 +421,53 @@ def _decode_ship_data(payload: bytes) -> Any:
     with gzip.GzipFile(fileobj=io.BytesIO(payload)) as compressed_stream:
         decompressed = compressed_stream.read()
 
-    return _normalize_for_json(_decode_object(io.BytesIO(decompressed)))
+    return _normalize_ship_part_locations(_normalize_for_json(_decode_object(io.BytesIO(decompressed))))
+
+
+def _normalize_ship_part_locations(ship_data: Any) -> Any:
+    """Normalize top-level part ``Location`` values to footprint origins."""
+
+    if not isinstance(ship_data, dict):
+        return ship_data
+
+    raw_parts = ship_data.get("Parts")
+    if not isinstance(raw_parts, list):
+        return ship_data
+
+    normalized_parts: list[Any] = []
+    changed = False
+    for raw_part in raw_parts:
+        if not isinstance(raw_part, dict):
+            normalized_parts.append(raw_part)
+            continue
+
+        part_id = raw_part.get("ID") or raw_part.get("IDString")
+        location = raw_part.get("Location")
+        rotation = int(raw_part.get("Rotation", 0))
+        if (
+            not isinstance(part_id, str)
+            or not isinstance(location, list)
+            or len(location) != 2
+        ):
+            normalized_parts.append(raw_part)
+            continue
+
+        origin_x, origin_y = stored_location_to_origin(part_id, rotation, location)
+        normalized_location = [origin_x, origin_y]
+        if normalized_location != location:
+            changed = True
+            part_copy = dict(raw_part)
+            part_copy["Location"] = normalized_location
+            normalized_parts.append(part_copy)
+        else:
+            normalized_parts.append(raw_part)
+
+    if not changed:
+        return ship_data
+
+    ship_copy = dict(ship_data)
+    ship_copy["Parts"] = normalized_parts
+    return ship_copy
 
 
 def parse_ship_png(path: str | Path) -> Any:
