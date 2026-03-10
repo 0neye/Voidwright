@@ -50,9 +50,11 @@ The extractor scans recursively for local ship images and writes one JSON file p
   - `*.ship.png`
   - `*.ship__msg<digits>.png`
 - Output naming preserves the full PNG basename and swaps only the final `.png` for `.json`
-- Extraction runs in a thread pool and writes sorted, indented JSON
+- Extraction uses hardware-agnostic parallel workers and defaults to a thread pool
 - Exit code is `0` on full success and `2` if any files fail to parse
 - Batch extraction continues past bad files instead of aborting the entire run
+- `--workers` and `--executor {auto,thread,process}` can override the default concurrency behavior
+- `auto` falls back to thread-based execution if process pools are unavailable in the current environment
 
 Extractor implementation notes:
 
@@ -73,7 +75,10 @@ Canonicalization is content-based, not filename-based.
 - Every source JSON is parsed and normalized with stable recursive key ordering
 - The canonicalized JSON bytes are hashed with SHA-256
 - Deduplication is performed by content hash
-- The script keeps only metadata during the scan and re-reads one representative file per content group when writing outputs
+- The scan/hash phase can run in parallel before the deterministic global dedupe and naming pass
+- Canonical output writes can also run concurrently after final filenames are resolved
+- `--workers` and `--executor {auto,thread,process}` can override the default concurrency behavior
+- `auto` falls back to thread-based execution if process pools are unavailable in the current environment
 
 Canonical filename rules:
 
@@ -101,6 +106,10 @@ See `docs/ship-graphs.md` for schema details and assumptions.
 - Final graph outputs are intended to feed the training module
 - Intermediate extracted and canonical outputs can optionally be persisted
 - Produces per-ship JSON plus a `manifest.json`
+- Graph generation can process ships in parallel, then reduce manifest counters in sorted filename order for deterministic outputs
+- Ships that fail during parallel generation are skipped with a printed warning; one bad file does not abort the batch
+- `--workers` and `--executor {auto,thread,process}` can override the default concurrency behavior
+- `auto` falls back to thread-based execution if process pools are unavailable in the current environment
 - Includes:
   - structural part-touching edges
   - cell-level traversability graph

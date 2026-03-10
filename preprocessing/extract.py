@@ -6,13 +6,13 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Sequence
 
 from common.files import iter_ship_png_files, output_name_for_ship_png
 from common.logging import configure_logging
 from common.cosmoteer import parse_ship_png
+from .concurrency import add_concurrency_arguments, create_executor_factory, resolve_executor_mode, resolve_worker_count
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -35,6 +35,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--verbose",
         action="store_true",
         help="Enable verbose logging",
+    )
+    add_concurrency_arguments(
+        parser,
+        help_prefix="ship extraction",
     )
     return parser
 
@@ -60,6 +64,8 @@ def run_extract(
     input_paths: Sequence[str | Path],
     output_dir: str | Path = "extracted_ship_data",
     verbose: bool = False,
+    workers: int | None = None,
+    executor: str = "auto",
 ) -> int:
     """Extract ship JSON files from local ship images.
 
@@ -67,6 +73,8 @@ def run_extract(
         input_paths: File and directory inputs containing `.ship.png` files
         output_dir: Destination directory for extracted JSON payloads
         verbose: When True, emit per-file progress logging
+        workers: Optional worker-count override for extraction tasks
+        executor: Executor mode override: `auto`, `thread`, or `process`
 
     Returns:
         Process exit code compatible with the legacy extractor:
@@ -91,15 +99,34 @@ def run_extract(
         len(source_images),
         len(resolved_input_paths),
     )
+    if not source_images:
+        logging.info("No ship PNG files found")
+        return 0
 
     success_count = 0
     failure_count = 0
-    worker_count = min(8, max(1, os.cpu_count() or 1), max(1, len(source_images)))
-    logging.info("Using %d worker(s)", worker_count)
+    executor_mode = resolve_executor_mode("extract", executor)
+    worker_count = resolve_worker_count(
+        task_count=len(source_images),
+        stage_name="extract",
+        requested_workers=workers,
+        requested_mode=executor,
+    )
+    executor_type = create_executor_factory(executor_mode)
+    try:
+        pool_ctx = executor_type(max_workers=worker_count)
+    except (NotImplementedError, OSError, PermissionError):
+        if executor == "auto" and executor_mode == "process":
+            logging.warning("Process pool unavailable; falling back to thread executor for extraction")
+            executor_mode = "thread"
+            pool_ctx = ThreadPoolExecutor(max_workers=worker_count)
+        else:
+            raise
+    logging.info("Using %d %s worker(s)", worker_count, executor_mode)
 
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+    with pool_ctx as work_executor:
         future_to_source = {
-            executor.submit(
+            work_executor.submit(
                 _extract_single,
                 str(source_image_path),
                 str(output_path / output_name_for_ship_png(source_image_path)),
@@ -160,6 +187,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         input_paths=args.inputs,
         output_dir=args.output_dir,
         verbose=args.verbose,
+        workers=args.workers,
+        executor=args.executor,
     )
 
 

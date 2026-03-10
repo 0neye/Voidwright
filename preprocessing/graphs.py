@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import as_completed
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from common.geometry import PartMeta, infer_meta, load_vanilla_part_geometry, normalize_part_id
+from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
 from .layout_helpers import door_adjacent_cells
 
 Coord = Tuple[int, int]
@@ -321,8 +323,60 @@ def process_ship(ship_path: Path) -> dict:
     }
 
 
-def generate_all(input_dir: Path, output_dir: Path, limit: Optional[int] = None) -> dict:
-    """Generate graph JSON files for an input corpus directory."""
+def _generate_single_graph(source_json_path: str, output_dir: str) -> dict:
+    """Process and write graph artifacts for one ship JSON file.
+
+    Args:
+        source_json_path: Canonical or extracted ship JSON input path
+        output_dir: Directory that should receive the graph JSON output
+
+    Returns:
+        A compact summary payload used to build the final manifest
+    """
+
+    ship_path = Path(source_json_path)
+    graph_output_dir = Path(output_dir)
+    graph_data = process_ship(ship_path)
+    output_file_path = graph_output_dir / ship_path.name
+
+    with output_file_path.open("w", encoding="utf-8") as file_handle:
+        json.dump(graph_data, file_handle, separators=(",", ":"))
+        file_handle.write("\n")
+
+    cell_summary = graph_data["graphs"]["C_cell_graph"]["summary"]
+    return {
+        "output_name": output_file_path.name,
+        "unknown_part_ids": graph_data["validation"]["unknown_part_ids"],
+        "door_stats": {
+            "door_records": cell_summary["door_records"],
+            "valid_door_edges": cell_summary["valid_door_edges"],
+            "dangling_door_records": cell_summary["dangling_door_records"],
+            "blocked_door_records": cell_summary["blocked_door_records"],
+            "occupied_cells": cell_summary["occupied_cells"],
+            "traversable_cells": cell_summary["traversable_cells"],
+        },
+    }
+
+
+def generate_all(
+    input_dir: Path,
+    output_dir: Path,
+    limit: Optional[int] = None,
+    workers: int | None = None,
+    executor: str = "auto",
+) -> dict:
+    """Generate graph JSON files for an input corpus directory.
+
+    Args:
+        input_dir: Directory containing canonical or extracted ship JSON files
+        output_dir: Destination directory for graph JSON files
+        limit: Optional subset size for validation runs
+        workers: Optional worker-count override for graph generation
+        executor: Executor mode override: `auto`, `thread`, or `process`
+
+    Returns:
+        A manifest describing the generated graph corpus
+    """
 
     output_dir.mkdir(parents=True, exist_ok=True)
     files = sorted(path for path in input_dir.glob("*.json") if path.name != "manifest.json")
@@ -342,33 +396,60 @@ def generate_all(input_dir: Path, output_dir: Path, limit: Optional[int] = None)
         "sample_outputs": [],
     }
 
-    for ship_path in files:
-        graph_data = process_ship(ship_path)
-        output_file_path = output_dir / ship_path.name
-        with output_file_path.open("w", encoding="utf-8") as file_handle:
-            json.dump(graph_data, file_handle, separators=(",", ":"))
-            file_handle.write("\n")
+    graph_results: List[dict] = []
+    if files:
+        worker_count = resolve_worker_count(
+            task_count=len(files),
+            stage_name="graphs",
+            requested_workers=workers,
+            requested_mode=executor,
+        )
 
-        unknown_map = graph_data["validation"]["unknown_part_ids"]
+        def submit_graph_work(executor_factory: type) -> List[dict]:
+            """Submit graph-generation work with one executor implementation."""
+
+            results: List[dict] = []
+            with executor_factory(max_workers=worker_count) as graph_executor:
+                future_to_path = {
+                    graph_executor.submit(_generate_single_graph, str(ship_path), str(output_dir)): ship_path
+                    for ship_path in files
+                }
+                for index, future in enumerate(as_completed(future_to_path), start=1):
+                    try:
+                        results.append(future.result())
+                    except Exception as exc:
+                        failed_path = future_to_path[future]
+                        print(
+                            f"Warning: skipping {failed_path.name} — graph generation failed: {exc}",
+                            flush=True,
+                        )
+                    if index % 1000 == 0:
+                        print(
+                            f"Generated {index}/{len(files)} graph files with {worker_count} worker(s)...",
+                            flush=True,
+                        )
+            return results
+
+        graph_results, _ = run_auto_parallel_work(
+            stage_name="graphs",
+            requested_mode=executor,
+            worker_count=worker_count,
+            submit_work=submit_graph_work,
+        )
+
+    # Reduce the worker summaries in filename order so manifest counters and
+    # sample-output lists remain stable no matter which worker finished first.
+    for graph_result in sorted(graph_results, key=lambda result: result["output_name"]):
+        unknown_map = graph_result["unknown_part_ids"]
         if unknown_map:
             manifest["ships_with_unknown_part_ids"] += 1
             manifest["unknown_part_ids"].update(unknown_map)
             manifest["total_unknown_part_instances"] += sum(unknown_map.values())
 
-        cell_summary = graph_data["graphs"]["C_cell_graph"]["summary"]
-        manifest["door_stats"].update(
-            {
-                "door_records": cell_summary["door_records"],
-                "valid_door_edges": cell_summary["valid_door_edges"],
-                "dangling_door_records": cell_summary["dangling_door_records"],
-                "blocked_door_records": cell_summary["blocked_door_records"],
-                "occupied_cells": cell_summary["occupied_cells"],
-                "traversable_cells": cell_summary["traversable_cells"],
-            }
-        )
+        manifest["door_stats"].update(graph_result["door_stats"])
         manifest["ships_processed"] += 1
         if len(manifest["sample_outputs"]) < 10:
-            manifest["sample_outputs"].append(output_file_path.name)
+            manifest["sample_outputs"].append(graph_result["output_name"])
 
     manifest["unknown_part_ids"] = dict(manifest["unknown_part_ids"].most_common())
     manifest["door_stats"] = dict(manifest["door_stats"])
@@ -405,6 +486,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional limit for partial validation runs",
     )
+    add_concurrency_arguments(
+        parser,
+        help_prefix="graph generation",
+    )
     return parser
 
 
@@ -413,7 +498,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
-    manifest = generate_all(Path(args.input_dir), Path(args.output_dir), args.limit)
+    manifest = generate_all(
+        Path(args.input_dir),
+        Path(args.output_dir),
+        args.limit,
+        workers=args.workers,
+        executor=args.executor,
+    )
     print(json.dumps(manifest, indent=2))
     return 0
 

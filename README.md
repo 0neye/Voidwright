@@ -81,6 +81,23 @@ python main.py preprocessing pipeline downloaded_ships \
   --verbose
 ```
 
+The preprocessing stages now support hardware-agnostic parallelism. By default,
+each stage picks an `auto` executor mode and worker count:
+
+- `extract` defaults to thread-based workers
+- `canonicalize` defaults to a parallel scan/hash phase plus concurrent writes
+- `graphs` defaults to parallel per-ship workers
+- In restricted environments where process pools are unavailable, `auto` falls back to thread-based execution instead of failing
+
+You can override these defaults when needed:
+
+```bash
+python main.py preprocessing pipeline downloaded_ships \
+  --graph-workers 1 \
+  --graph-executor thread \
+  --canonicalize-workers 8
+```
+
 You can also run the stages individually:
 
 ```bash
@@ -89,6 +106,11 @@ python main.py preprocessing canonicalize --input-dir extracted_ship_data --outp
 python main.py preprocessing graphs --input-dir extracted_ship_data_canonical --output-dir generated_ship_graphs_canonical
 python main.py preprocessing door-rules --input-dir extracted_ship_data_canonical
 ```
+
+Each individual preprocessing stage also accepts:
+
+- `--workers <n>`
+- `--executor {auto,thread,process}`
 
 ### 3. Train a model
 

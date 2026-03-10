@@ -8,6 +8,7 @@ import tempfile
 from typing import Sequence
 
 from .canonicalize import run_canonicalize
+from .concurrency import add_concurrency_arguments
 from .extract import run_extract
 from .graphs import generate_all
 
@@ -62,6 +63,24 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable verbose logging during extraction",
     )
+    add_concurrency_arguments(
+        parser,
+        worker_flag="--extract-workers",
+        executor_flag="--extract-executor",
+        help_prefix="pipeline extraction",
+    )
+    add_concurrency_arguments(
+        parser,
+        worker_flag="--canonicalize-workers",
+        executor_flag="--canonicalize-executor",
+        help_prefix="pipeline canonicalization",
+    )
+    add_concurrency_arguments(
+        parser,
+        worker_flag="--graph-workers",
+        executor_flag="--graph-executor",
+        help_prefix="pipeline graph generation",
+    )
     return parser
 
 
@@ -74,6 +93,12 @@ def run_pipeline(
     report_md: str | Path = "SHIP_CANONICALIZATION_REPORT.md",
     limit: int | None = None,
     verbose: bool = False,
+    extract_workers: int | None = None,
+    extract_executor: str = "auto",
+    canonicalize_workers: int | None = None,
+    canonicalize_executor: str = "auto",
+    graph_workers: int | None = None,
+    graph_executor: str = "auto",
 ) -> dict:
     """Run the local ship preprocessing pipeline.
 
@@ -86,6 +111,12 @@ def run_pipeline(
         report_md: Canonicalization markdown report path when persisting outputs
         limit: Optional limit for the graph-generation stage
         verbose: When True, enable verbose extraction logging
+        extract_workers: Optional extraction worker-count override
+        extract_executor: Extraction executor mode override
+        canonicalize_workers: Optional canonicalization worker-count override
+        canonicalize_executor: Canonicalization executor mode override
+        graph_workers: Optional graph-generation worker-count override
+        graph_executor: Graph-generation executor mode override
 
     Returns:
         Summary payload describing the produced artifacts
@@ -110,6 +141,8 @@ def run_pipeline(
             input_paths=input_paths,
             output_dir=extracted_dir,
             verbose=verbose,
+            workers=extract_workers,
+            executor=extract_executor,
         )
         if extract_exit_code not in (0, 2):
             raise RuntimeError(f"Extraction failed with exit code {extract_exit_code}")
@@ -121,8 +154,16 @@ def run_pipeline(
             output_dir=canonical_dir,
             report_json=report_json_path,
             report_md=report_md_path,
+            workers=canonicalize_workers,
+            executor=canonicalize_executor,
         )
-        graph_manifest = generate_all(canonical_dir, final_graph_output_dir, limit=limit)
+        graph_manifest = generate_all(
+            canonical_dir,
+            final_graph_output_dir,
+            limit=limit,
+            workers=graph_workers,
+            executor=graph_executor,
+        )
 
         return {
             "inputs": [str(Path(input_path)) for input_path in input_paths],
@@ -151,6 +192,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         report_md=args.report_md,
         limit=args.limit,
         verbose=args.verbose,
+        extract_workers=args.extract_workers,
+        extract_executor=args.extract_executor,
+        canonicalize_workers=args.canonicalize_workers,
+        canonicalize_executor=args.canonicalize_executor,
+        graph_workers=args.graph_workers,
+        graph_executor=args.graph_executor,
     )
     print(payload["graphs"]["ships_processed"])
     return 0

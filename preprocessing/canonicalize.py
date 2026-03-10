@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 from collections import Counter, defaultdict
@@ -12,6 +13,7 @@ import re
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 from common.files import iter_json_files
+from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
 
 MSG_SUFFIX_RE = re.compile(r"__msg\d+(?=(\.ship)?\.json$)")
 
@@ -57,6 +59,71 @@ def strip_msg_suffix(name: str) -> Tuple[str, bool]:
 
     stripped = MSG_SUFFIX_RE.sub("", name)
     return stripped, stripped != name
+
+
+def _scan_single_json(source_json_path: str, input_dir: str) -> Tuple[SourceFile | None, dict | None]:
+    """Read, normalize, and hash one input JSON file.
+
+    Args:
+        source_json_path: Absolute or relative path to the source JSON file
+        input_dir: Root directory used to compute deterministic relative paths
+
+    Returns:
+        A tuple containing either source metadata or a parse-failure payload
+    """
+
+    source_path = Path(source_json_path)
+    input_path = Path(input_dir)
+    relpath = str(source_path.relative_to(input_path))
+
+    try:
+        text = source_path.read_text(encoding="utf-8")
+        _, content_hash = canonicalize_json_text(text)
+    except Exception as exc:  # pragma: no cover
+        return None, {"file": relpath, "error": repr(exc)}
+
+    stripped_name, had_msg_suffix = strip_msg_suffix(source_path.name)
+    return (
+        SourceFile(
+            path=source_path,
+            relpath=relpath,
+            content_hash=content_hash,
+            stripped_name=stripped_name,
+            had_msg_suffix=had_msg_suffix,
+        ),
+        None,
+    )
+
+
+def _write_canonical_output(
+    output_json_path: str,
+    representative_json_path: str,
+    expected_content_hash: str,
+) -> str:
+    """Write one canonical JSON output file.
+
+    Args:
+        output_json_path: Destination path for the canonical JSON file
+        representative_json_path: Source file to canonicalize and emit
+        expected_content_hash: Content hash that should match the normalized bytes
+
+    Returns:
+        The written output path as a string for progress reporting
+    """
+
+    output_path = Path(output_json_path)
+    representative_path = Path(representative_json_path)
+    normalized_text, recomputed_hash = canonicalize_json_text(
+        representative_path.read_text(encoding="utf-8")
+    )
+    if recomputed_hash != expected_content_hash:
+        raise RuntimeError(
+            "Representative file hash mismatch for "
+            f"{representative_path}: expected {expected_content_hash}, got {recomputed_hash}"
+        )
+
+    output_path.write_text(normalized_text + "\n", encoding="utf-8")
+    return str(output_path)
 
 
 def choose_preferred_member(members: List[SourceFile]) -> Tuple[SourceFile, str]:
@@ -172,6 +239,8 @@ def run_canonicalize(
     output_dir: str | Path = "extracted_ship_data_canonical",
     report_json: str | Path = "out/ship_canonicalization_report.json",
     report_md: str | Path = "SHIP_CANONICALIZATION_REPORT.md",
+    workers: int | None = None,
+    executor: str = "auto",
 ) -> dict:
     """Canonicalize and deduplicate extracted JSON files.
 
@@ -180,6 +249,8 @@ def run_canonicalize(
         output_dir: Directory where canonical JSON outputs will be written
         report_json: Machine-readable report destination
         report_md: Human-readable report destination
+        workers: Optional worker-count override for parallel scan and write tasks
+        executor: Executor mode override for the scan phase: `auto`, `thread`, or `process`
 
     Returns:
         The machine-readable manifest payload
@@ -193,29 +264,48 @@ def run_canonicalize(
     files = list(iter_json_files(input_path))
     sources: List[SourceFile] = []
     parse_failures: List[dict] = []
+    scan_worker_count = resolve_worker_count(
+        task_count=len(files),
+        stage_name="canonicalize",
+        requested_workers=workers,
+        requested_mode=executor,
+    )
 
-    for index, path in enumerate(files, start=1):
-        relpath = str(path.relative_to(input_path))
-        try:
-            text = path.read_text(encoding="utf-8")
-            _, content_hash = canonicalize_json_text(text)
-        except Exception as exc:  # pragma: no cover
-            parse_failures.append({"file": relpath, "error": repr(exc)})
-            continue
+    if files:
+        def submit_scan_work(executor_factory: type) -> List[Tuple[SourceFile | None, dict | None]]:
+            """Submit canonicalization scan work with one executor implementation."""
 
-        stripped_name, had_msg_suffix = strip_msg_suffix(path.name)
-        sources.append(
-            SourceFile(
-                path=path,
-                relpath=relpath,
-                content_hash=content_hash,
-                stripped_name=stripped_name,
-                had_msg_suffix=had_msg_suffix,
-            )
+            results: List[Tuple[SourceFile | None, dict | None]] = []
+            with executor_factory(max_workers=scan_worker_count) as scan_executor:
+                future_to_path = {
+                    scan_executor.submit(_scan_single_json, str(path), str(input_path)): path
+                    for path in files
+                }
+                for index, future in enumerate(as_completed(future_to_path), start=1):
+                    results.append(future.result())
+                    if index % 1000 == 0:
+                        print(
+                            f"Scanned {index}/{len(files)} files with {scan_worker_count} worker(s)...",
+                            flush=True,
+                        )
+            return results
+
+        scan_results, _ = run_auto_parallel_work(
+            stage_name="canonicalize",
+            requested_mode=executor,
+            worker_count=scan_worker_count,
+            submit_work=submit_scan_work,
         )
+        for scanned_source, parse_failure in scan_results:
+            if scanned_source is not None:
+                sources.append(scanned_source)
+            if parse_failure is not None:
+                parse_failures.append(parse_failure)
 
-        if index % 1000 == 0:
-            print(f"Scanned {index}/{len(files)} files...", flush=True)
+    # Re-sort the parallel scan output before any grouping so dedupe, collision
+    # resolution, and manifest generation stay stable across worker schedules.
+    sources.sort(key=lambda source: source.relpath)
+    parse_failures.sort(key=lambda failure: failure["file"])
 
     grouped_sources: Dict[str, List[SourceFile]] = defaultdict(list)
     for source in sources:
@@ -250,18 +340,16 @@ def run_canonicalize(
         ),
     }
 
-    for index, group in enumerate(resolved_groups, start=1):
-        normalized_text, recomputed_hash = canonicalize_json_text(
-            group.representative_path.read_text(encoding="utf-8")
-        )
-        if recomputed_hash != group.content_hash:
-            raise RuntimeError(
-                "Representative file hash mismatch for "
-                f"{group.representative_path}: expected {group.content_hash}, got {recomputed_hash}"
-            )
-
+    write_jobs: List[Tuple[str, str, str]] = []
+    for group in resolved_groups:
         output_file_path = output_path / group.canonical_name
-        output_file_path.write_text(normalized_text + "\n", encoding="utf-8")
+        write_jobs.append(
+            (
+                str(output_file_path),
+                str(group.representative_path),
+                group.content_hash,
+            )
+        )
         manifest["canonical_files"].append(
             {
                 "canonical_name": group.canonical_name,
@@ -275,8 +363,32 @@ def run_canonicalize(
             }
         )
 
-        if index % 1000 == 0:
-            print(f"Wrote {index}/{len(resolved_groups)} canonical files...", flush=True)
+    # File writes are I/O-bound; always use a thread pool regardless of the
+    # user's --executor selection to avoid process-pool spawn overhead.
+    write_worker_count = resolve_worker_count(
+        task_count=len(write_jobs),
+        stage_name="canonicalize_write",
+        requested_workers=workers,
+        requested_mode="auto",
+    )
+    if write_jobs:
+        with ThreadPoolExecutor(max_workers=write_worker_count) as write_executor:
+            future_to_output = {
+                write_executor.submit(
+                    _write_canonical_output,
+                    output_json_path,
+                    representative_json_path,
+                    expected_content_hash,
+                ): output_json_path
+                for output_json_path, representative_json_path, expected_content_hash in write_jobs
+            }
+            for index, future in enumerate(as_completed(future_to_output), start=1):
+                future.result()
+                if index % 1000 == 0:
+                    print(
+                        f"Wrote {index}/{len(write_jobs)} canonical files with {write_worker_count} worker(s)...",
+                        flush=True,
+                    )
 
     report_json_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
@@ -366,6 +478,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="extracted_ship_data_canonical")
     parser.add_argument("--report-json", default="out/ship_canonicalization_report.json")
     parser.add_argument("--report-md", default="SHIP_CANONICALIZATION_REPORT.md")
+    add_concurrency_arguments(
+        parser,
+        help_prefix="ship canonicalization",
+    )
     return parser
 
 
@@ -379,6 +495,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir=args.output_dir,
         report_json=args.report_json,
         report_md=args.report_md,
+        workers=args.workers,
+        executor=args.executor,
     )
     summary = {
         key: manifest[key]

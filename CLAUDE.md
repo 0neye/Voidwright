@@ -28,6 +28,13 @@ python -m preprocessing.cli pipeline downloaded_ships \
   --verbose
 ```
 
+Pipeline concurrency defaults are hardware-agnostic. Stage-specific overrides are available with:
+
+- `--extract-workers` / `--extract-executor`
+- `--canonicalize-workers` / `--canonicalize-executor`
+- `--graph-workers` / `--graph-executor`
+- `auto` falls back to threads when process pools are unavailable in the current runner
+
 **Preprocessing stages individually:**
 ```bash
 python -m preprocessing.cli extract downloaded_ships --output-dir extracted_ship_data
@@ -35,6 +42,11 @@ python -m preprocessing.cli canonicalize --input-dir extracted_ship_data --outpu
 python -m preprocessing.cli graphs --input-dir extracted_ship_data_canonical --output-dir generated_ship_graphs_canonical
 python -m preprocessing.cli door-rules --input-dir extracted_ship_data_canonical
 ```
+
+The `extract`, `canonicalize`, and `graphs` stages also accept:
+
+- `--workers <n>`
+- `--executor {auto,thread,process}`
 
 **Train a Markov model** (preferred — from graph corpus):
 ```bash
@@ -90,6 +102,8 @@ Register it in `training/router.py` and `generator/router.py` alongside the Mark
 - **Model artifacts** live under `models/markov/`. Preferred artifact: `markov-model.v2.json` (built from graph corpus). Legacy `v1` artifacts used the raw canonical corpus.
 - **Graph training is preferred** over the legacy `--input-dir` raw-corpus path. Use `--graph-input-dir` when building models.
 - **Canonicalization is content-based.** Files may get `__dedup-<12 hex>` suffixes — this is normal, not a failure.
+- **Preprocessing concurrency is deterministic.** Parallel scan and graph workers are allowed, but manifests and output naming are reduced in sorted order so results stay stable across runs. Bad files during parallel graph generation are skipped with a warning rather than aborting the batch.
+- **Adding a preprocessing stage** requires registering it in `_AUTO_STAGE_EXECUTORS` in `preprocessing/concurrency.py`; omitting it raises a `ValueError` when the stage runs with `executor=auto`.
 - **The Markov generator does not synthesize doors.** Door-rule logic in `preprocessing/door_rules.py` and `preprocessing/door_rules_engine.py` is for analysis and future passes only.
 - **Mirror symmetry axis** is at `x = -0.5`. Left half: all footprint cells `x <= -1`; right half: `x >= 0`. Parts straddling the axis are rejected.
 - **Token format:** `(part_id, rotation, anchor_part_id, anchor_rotation, dx, dy)`. Root tokens use `anchor_part_id = "__ROOT__"`. END token is `"__END__"`.
