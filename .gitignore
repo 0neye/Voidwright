@@ -26,11 +26,6 @@ out/
 # Derived rules / model data / exported ship files
 for-0neye/*.ship.png
 generators/markov/data/door-placement-rules*.json
-DOOR_RULE_INFERENCE_REPORT.md
-EXTRACTION_RUN_REPORT.md
-SHIP_CANONICALIZATION_REPORT.md
-SHIP_GRAPH_CANONICAL_REPORT.md
-SHIP_GRAPH_REPORT.md
 
 # Keep the vanilla game-data JSON used for validation/export.
 !generators/markov/data/

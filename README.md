@@ -1,136 +1,94 @@
 # ship-generator
 
-Utilities for:
-- downloading every accessible Discord `.ship.png` attachment from a target guild,
-- extracting ship JSON data from downloaded files,
-- canonicalizing the extracted corpus,
-- inferring reusable door-placement rules from the canonical deduped corpus, and
-- building a first-pass vanilla-only relative-placement Markov ship generator.
+This repository builds a Cosmoteer ship corpus and a first-pass vanilla-only ship generator.
 
-## Files
+It includes tooling for:
 
-- `main.py`: top-level pipeline runner that can execute download then extract.
-- `scripts/download_ship_images.py`: connects to Discord and downloads matching files.
-- `scripts/extract_ship_data.py`: parses downloaded `.ship.png` files into JSON.
-- `ship_parser/cosmoteer_ship_parser.py`: vendored/adapted minimal PNG payload parser (with attribution).
+- downloading visible Discord `.ship.png` attachments
+- extracting embedded ship JSON payloads from those PNGs
+- canonicalizing and deduplicating the extracted corpus
+- generating structural and cell-graph analysis artifacts
+- inferring reusable vanilla-first door-placement rules
+- building, validating, sampling, and exporting a relative-placement Markov generator
 
-## Setup
+## Documentation
 
-1. Create and activate a Python virtual environment.
-2. Install dependencies:
+Start with the curated docs in `docs/`:
+
+- `docs/pipeline-and-artifacts.md`
+- `docs/ship-graphs.md`
+- `docs/markov-generator.md`
+- `docs/generation-modes.md`
+- `docs/door-rules.md`
+
+Generator-specific details and CLI examples also live in `generators/markov/README.md`.
+
+## Quick start
+
+1. Create and activate a Python virtual environment
+2. Install dependencies
+3. Add your Discord bot token to `.env` if you plan to use the download step
 
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Ensure `.env` contains:
-
 ```env
 DISCORD_BOT_TOKEN=your_bot_token_here
 ```
 
-## Pipeline runner
+## Main workflow
 
-Run the full pipeline (download first, then extract):
+### Download and extract
+
+Run the top-level pipeline:
 
 ```bash
 python main.py --download-output-dir downloaded_ships --extract-output-dir extracted_ship_data --verbose
 ```
 
-Available flags:
-- `--download-output-dir` (default: `downloaded_ships`)
-- `--extract-output-dir` (default: `extracted_ship_data`)
+Useful flags:
+
+- `--download-output-dir`
+- `--extract-output-dir`
 - `--skip-download`
 - `--skip-extract`
 - `--verbose`
 
 Notes:
-- Extraction input is the download output directory.
-- `.env` token loading is only used by the download step.
 
-## Script 1: Download `.ship.png` images from Discord
+- `main.py` runs download first and then extraction
+- the download token is only needed for the Discord step
+- extraction reads from the download output directory
 
-This script targets guild ID `546229904488923141` and scans only configured channel IDs. By default, it uses this built-in allowlist:
-
-- `546229904488923145`
-- `546947839008440330`
-- `546907635149045775`
-- `1297445027835936779`
-- `1101149194498089051`
-- `546329445032787987`
-- `546327169014431746`
-- `546327605738209291`
-- `546333653605679104`
-- `546333675906662400`
-- `1318750623302418452`
-- `561981489357651980`
-- `1240185912525324300`
-- `546555689464627212`
+### Canonicalize the extracted corpus
 
 ```bash
-python scripts/download_ship_images.py --output-dir downloaded_ships --verbose
+python scripts/canonicalize_ship_json_corpus.py \
+  --input-dir extracted_ship_data \
+  --output-dir extracted_ship_data_canonical \
+  --report-json out/ship_canonicalization_report.json
 ```
 
-Optional channel flags:
+### Generate ship graphs
 
 ```bash
-# Repeat --channel-id as needed
-python scripts/download_ship_images.py --channel-id 546229904488923145 --channel-id 546947839008440330
-
-# Or load IDs from file (one ID per line; blank lines and # comments allowed)
-python scripts/download_ship_images.py --channels-file channel_ids.txt
-
-# Combine both
-python scripts/download_ship_images.py --channel-id 546229904488923145 --channels-file channel_ids.txt
+python scripts/generate_ship_graphs.py \
+  --input-dir extracted_ship_data_canonical \
+  --output-dir generated_ship_graphs_canonical
 ```
 
-Behavior:
-- Resolves each configured ID in the guild and handles:
-  - `TextChannel`: scans the channel itself plus active + archived threads.
-  - `ForumChannel`: scans active + archived forum threads.
-  - `Thread`: scans the thread directly.
-  - Missing/inaccessible IDs are logged as warnings and skipped.
-- Walks history with `history(limit=None, oldest_first=True, after=...)` to support resume.
-- Downloads only attachments ending in `.ship.png`.
-- Preserves original filenames; if a filename already exists locally, appends `__msg<message_id>`.
-- Persists resume state to `downloaded_ships/state.json` (or `<output-dir>/state.json`) with per-target `last_message_id` checkpoints and tracked downloaded filenames/attachment IDs.
-- Saves state frequently during scanning and after downloads, so restart/resume continues near the last processed message.
-- Retries transient network/history/download failures with exponential backoff (e.g. DNS/socket/aiohttp/discord HTTP errors).
-- Logs periodic progress.
-
-Permissions/intents notes:
-- Keep `Server Members Intent` disabled; this script only requires `Guilds` and `Messages` intents.
-- The bot needs `View Channel` and `Read Message History` in each text/forum context to scan messages.
-- For private threads, the bot can only scan archived threads it has joined.
-
-## Script 2: Extract JSON ship data from downloaded images
-
-```bash
-python scripts/extract_ship_data.py --input-dir downloaded_ships --output-dir extracted_ship_data --verbose
-```
-
-Behavior:
-- Recursively finds both `*.ship.png` and `*.ship__msg<digits>.png` in the input directory.
-- Parses embedded ship payload from PNG text chunks.
-- Writes one JSON file per input by preserving the full PNG basename and swapping only the final `.png` for `.json`:
-  - `foo.ship.png` -> `foo.ship.json`
-  - `foo.ship__msg123.png` -> `foo.ship__msg123.json`
-
-## Door rule inference
-
-Infer reusable door-placement rules from the canonical corpus only:
+### Infer door rules
 
 ```bash
 python scripts/infer_door_rules.py \
   --input-dir extracted_ship_data_canonical \
-  --output generators/markov/data/door-placement-rules.v1.json
+  --output generators/markov/data/door-placement-rules.v2.json
 ```
 
-This step streams one canonical ship JSON at a time, derives observed door placements relative to neighboring part footprints/rotations, saves a machine-readable rules file for later runtime filtering, and validates the inferred rules back against the same canonical corpus.
+### Build and sample the Markov generator
 
-## First-pass vanilla-only Markov generator
-
-Build the relative-placement Markov artifact from the canonical corpus only:
+Build:
 
 ```bash
 python scripts/build_markov_generator.py build \
@@ -139,24 +97,43 @@ python scripts/build_markov_generator.py build \
   --validation-output out/markov/coordinate-validation.v2.json
 ```
 
-Generate sample layouts from a built artifact:
+Generate:
 
 ```bash
 python scripts/build_markov_generator.py generate \
   --model out/markov/markov-model.v2.json \
   --output out/markov/samples-v2 \
-  --count 5
+  --count 5 \
+  --seed 1337
 ```
 
-Validate the relative-coordinate assumption against the real canonical corpus:
+Export existing generated samples:
 
 ```bash
-python scripts/build_markov_generator.py validate \
-  --input-dir extracted_ship_data_canonical \
-  --output out/markov/coordinate-validation.v2.json
+python scripts/build_markov_generator.py export \
+  --input-dir out/markov/samples-v2 \
+  --output-dir out/markov/exported-ships \
+  --report out/markov/export-report.json
 ```
 
-See `generators/markov/README.md` for model details, limitations, and artifact conventions.
+## Key entrypoints
+
+- `main.py` - top-level download and extract runner
+- `scripts/download_ship_images.py` - Discord ship downloader with resume support
+- `scripts/extract_ship_data.py` - `.ship.png` to `.json` extractor
+- `scripts/canonicalize_ship_json_corpus.py` - content-hash dedupe and canonical naming
+- `scripts/generate_ship_graphs.py` - graph artifact generator
+- `scripts/infer_door_rules.py` - canonical-corpus door-rule inference
+- `scripts/build_markov_generator.py` - thin wrapper around the Markov CLI
+- `ship_parser/cosmoteer_ship_parser.py` - adapted embedded-payload ship parser
+- `ship_parser/cosmoteer_ship_encoder.py` - encoder used by export tooling
+
+## Notes
+
+- The extractor supports both `*.ship.png` and `*.ship__msg<digits>.png`
+- Canonicalization is content-based and may produce `__dedup-<12 hex>` filenames when different ships want the same canonical name
+- The current generator is intentionally conservative and does not yet synthesize doors during generation
+- Door validation is vanilla-first and treats many non-vanilla situations as intentionally unresolved
 
 ## Attribution
 
