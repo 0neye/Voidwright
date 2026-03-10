@@ -19,6 +19,9 @@ Coord = Tuple[int, int]
 DATA_DIR = Path(__file__).resolve().parent / "data"
 VANILLA_PARTS_PATH = DATA_DIR / "vanilla-parts-from-game-files.json"
 VANILLA_NAMESPACE = "cosmoteer."
+PART_ID_ALIASES = {
+    "cosmoteer.electro_bolter": "cosmoteer.disruptor",
+}
 
 TRAVERSABLE_HINTS = (
     "corridor",
@@ -163,9 +166,19 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
 
 
 def normalize_part_id(part: dict) -> Optional[str]:
-    """Return the normalized part ID used by extracted ship JSON."""
+    """Return the canonical part ID used by extracted ship JSON.
 
-    return part.get("ID") or part.get("IDString")
+    This function also applies preprocessing aliases so equivalent parts can be
+    treated as one canonical vanilla part throughout the pipeline.
+    """
+
+    # Prefer explicit ID first, then fallback to legacy IDString field
+    part_id = part.get("ID") or part.get("IDString")
+    if not part_id:
+        return None
+
+    # Canonicalize equivalent parts to one ID for downstream preprocessing
+    return PART_ID_ALIASES.get(part_id, part_id)
 
 
 def infer_meta(part_id: str, rotation: int) -> Tuple[PartMeta, bool]:
@@ -239,6 +252,7 @@ __all__ = [
     "Coord",
     "DATA_DIR",
     "NON_TRAVERSABLE_HINTS",
+    "PART_ID_ALIASES",
     "PartMeta",
     "RotationGeometry",
     "TRAVERSABLE_HINTS",
