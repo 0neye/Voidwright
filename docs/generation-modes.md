@@ -37,7 +37,10 @@ Mirror transform:
 
 - `mirror_x = -origin_x - width`
 - `mirror_y = origin_y`
-- `mirror_rotation = (4 - rotation) % 4`
+- Rotation usually mirrors as `mirror_rotation = (4 - rotation) % 4`
+- Wedges (`armor_wedge`, `structure_wedge`, `armor_structure_hybrid_1x1`) use a handedness swap mapping `{0:1, 1:0, 2:3, 3:2}`
+- Triangle half-cells (`armor_tri`, `structure_tri`, `armor_structure_hybrid_tri`) keep the same rotation and mirror through `FlipX`
+- Mirroring toggles `FlipX` and preserves `FlipY`
 
 Generation rules:
 

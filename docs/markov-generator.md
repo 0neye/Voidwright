@@ -144,6 +144,7 @@ python -m generator.cli generate markov \
 Useful visualization-specific flags:
 
 - `--visualize` enables MP4 rendering for each generated sample
+- `--visualization-fps` sets MP4 frame rate (default `24`)
 - `--icons-root` points directly at a Terran icon directory like `Data/ships/terran`
 - `--game-root` points at a local Cosmoteer install root and resolves `Data/ships/terran` automatically
 
@@ -160,7 +161,7 @@ Resolution order:
 
 1. `--icons-root`
 2. `--game-root`
-3. Windows Steam auto-discovery using the Steam registry plus `libraryfolders.vdf`
+3. Windows Steam auto-discovery using the Steam registry plus `steamapps/libraryfolders.vdf` or `config/libraryfolders.vdf`
 4. Repo-local fallback cache under `assets/local/cosmoteer-icons/terran/`
 
 The fallback cache is intended for local manual copies of the game assets and is
@@ -186,6 +187,7 @@ The visualizer is event-log-first rather than live-streamed to the screen.
 - Accepted placements are shown in sequence as the ship grows
 - Rejected attempts are included when they have a concrete candidate world placement
 - Rejections without a drawable placement, such as missing-anchor cases, are still counted in the summary/header text
+- Icon transforms respect saved `FlipX`/`FlipY` metadata, including wedge/triangle handedness edge cases
 
 This keeps the visualization backend-agnostic while still allowing Markov to
 show meaningful rejection states.

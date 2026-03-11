@@ -153,6 +153,7 @@ Optional diagnostics:
 - `--json-output-dir` writes the generated JSON payloads alongside the exported ships
 - `--seed-json` or `--seed-png` seeds generation from an existing layout
 - `--mirror-symmetry`, `--allowlist`, and `--requirements-file` preserve the existing Markov runtime options
+- `--visualization-fps` controls MP4 playback speed when `--visualize` is enabled
 
 ### 5. Visualize generation as MP4
 
@@ -166,7 +167,8 @@ python main.py generator generate markov \
   --output-dir out/generated-ships \
   --count 3 \
   --seed 1337 \
-  --visualize
+  --visualize \
+  --visualization-fps 30
 ```
 
 Visualization outputs are written here:
@@ -178,7 +180,7 @@ Icon discovery order:
 
 1. `--icons-root` if you want to point directly at a Terran icon directory such as `Data/ships/terran`
 2. `--game-root` if you want to point at a local Cosmoteer install root
-3. Windows Steam auto-discovery via the Steam registry and `libraryfolders.vdf`
+3. Windows Steam auto-discovery via the Steam registry plus `steamapps/libraryfolders.vdf` or `config/libraryfolders.vdf`
 4. Repo-local fallback cache under `assets/local/cosmoteer-icons/terran/`
 
 Example with a manual override:
@@ -212,6 +214,7 @@ purpose, so it can be used as a local cache without polluting the repo.
 - The extractor supports both `*.ship.png` and `*.ship__msg<digits>.png`
 - Canonicalization is content-based and may produce `__dedup-<12 hex>` filenames when different ships want the same canonical name
 - Export and parse paths preserve stored part `Location` values, including `FlipX` and `FlipY` metadata when present
+- Mirror mode and visualization both apply part-specific wedge/triangle handedness rules to keep mirrored output aligned with in-game orientation
 - The current Markov backend is intentionally conservative and does not synthesize doors during generation
 - Door validation is vanilla-first and treats many non-vanilla situations as intentionally unresolved
 
