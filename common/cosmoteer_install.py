@@ -28,6 +28,11 @@ _STEAM_LIBRARYFOLDERS_RELATIVE_PATHS = (
     Path("steamapps") / "libraryfolders.vdf",
     Path("config") / "libraryfolders.vdf",
 )
+_LINUX_STEAM_RELATIVE_INSTALL_PATHS = (
+    Path(".steam") / "steam",
+    Path(".local") / "share" / "Steam",
+    Path(".var") / "app" / "com.valvesoftware.Steam" / ".local" / "share" / "Steam",
+)
 
 
 def _dedupe_paths(paths: Iterable[Path]) -> tuple[Path, ...]:
@@ -63,10 +68,19 @@ def _iter_libraryfolders_vdf_paths(steam_install_path: Path) -> tuple[Path, ...]
 
 
 def iter_steam_install_paths() -> tuple[Path, ...]:
-    """Return Steam install paths discovered from the local Windows registry."""
+    """Return Steam install paths discovered from local platform conventions."""
 
-    if os.name != "nt":
-        return ()
+    if os.name == "nt":
+        return _iter_windows_steam_install_paths()
+
+    if os.name == "posix":
+        return _iter_linux_steam_install_paths()
+
+    return ()
+
+
+def _iter_windows_steam_install_paths() -> tuple[Path, ...]:
+    """Return Steam install paths discovered from the local Windows registry."""
 
     try:
         import winreg
@@ -85,6 +99,20 @@ def iter_steam_install_paths() -> tuple[Path, ...]:
             if install_path:
                 install_paths.append(Path(install_path))
     return _dedupe_paths(install_paths)
+
+
+def _iter_linux_steam_install_paths() -> tuple[Path, ...]:
+    """Return Linux Steam install paths used by native and compatibility setups."""
+
+    home_path = Path.home()
+
+    # Include common Steam roots for native installs and Flatpak deployments
+    # These roots can still host Windows games through Proton compatibility tools
+    candidate_paths = [
+        home_path / relative_path
+        for relative_path in _LINUX_STEAM_RELATIVE_INSTALL_PATHS
+    ]
+    return _dedupe_paths(candidate_paths)
 
 
 def iter_steam_library_paths(

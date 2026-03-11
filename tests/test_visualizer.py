@@ -158,6 +158,28 @@ def test_iter_steam_library_paths_reads_libraryfolders_file(tmp_path: Path) -> N
     assert Path(r"D:\SteamLibrary") in libraries
 
 
+def test_iter_steam_install_paths_discovers_linux_steam_roots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Linux discovery should include native and Flatpak Steam root paths."""
+
+    linux_home = tmp_path / "linux-home"
+    linux_home.mkdir(parents=True)
+
+    # Force the platform and HOME lookup so the test remains deterministic on Windows CI
+    monkeypatch.setattr("common.cosmoteer_install.os.name", "posix")
+    monkeypatch.setattr("common.cosmoteer_install.Path.home", lambda: linux_home)
+
+    discovered_install_paths = iter_steam_install_paths()
+
+    assert discovered_install_paths == (
+        linux_home / ".steam" / "steam",
+        linux_home / ".local" / "share" / "Steam",
+        linux_home / ".var" / "app" / "com.valvesoftware.Steam" / ".local" / "share" / "Steam",
+    )
+
+
 def test_find_cosmoteer_install_root_uses_secondary_steam_library_drive(tmp_path: Path) -> None:
     """Install discovery should find Cosmoteer in a non-default Steam library."""
 
