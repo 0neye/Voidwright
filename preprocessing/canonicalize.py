@@ -14,6 +14,7 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 
 from common.files import iter_json_files
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
+from .relative_coords import canonicalize_for_translation_invariant_hash
 
 __all__ = [
     "SourceFile",
@@ -52,10 +53,22 @@ class CanonicalGroup:
     representative_path: Path
 
 
-def canonicalize_json_text(text: str) -> Tuple[str, str]:
-    """Normalize JSON text and return `(normalized_text, sha256_hash)`."""
+def canonicalize_json_text(
+    text: str,
+    *,
+    translation_invariant: bool = False,
+) -> Tuple[str, str]:
+    """Normalize JSON text and return `(normalized_text, sha256_hash)`.
+
+    Args:
+        text: Raw JSON document text
+        translation_invariant: When True, hash normalization drops legacy global
+            placement fields in favor of centered local `2x` coordinates
+    """
 
     data = json.loads(text)
+    if translation_invariant:
+        data = canonicalize_for_translation_invariant_hash(data)
     normalized_text = json.dumps(
         data,
         ensure_ascii=False,
@@ -90,7 +103,7 @@ def _scan_single_json(source_json_path: str, input_dir: str) -> Tuple[SourceFile
 
     try:
         text = source_path.read_text(encoding="utf-8")
-        _, content_hash = canonicalize_json_text(text)
+        _, content_hash = canonicalize_json_text(text, translation_invariant=True)
     except Exception as exc:  # pragma: no cover
         return None, {"file": relpath, "error": repr(exc)}
 
@@ -125,8 +138,14 @@ def _write_canonical_output(
 
     output_path = Path(output_json_path)
     representative_path = Path(representative_json_path)
-    normalized_text, recomputed_hash = canonicalize_json_text(
-        representative_path.read_text(encoding="utf-8")
+    representative_text = representative_path.read_text(encoding="utf-8")
+    normalized_text, _normalized_hash = canonicalize_json_text(
+        representative_text,
+        translation_invariant=False,
+    )
+    _, recomputed_hash = canonicalize_json_text(
+        representative_text,
+        translation_invariant=True,
     )
     if recomputed_hash != expected_content_hash:
         raise RuntimeError(

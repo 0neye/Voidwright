@@ -40,7 +40,8 @@ Stored at `graphs.A_structural_part_graph`.
 Nodes represent individual part instances and include:
 
 - normalized part ID
-- extracted location
+- extracted legacy location (`location`)
+- centered local 2x companion location (`location_2x`)
 - rotation
 - footprint dimensions and cell count
 - traversability flag
@@ -61,6 +62,7 @@ Nodes represent occupied cells and include:
 
 - `id = "x,y"`
 - coordinates
+- centered local 2x companion coordinate (`center_2x`)
 - `occupied = true`
 - traversability flag
 - owning part indices
@@ -76,8 +78,10 @@ The script does not invent free traversal between neighboring separate parts unl
 
 ### Location anchoring
 
-- `Location` is treated as the top-left anchor of the unrotated footprint
-- odd rotations swap width and height
+- Legacy `Location` remains the normalized part-origin grid coordinate used by geometry helpers
+- `Location2x` stores the same point in the ship-local centered 2x frame
+- Ship-level transform metadata lives at `coord_transform`
+- odd rotations still swap width and height for rectangular fallback footprints
 
 ### Door orientation mapping
 

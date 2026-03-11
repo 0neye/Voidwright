@@ -13,6 +13,7 @@ from common.files import iter_ship_png_files, output_name_for_ship_png
 from common.logging import configure_logging
 from common.cosmoteer import parse_ship_png
 from .concurrency import add_concurrency_arguments, create_executor_factory, resolve_executor_mode, resolve_worker_count
+from .relative_coords import apply_relative_coords_transform
 
 __all__ = ["build_parser", "run_extract", "main"]
 
@@ -53,6 +54,7 @@ def _extract_single(source_image_path: str, output_json_path: str) -> tuple[bool
 
     try:
         ship_data = parse_ship_png(source_path)
+        ship_data = apply_relative_coords_transform(ship_data)
         destination_path.write_text(
             json.dumps(ship_data, indent=2, sort_keys=True, ensure_ascii=True),
             encoding="utf-8",

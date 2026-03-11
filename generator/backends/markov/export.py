@@ -67,11 +67,34 @@ def generated_parts_to_cosmoteer_parts(parts: list[dict]) -> list[dict]:
     return result
 
 
-def generated_doors_to_cosmoteer_doors(doors: list[dict]) -> list[dict]:
+def _recover_legacy_coord_from_2x(local_2x: object, center_2x: object) -> list[int] | None:
+    """Recover one legacy grid coordinate pair from centered 2x coordinates."""
+
+    if not isinstance(local_2x, list) or len(local_2x) != 2:
+        return None
+    if not isinstance(center_2x, list) or len(center_2x) != 2:
+        return None
+
+    local_x = int(local_2x[0])
+    local_y = int(local_2x[1])
+    center_x = int(center_2x[0])
+    center_y = int(center_2x[1])
+    if (local_x + center_x) % 2 != 0 or (local_y + center_y) % 2 != 0:
+        return None
+    return [(local_x + center_x) // 2, (local_y + center_y) // 2]
+
+
+def generated_doors_to_cosmoteer_doors(
+    doors: list[dict],
+    *,
+    center_2x: list[int] | None = None,
+) -> list[dict]:
     """Convert generator door dicts to Cosmoteer ``Doors`` format.
 
     The generator currently uses the same field names as the Cosmoteer payload
-    so graph replay can preserve normalized door records losslessly.
+    so graph replay can preserve normalized door records losslessly. During the
+    relative-coordinates migration this also accepts `Cell2x` when `center_2x`
+    is available.
     """
 
     normalized_doors = []
@@ -80,6 +103,8 @@ def generated_doors_to_cosmoteer_doors(doors: list[dict]) -> list[dict]:
             continue
 
         cell = door.get("Cell")
+        if (not isinstance(cell, list) or len(cell) != 2) and center_2x is not None:
+            cell = _recover_legacy_coord_from_2x(door.get("Cell2x"), center_2x)
         if not isinstance(cell, list) or len(cell) != 2:
             continue
         if "Orientation" not in door:
@@ -136,15 +161,44 @@ def graph_to_generated_parts_payload(
 
     Returns:
         Generator-style JSON payload containing exact replayable part placements
+
+    Notes:
+        Graph nodes are expected to carry legacy normalized `location` fields.
+        During phased coord-transform migration this loader can also recover
+        legacy coordinates from `location_2x` plus `coord_transform.center_2x`.
     """
     nodes = graph_data.get("graphs", {}).get("A_structural_part_graph", {}).get("nodes", [])
-    graph_doors = generated_doors_to_cosmoteer_doors(graph_data.get("doors", []))
+    coord_transform = graph_data.get("coord_transform", {})
+    center_2x = (
+        coord_transform.get("center_2x")
+        if isinstance(coord_transform, dict) and isinstance(coord_transform.get("center_2x"), list)
+        else None
+    )
+    graph_doors = generated_doors_to_cosmoteer_doors(
+        graph_data.get("doors", []),
+        center_2x=center_2x if isinstance(center_2x, list) and len(center_2x) == 2 else None,
+    )
     generated_parts = []
     for node in nodes:
         if not isinstance(node, dict):
             continue
         part_id = node.get("part_id")
         location = node.get("location")
+        if (
+            (not isinstance(location, list) or len(location) != 2)
+            and isinstance(node.get("location_2x"), list)
+            and len(node.get("location_2x")) == 2
+            and isinstance(center_2x, list)
+            and len(center_2x) == 2
+        ):
+            # Allow phased graph payloads that only carry centered 2x node
+            # coordinates by reconstructing legacy normalized grid locations.
+            local_2x = [int(node["location_2x"][0]), int(node["location_2x"][1])]
+            cx = int(center_2x[0])
+            cy = int(center_2x[1])
+            if (local_2x[0] + cx) % 2 == 0 and (local_2x[1] + cy) % 2 == 0:
+                location = [(local_2x[0] + cx) // 2, (local_2x[1] + cy) // 2]
+
         if not part_id or not isinstance(location, list) or len(location) != 2:
             continue
 
