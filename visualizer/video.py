@@ -41,7 +41,7 @@ def render_events_to_mp4(
     if not rendered_frames:
         raise RuntimeError("No visualization frames were produced for the generated sample.")
 
-    with tempfile.TemporaryDirectory(prefix="ship-generator-visualizer-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="voidwright-visualizer-") as temp_dir:
         temp_dir_path = Path(temp_dir)
         for frame_index, frame in enumerate(rendered_frames):
             frame.save(temp_dir_path / f"frame-{frame_index:05d}.png", format="PNG")

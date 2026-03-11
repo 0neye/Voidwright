@@ -1,4 +1,4 @@
-# ship-generator
+# Voidwright
 
 This repository is organized around purpose-specific packages:
 

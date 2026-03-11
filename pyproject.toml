@@ -3,7 +3,7 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ship-generator"
+name = "voidwright"
 version = "0.1.0"
 description = "Generate Cosmoteer .ship.png files from preprocessing, training, and Markov-based generation pipelines"
 readme = "README.md"
@@ -27,10 +27,10 @@ scripts = [
 ]
 
 [project.scripts]
-ship-generator = "main:main"
-ship-generator-preprocessing = "preprocessing.cli:main"
-ship-generator-training = "training.cli:main"
-ship-generator-generate = "generator.cli:main"
+voidwright = "main:main"
+voidwright-preprocessing = "preprocessing.cli:main"
+voidwright-training = "training.cli:main"
+voidwright-generate = "generator.cli:main"
 
 [tool.pytest.ini_options]
 addopts = "--cov=common --cov=generator --cov=markov --cov=preprocessing --cov=training --cov=main --cov-report=term-missing"

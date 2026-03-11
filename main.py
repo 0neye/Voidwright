@@ -328,14 +328,14 @@ def run_repl(
     resolved_error_stream = error_stream or sys.stderr
 
     resolved_output_stream.write(
-        "Ship generator REPL\n"
+        "Voidwright REPL\n"
         "Type 'commands' to list commands, 'help <command>' for help, and 'exit' to quit.\n"
     )
 
     while True:
         try:
             raw_command_line = read_repl_line(
-                "ship-generator> ",
+                "voidwright> ",
                 input_stream=input_stream,
                 output_stream=resolved_output_stream,
             )
