@@ -85,6 +85,59 @@ def make_minimal_ship_dict(
     }
 
 
+def graph_to_generated_parts_payload(
+    graph_data: dict,
+    *,
+    name: str | None = None,
+) -> dict:
+    """Convert a structural graph payload into deterministic generator output.
+
+    Args:
+        graph_data: Graph JSON payload produced by preprocessing
+        name: Optional ship name override for the returned generator payload
+
+    Returns:
+        Generator-style JSON payload containing exact replayable part placements
+    """
+    nodes = graph_data.get("graphs", {}).get("A_structural_part_graph", {}).get("nodes", [])
+    generated_parts = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        part_id = node.get("part_id")
+        location = node.get("location")
+        if not part_id or not isinstance(location, list) or len(location) != 2:
+            continue
+
+        generated_part = {
+            "part_id": str(part_id),
+            "rotation": int(node.get("rotation", 0)) % 4,
+            "x": int(location[0]),
+            "y": int(location[1]),
+        }
+        if "flip_x" in node or "FlipX" in node:
+            generated_part["flip_x"] = bool(node.get("flip_x", node.get("FlipX", False)))
+        if "flip_y" in node or "FlipY" in node:
+            generated_part["flip_y"] = bool(node.get("flip_y", node.get("FlipY", False)))
+        generated_parts.append(generated_part)
+
+    # Reuse the existing generator export schema so graph replay can flow through
+    # the same PNG export and validation path as stochastic Markov samples
+    return {
+        "name": name or graph_data.get("ship", {}).get("name") or "graph-replay",
+        "generator": "graph_replay",
+        "stats": {
+            "parts_generated": len(generated_parts),
+            "stop_reason": "graph_replay",
+        },
+        "parts": generated_parts,
+        "notes": [
+            "Deterministic replay of normalized part placements from preprocessing graph JSON.",
+            "This payload intentionally bypasses stochastic Markov sampling.",
+        ],
+    }
+
+
 # ── roundtrip validation ──────────────────────────────────────────────────────
 
 
