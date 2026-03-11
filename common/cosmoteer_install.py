@@ -24,6 +24,10 @@ _STEAM_REGISTRY_KEYS = (
     r"SOFTWARE\Valve\Steam",
 )
 _STEAM_LIBRARY_PATH_RE = re.compile(r'"path"\s*"([^"]+)"')
+_STEAM_LIBRARYFOLDERS_RELATIVE_PATHS = (
+    Path("steamapps") / "libraryfolders.vdf",
+    Path("config") / "libraryfolders.vdf",
+)
 
 
 def _dedupe_paths(paths: Iterable[Path]) -> tuple[Path, ...]:
@@ -47,6 +51,15 @@ def parse_steam_libraryfolders_vdf(raw_text: str) -> tuple[Path, ...]:
     for matched_path in _STEAM_LIBRARY_PATH_RE.findall(raw_text):
         libraries.append(Path(matched_path.replace("\\\\", "\\")))
     return _dedupe_paths(libraries)
+
+
+def _iter_libraryfolders_vdf_paths(steam_install_path: Path) -> tuple[Path, ...]:
+    """Return likely ``libraryfolders.vdf`` locations for a Steam install."""
+
+    return tuple(
+        steam_install_path / relative_path
+        for relative_path in _STEAM_LIBRARYFOLDERS_RELATIVE_PATHS
+    )
 
 
 def iter_steam_install_paths() -> tuple[Path, ...]:
@@ -83,11 +96,11 @@ def iter_steam_library_paths(
     library_paths: list[Path] = []
     for install_path in resolved_install_paths:
         library_paths.append(install_path)
-        libraryfolders_path = install_path / "config" / "libraryfolders.vdf"
-        if not libraryfolders_path.exists():
-            continue
-        library_text = libraryfolders_path.read_text(encoding="utf-8")
-        library_paths.extend(parse_steam_libraryfolders_vdf(library_text))
+        for libraryfolders_path in _iter_libraryfolders_vdf_paths(install_path):
+            if not libraryfolders_path.exists():
+                continue
+            library_text = libraryfolders_path.read_text(encoding="utf-8")
+            library_paths.extend(parse_steam_libraryfolders_vdf(library_text))
     return _dedupe_paths(library_paths)
 
 

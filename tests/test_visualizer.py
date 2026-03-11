@@ -13,6 +13,7 @@ from PIL import Image
 import generator.cli
 import main
 from common.cosmoteer_install import (
+    find_cosmoteer_install_root,
     iter_steam_library_paths,
     parse_steam_libraryfolders_vdf,
     resolve_terran_part_icons_root,
@@ -137,9 +138,9 @@ def test_iter_steam_library_paths_reads_libraryfolders_file(tmp_path: Path) -> N
     """Library iteration should include the install path and additional Steam libraries."""
 
     steam_root = tmp_path / "Steam"
-    config_root = steam_root / "config"
-    config_root.mkdir(parents=True)
-    (config_root / "libraryfolders.vdf").write_text(
+    steamapps_root = steam_root / "steamapps"
+    steamapps_root.mkdir(parents=True)
+    (steamapps_root / "libraryfolders.vdf").write_text(
         """
 "libraryfolders"
 {
@@ -155,6 +156,31 @@ def test_iter_steam_library_paths_reads_libraryfolders_file(tmp_path: Path) -> N
     assert steam_root in libraries
     assert Path(r"C:\Steam") in libraries
     assert Path(r"D:\SteamLibrary") in libraries
+
+
+def test_find_cosmoteer_install_root_uses_secondary_steam_library_drive(tmp_path: Path) -> None:
+    """Install discovery should find Cosmoteer in a non-default Steam library."""
+
+    steam_root = tmp_path / "C-drive-Steam"
+    steamapps_root = steam_root / "steamapps"
+    steamapps_root.mkdir(parents=True)
+    remote_library = tmp_path / "F-drive-SteamLibrary"
+    cosmoteer_root = remote_library / "steamapps" / "common" / "Cosmoteer"
+    (cosmoteer_root / "Data" / "ships" / "terran").mkdir(parents=True)
+    (steamapps_root / "libraryfolders.vdf").write_text(
+        f"""
+"libraryfolders"
+{{
+    "0" {{ "path" "{str(steam_root).replace('\\', '\\\\')}" }}
+    "1" {{ "path" "{str(remote_library).replace('\\', '\\\\')}" }}
+}}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    discovered_root = find_cosmoteer_install_root([steam_root])
+
+    assert discovered_root == cosmoteer_root
 
 
 def test_resolve_terran_part_icons_root_uses_fallback_cache(
