@@ -1,5 +1,12 @@
 # Voidwright
 
+An open-source algorithmic ship generation project for the game Cosmoteer.
+
+https://github.com/user-attachments/assets/aedbaf98-fc67-45d8-b9d7-7d9fe7f4a618
+
+
+## Technical overview
+
 This repository is organized around purpose-specific packages:
 
 - `preprocessing/`
