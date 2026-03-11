@@ -4,8 +4,8 @@ Axis convention
 ---------------
 The mirror axis sits at x = -0.5, i.e. between grid columns -1 and 0.
 
-  - PRIMARY placements:  all footprint cells have x ≤ -1  (left half)
-  - MIRROR placements:   all footprint cells have x ≥  0  (right half)
+  - PRIMARY placements:  all footprint cells have x <= -1  (left half)
+  - MIRROR placements:   all footprint cells have x >= 0   (right half)
   - Mirror of footprint cell (cx, cy) is (-cx - 1, cy)
   - Mirror part origin:  mirror_x = -origin_x - W
       where W = part width for its rotation
@@ -17,28 +17,17 @@ to x = 0, giving a two-cell-wide symmetric band around the centerline.
 
 Rotation convention
 -------------------
-Cosmoteer uses 0 = default, 1 = 90° CW, 2 = 180°, 3 = 270° CW.
-Reflecting across the vertical axis reverses the handedness of CW rotations:
-
-    mirror_rotation(r) = (4 - r) % 4
-    i.e. 0 ↔ 0, 1 ↔ 3, 2 ↔ 2
-
-This is consistent with vanilla footprint geometry: a 2×1 part at rotation 0
-occupies tiles (0,0) and (1,0); its mirror footprint is identical (horizontal
-strip), which is rotation 0 of the same part. For asymmetric parts like wedges
-(1×1 but directional), the rotation flip changes their visual orientation so the
-mirrored part faces the correct way.
+Cosmoteer uses 0 = default, 1 = 90 degrees CW, 2 = 180 degrees, 3 = 270
+degrees CW. Most mirrored parts still use the historic handedness swap
+`(4 - r) % 4`, while triangle half-cells keep their saved rotation and rely on
+FlipX for the reflected local geometry.
 
 Limitations (first-pass)
 ------------------------
 - Only left-right (vertical-axis) symmetry is implemented.
-- The axis is fixed between columns -1 and 0. Ships are therefore centred on
-  this axis line; their combined bounding box spans x = [−N, N−1] for some N.
-- Rotations are transformed with (4-r)%4. For the vast majority of vanilla
-  parts this produces the correct mirrored geometry. A small number of parts
-  whose footprint is inherently asymmetric under horizontal reflection (if any
-  exist in the vanilla set) would need a per-part override table; none are
-  currently known to require it.
+- The axis is fixed between columns -1 and 0. Ships are therefore centered on
+  this axis line; their combined bounding box spans x = [-N, N-1] for some N.
+- Triangle half-cells rely on FlipX-aware geometry to preserve their rotation.
 """
 
 from __future__ import annotations
@@ -62,14 +51,15 @@ __all__ = [
 # copy of a part that was placed with rotation r.
 MIRROR_ROTATION: Dict[int, int] = {0: 0, 1: 3, 2: 2, 3: 1}
 
-# Some directional 1x1 wedge sprites use a different visual handedness than the
-# general footprint-based rotation rule. The corpus of mirror-built vanilla
-# ships consistently maps these wedges with 0<->1 and 2<->3 on reflection.
 PART_MIRROR_ROTATION_OVERRIDES: Dict[str, Dict[int, int]] = {
     "cosmoteer.armor_wedge": {0: 1, 1: 0, 2: 3, 3: 2},
     "cosmoteer.structure_wedge": {0: 1, 1: 0, 2: 3, 3: 2},
     "cosmoteer.armor_structure_hybrid_1x1": {0: 1, 1: 0, 2: 3, 3: 2},
+    "cosmoteer.armor_tri": {0: 0, 1: 1, 2: 2, 3: 3},
+    "cosmoteer.structure_tri": {0: 0, 1: 1, 2: 2, 3: 3},
+    "cosmoteer.armor_structure_hybrid_tri": {0: 0, 1: 1, 2: 2, 3: 3},
 }
+
 
 def mirror_rotation(r: int, part_id: str | None = None) -> int:
     """Return the mirrored rotation for rotation *r* (left-right flip)."""
@@ -100,9 +90,9 @@ def mirror_part(part, geometry_cache: dict):
       (very unlikely for vanilla parts; fallback to original rotation if so)
 
     The returned part has:
-      x      = -origin_x - W    (W = width of the part for its rotation)
-      y      = origin_y          (unchanged)
-      rotation = (4 - rotation) % 4
+      x      = -origin_x - W    (W = part width for its rotation)
+      y      = origin_y         (unchanged)
+      rotation = mirrored rotation for this part
     """
 
     # Import from shared types to avoid model runtime import cycles
@@ -119,7 +109,6 @@ def mirror_part(part, geometry_cache: dict):
     mirrored_x = -part.x - width
     mirrored_rotation = mirror_rotation(part.rotation, part.part_id)
 
-    # Guard: if computed mirror rotation has no geometry, fall back to original.
     if mirrored_rotation not in geom.rotations:
         mirrored_rotation = part.rotation
 

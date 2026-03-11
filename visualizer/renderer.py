@@ -14,8 +14,20 @@ __all__ = ["render_visualization_frames"]
 
 
 CELL_PADDING = 1
-HEADER_HEIGHT = 110
+HEADER_HEIGHT = 260
 SUMMARY_HOLD_FRAMES = 2
+
+_FONT_SIZE_TITLE = 50
+_FONT_SIZE_STATUS = 45
+
+
+def _get_font(size: int):
+    from PIL import ImageFont
+
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
 
 
 def _require_pillow():
@@ -118,11 +130,11 @@ def _status_lines(event: VisualizationEvent, rejected_counts: Counter[str]) -> l
 
 def _draw_header(draw, event: VisualizationEvent, lines: list[str], width: int) -> None:
     draw.rectangle((0, 0, width, HEADER_HEIGHT), fill=(19, 24, 33, 255))
-    draw.text((16, 12), f"sample-{event.sample_index:03d} | {event.kind}", fill=(238, 243, 255, 255))
-    line_y = 42
+    draw.text((16, 12), f"sample-{event.sample_index:03d} | {event.kind}", fill=(238, 243, 255, 255), font=_get_font(_FONT_SIZE_TITLE))
+    line_y = 75
     for line in lines[:3]:
-        draw.text((16, line_y), line, fill=(200, 212, 230, 255))
-        line_y += 22
+        draw.text((16, line_y), line, fill=(200, 212, 230, 255), font=_get_font(_FONT_SIZE_STATUS))
+        line_y += 58
 
 
 def render_visualization_frames(

@@ -102,3 +102,32 @@ def test_generation_resamples_when_candidate_fails_structural_connectivity(monke
         {"part_id": "cosmoteer.armor_wedge", "rotation": 0, "x": 0, "y": 0, "flip_x": False, "flip_y": False},
         {"part_id": "cosmoteer.armor", "rotation": 0, "x": 1, "y": 0, "flip_x": False, "flip_y": False},
     ]
+
+
+def test_mirror_generation_keeps_wedge_handedness_swap(monkeypatch) -> None:
+    """Mirror mode should still rotate mirrored wedges to the expected saved orientation."""
+
+    model = RelativeMarkovModel(_build_minimal_model_payload())
+    config = GenerationConfig(
+        max_parts=2,
+        max_attempts=4,
+        max_resample_per_step=2,
+        rng_seed=123,
+        mirror_symmetry=True,
+    )
+
+    root_token = next(iter(model.start_counts))
+    sampled_tokens = iter([root_token])
+
+    def _sample_in_order(counter: dict, _rng) -> str:
+        sampled_token = next(sampled_tokens)
+        assert sampled_token in counter
+        return sampled_token
+
+    monkeypatch.setattr(WeightedSampler, "sample", staticmethod(_sample_in_order))
+    payload = model.generate(config)
+
+    assert payload["parts"] == [
+        {"part_id": "cosmoteer.armor_wedge", "rotation": 0, "x": -1, "y": 0, "flip_x": False, "flip_y": False},
+        {"part_id": "cosmoteer.armor_wedge", "rotation": 1, "x": 0, "y": 0, "flip_x": True, "flip_y": False},
+    ]

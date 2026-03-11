@@ -26,6 +26,18 @@ def test_wedge_air_side_contact_is_not_structural_touch() -> None:
     assert parts_structurally_touch(wedge, armor, geometry_cache) is False
 
 
+def test_flipped_triangle_uses_mirrored_attachment_geometry() -> None:
+    """FlipX should mirror triangle attachment sides in shared connectivity checks."""
+
+    geometry_cache = load_vanilla_part_geometry()
+    triangle = {"part_id": "cosmoteer.armor_tri", "rotation": 3, "x": 0, "y": 0, "flip_x": True}
+    armor_left = {"part_id": "cosmoteer.armor", "rotation": 0, "x": -1, "y": 0}
+    armor_right = {"part_id": "cosmoteer.armor", "rotation": 0, "x": 1, "y": 0}
+
+    assert parts_structurally_touch(triangle, armor_left, geometry_cache) is True
+    assert parts_structurally_touch(triangle, armor_right, geometry_cache) is False
+
+
 def test_physical_rect_overhang_cells_do_not_count_as_attachment_cells() -> None:
     """Parts with physical_rect should only expose core hull cells as attachment."""
 

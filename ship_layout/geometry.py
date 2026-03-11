@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, Set
 
-from common.geometry import FLIP_H_PART_IDS, polygon_vertices_to_2x, resolve_geometry_part_id_and_rotation
+from common.geometry import polygon_vertices_to_2x, resolve_geometry_part_id_and_rotation
 
 from .types import Coord, Coord2x, PlacedPart, Segment2x
 
@@ -18,31 +18,12 @@ __all__ = [
 
 _logger = logging.getLogger(__name__)
 
-# Tracks (part_id, flip_x, flip_y) tuples that have already emitted a warning
-# so repeat-placement hot paths don't flood the log.
-_warned_unhandled_flips: set[tuple[str, bool, bool]] = set()
-
 
 def _resolve_geometry(
     part: PlacedPart,
     geometry_cache: Dict[str, object],
 ) -> tuple[object, object, int]:
     """Resolve part ID plus rotation into geometry-cache lookup records."""
-
-    # Warn once when a part carries flip flags that the geometry layer cannot
-    # yet honour.  _R wedge variants are resolved through FLIP_H_PART_IDS at
-    # the part-ID level before this point, so they are intentionally excluded.
-    if (part.flip_x or part.flip_y) and part.part_id not in FLIP_H_PART_IDS:
-        warn_key = (part.part_id, part.flip_x, part.flip_y)
-        if warn_key not in _warned_unhandled_flips:
-            _warned_unhandled_flips.add(warn_key)
-            _logger.warning(
-                "Part %r has flip_x=%r flip_y=%r but per-part flip geometry is not yet "
-                "implemented; attachment geometry may be incorrect for this part",
-                part.part_id,
-                part.flip_x,
-                part.flip_y,
-            )
 
     resolved_part_id, resolved_rotation = resolve_geometry_part_id_and_rotation(
         part.part_id,
@@ -73,6 +54,67 @@ def _rotate_cell_around_bbox(local_cell: Coord, rotation: int, width: int, heigh
     if normalized_rotation == 2:
         return (width - 1 - cell_x, height - 1 - cell_y)
     return (cell_y, width - 1 - cell_x)
+
+
+def _flip_cell_within_bbox(
+    local_cell: Coord,
+    width: int,
+    height: int,
+    *,
+    flip_x: bool,
+    flip_y: bool,
+) -> Coord:
+    """Reflect one local cell across the part-local bbox when flips are set."""
+
+    cell_x, cell_y = local_cell
+    if flip_x:
+        cell_x = width - 1 - cell_x
+    if flip_y:
+        cell_y = height - 1 - cell_y
+    return (cell_x, cell_y)
+
+
+def _flip_cells_within_bbox(
+    local_cells: Set[Coord],
+    width: int,
+    height: int,
+    *,
+    flip_x: bool,
+    flip_y: bool,
+) -> Set[Coord]:
+    """Reflect a local cell set across the part-local bbox when flips are set."""
+
+    if not (flip_x or flip_y):
+        return set(local_cells)
+    return {
+        _flip_cell_within_bbox(local_cell, width, height, flip_x=flip_x, flip_y=flip_y)
+        for local_cell in local_cells
+    }
+
+
+def _flip_vertices_2x_within_bbox(
+    vertices_2x: tuple[Coord2x, ...],
+    width: int,
+    height: int,
+    *,
+    flip_x: bool,
+    flip_y: bool,
+) -> tuple[Coord2x, ...]:
+    """Reflect local 2x polygon vertices across the part-local bbox."""
+
+    if not (flip_x or flip_y):
+        return vertices_2x
+
+    width_2x = width * 2
+    height_2x = height * 2
+    flipped_vertices: list[Coord2x] = []
+    for vertex_x, vertex_y in vertices_2x:
+        if flip_x:
+            vertex_x = width_2x - vertex_x
+        if flip_y:
+            vertex_y = height_2x - vertex_y
+        flipped_vertices.append((vertex_x, vertex_y))
+    return tuple(flipped_vertices)
 
 
 def _local_physical_rect_cells(geometry: object, resolved_rotation: int) -> set[Coord]:
@@ -214,19 +256,38 @@ def footprint_cells(part: PlacedPart, geometry_cache: Dict[str, object]) -> froz
     """Return world footprint cells for one part placement."""
 
     _geometry, local_rotation, _resolved_rotation = _resolve_geometry(part, geometry_cache)
-    return frozenset((part.x + local_x, part.y + local_y) for local_x, local_y in local_rotation.footprint_tiles)
+    local_footprint_cells = _flip_cells_within_bbox(
+        set(local_rotation.footprint_tiles),
+        local_rotation.width,
+        local_rotation.height,
+        flip_x=part.flip_x,
+        flip_y=part.flip_y,
+    )
+    return frozenset((part.x + local_x, part.y + local_y) for local_x, local_y in local_footprint_cells)
 
 
 def attachment_cells(part: PlacedPart, geometry_cache: Dict[str, object]) -> frozenset[Coord]:
     """Return world cells that can structurally attach to neighboring parts."""
 
     geometry, local_rotation, resolved_rotation = _resolve_geometry(part, geometry_cache)
-    local_footprint_cells = set(local_rotation.footprint_tiles)
+    local_footprint_cells = _flip_cells_within_bbox(
+        set(local_rotation.footprint_tiles),
+        local_rotation.width,
+        local_rotation.height,
+        flip_x=part.flip_x,
+        flip_y=part.flip_y,
+    )
 
     # For parts with explicit physical_rect metadata, use only the core body as
     # structural attachment area and treat the rest as decorative overhang.
     if geometry.physical_rect is not None:
-        core_cells = _local_physical_rect_cells(geometry, resolved_rotation)
+        core_cells = _flip_cells_within_bbox(
+            _local_physical_rect_cells(geometry, resolved_rotation),
+            local_rotation.width,
+            local_rotation.height,
+            flip_x=part.flip_x,
+            flip_y=part.flip_y,
+        )
         local_attachment_cells = core_cells & local_footprint_cells
     else:
         local_attachment_cells = local_footprint_cells
@@ -247,7 +308,13 @@ def attachment_segments_2x(part: PlacedPart, geometry_cache: Dict[str, object]) 
     world_origin_2x: Coord2x = (part.x * 2, part.y * 2)
 
     # Polygon edges are the most accurate collision boundary for wedges/tris.
-    local_polygon_vertices_2x = polygon_vertices_to_2x(local_rotation.polygon_vertices)
+    local_polygon_vertices_2x = _flip_vertices_2x_within_bbox(
+        polygon_vertices_to_2x(local_rotation.polygon_vertices),
+        local_rotation.width,
+        local_rotation.height,
+        flip_x=part.flip_x,
+        flip_y=part.flip_y,
+    )
     if local_polygon_vertices_2x:
         return {
             _translate_segment(local_segment, world_origin_2x)
@@ -256,14 +323,27 @@ def attachment_segments_2x(part: PlacedPart, geometry_cache: Dict[str, object]) 
 
     # Physical rect gives the hull boundary for overhang-heavy parts.
     if geometry.physical_rect is not None:
-        local_body_cells = _local_physical_rect_cells(geometry, resolved_rotation)
+        local_body_cells = _flip_cells_within_bbox(
+            _local_physical_rect_cells(geometry, resolved_rotation),
+            local_rotation.width,
+            local_rotation.height,
+            flip_x=part.flip_x,
+            flip_y=part.flip_y,
+        )
         return {
             _translate_segment(local_segment, world_origin_2x)
             for local_segment in _cell_boundary_segments_from_local_cells_2x(local_body_cells)
         }
 
     # Fallback to tile footprint boundary for parts with no richer metadata.
-    local_segments = _cell_boundary_segments_from_local_cells_2x(set(local_rotation.footprint_tiles))
+    local_segments = _cell_boundary_segments_from_local_cells_2x(
+        _flip_cells_within_bbox(
+            set(local_rotation.footprint_tiles),
+            local_rotation.width,
+            local_rotation.height,
+            flip_x=part.flip_x,
+            flip_y=part.flip_y,
+        )
+    )
     return {_translate_segment(local_segment, world_origin_2x) for local_segment in local_segments}
-
 

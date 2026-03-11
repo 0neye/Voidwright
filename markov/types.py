@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Dict, Optional, Tuple
 
+from ship_layout.geometry import footprint_cells as shared_footprint_cells
+from ship_layout.types import PlacedPart
+
 __all__ = [
     "Coord",
     "END_TOKEN",
@@ -95,8 +98,17 @@ class ShipPart:
     def footprint_cells(self, geometry_cache: Dict[str, object]) -> frozenset[Coord]:
         """Return the occupied world cells for this placed part"""
 
-        geometry = geometry_cache[self.part_id].rotations[self.rotation]
-        return frozenset((self.x + dx, self.y + dy) for dx, dy in geometry.footprint_tiles)
+        return shared_footprint_cells(
+            PlacedPart(
+                part_id=self.part_id,
+                rotation=self.rotation,
+                x=self.x,
+                y=self.y,
+                flip_x=self.flip_x,
+                flip_y=self.flip_y,
+            ),
+            geometry_cache,
+        )
 
     def bbox(self, geometry_cache: Dict[str, object]) -> Tuple[int, int, int, int]:
         """Return the inclusive bounding box for this part"""

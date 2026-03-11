@@ -346,6 +346,78 @@ def test_icon_flip_x_is_applied_in_local_space_before_rotation(tmp_path: Path) -
     assert transformed_icon.getpixel((5, transformed_icon.height - 5))[:3] == (255, 0, 0)
 
 
+def test_half_cell_triangles_flip_after_rotation_for_visual_parity(tmp_path: Path) -> None:
+    """Triangle icons should mirror after rotation to match the in-game sprite orientation."""
+
+    icons_root = _write_asymmetric_icon(tmp_path / "icons", "armor_tri")
+    icon_library = load_part_icon_library(icons_root=icons_root, cell_size=10)
+    base_icon = Image.open(icons_root / "armor_tri" / "icon.png").convert("RGBA")
+
+    transformed_icon = icon_library.get_icon(
+        "cosmoteer.armor_tri",
+        rotation=3,
+        flip_x=True,
+    )
+    expected_icon = base_icon.rotate(-270, expand=True).transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+    expected_icon = expected_icon.resize(transformed_icon.size, Image.Resampling.LANCZOS)
+
+    assert list(transformed_icon.getdata()) == list(expected_icon.getdata())
+
+
+def test_half_cell_triangles_keep_flip_y_in_local_space(tmp_path: Path) -> None:
+    """Triangle FlipY should stay local-space even when FlipX parity is post-rotation."""
+
+    icons_root = _write_asymmetric_icon(tmp_path / "icons", "armor_tri")
+    icon_library = load_part_icon_library(icons_root=icons_root, cell_size=10)
+    base_icon = Image.open(icons_root / "armor_tri" / "icon.png").convert("RGBA")
+
+    transformed_icon = icon_library.get_icon(
+        "cosmoteer.armor_tri",
+        rotation=1,
+        flip_y=True,
+    )
+    expected_icon = base_icon.transpose(Image.Transpose.FLIP_TOP_BOTTOM).rotate(-90, expand=True)
+    expected_icon = expected_icon.resize(transformed_icon.size, Image.Resampling.LANCZOS)
+
+    assert list(transformed_icon.getdata()) == list(expected_icon.getdata())
+
+
+def test_half_cell_wedges_undo_saved_rotation_remap_before_flip(tmp_path: Path) -> None:
+    """Flipped 1x1 wedge icons should render from the pre-remap rotation."""
+
+    icons_root = _write_asymmetric_icon(tmp_path / "icons", "armor_wedge")
+    icon_library = load_part_icon_library(icons_root=icons_root, cell_size=10)
+    base_icon = Image.open(icons_root / "armor_wedge" / "icon.png").convert("RGBA")
+
+    transformed_icon = icon_library.get_icon(
+        "cosmoteer.armor_wedge",
+        rotation=1,
+        flip_x=True,
+    )
+    expected_icon = base_icon.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+    expected_icon = expected_icon.resize(transformed_icon.size, Image.Resampling.LANCZOS)
+
+    assert list(transformed_icon.getdata()) == list(expected_icon.getdata())
+
+
+def test_half_cell_wedges_preserve_distinct_flipped_rotations(tmp_path: Path) -> None:
+    """Different flipped wedge rotations should not collapse to one sprite."""
+
+    icons_root = _write_asymmetric_icon(tmp_path / "icons", "armor_wedge")
+    icon_library = load_part_icon_library(icons_root=icons_root, cell_size=10)
+    base_icon = Image.open(icons_root / "armor_wedge" / "icon.png").convert("RGBA")
+
+    transformed_icon = icon_library.get_icon(
+        "cosmoteer.armor_wedge",
+        rotation=3,
+        flip_x=True,
+    )
+    expected_icon = base_icon.transpose(Image.Transpose.FLIP_LEFT_RIGHT).rotate(-180, expand=True)
+    expected_icon = expected_icon.resize(transformed_icon.size, Image.Resampling.LANCZOS)
+
+    assert list(transformed_icon.getdata()) == list(expected_icon.getdata())
+
+
 def test_render_events_to_mp4_writes_video(tmp_path: Path) -> None:
     """Video writer should encode rendered frames into the sample MP4 path."""
 

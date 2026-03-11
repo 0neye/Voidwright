@@ -15,6 +15,23 @@ from common.geometry import (
 __all__ = ["PartIconLibrary", "load_part_icon_library"]
 
 
+_POST_ROTATION_FLIP_PART_IDS = frozenset(
+    {
+        "cosmoteer.armor_tri",
+        "cosmoteer.structure_tri",
+        "cosmoteer.armor_structure_hybrid_tri",
+    }
+)
+_PRE_FLIP_ROTATION_REMAP_PART_IDS = frozenset(
+    {
+        "cosmoteer.armor_wedge",
+        "cosmoteer.structure_wedge",
+        "cosmoteer.armor_structure_hybrid_1x1",
+    }
+)
+_FLIP_X_ROTATION_REMAP = {0: 1, 1: 0, 2: 3, 3: 2}
+
+
 def _require_pillow():
     """Import Pillow lazily so visualization stays optional until used."""
 
@@ -48,6 +65,12 @@ def _resolve_icon_transform(
         resolved_part_id = FLIP_H_PART_IDS[resolved_part_id]
         resolved_rotation = FLIP_H_ROTATE[resolved_rotation]
         resolved_flip_x = not resolved_flip_x
+
+    if resolved_part_id in _PRE_FLIP_ROTATION_REMAP_PART_IDS and resolved_flip_x:
+        # Mirrored 1x1 wedges are saved with a handedness-swapped rotation plus
+        # FlipX. Undo that saved-rotation remap here so sprite transforms match
+        # the same in-game orientation as generated/exported ship parts.
+        resolved_rotation = _FLIP_X_ROTATION_REMAP[resolved_rotation]
 
     return resolved_part_id, resolved_rotation, resolved_flip_x, resolved_flip_y
 
@@ -87,7 +110,13 @@ class PartIconLibrary:
             outline=(255, 180, 80, 255),
             width=3,
         )
-        draw.text((10, 10), part_id.removeprefix("cosmoteer.")[:18], fill=(255, 240, 210, 255))
+        try:
+            from PIL import ImageFont
+            _font = ImageFont.load_default(size=50)
+        except TypeError:
+            from PIL import ImageFont
+            _font = ImageFont.load_default()
+        draw.text((10, 10), part_id.removeprefix("cosmoteer.")[:18], fill=(255, 240, 210, 255), font=_font)
         return fallback
 
     def get_icon(
@@ -127,14 +156,20 @@ class PartIconLibrary:
             self._base_icon_cache[resolved_part_id] = base_icon
 
         transformed_icon = base_icon.copy()
-        # Cosmoteer-style FlipX / FlipY are part-local transforms, so apply them
-        # before rotation instead of mirroring across the final screen axes.
-        if resolved_flip_x:
+        use_post_rotation_flip_x = resolved_part_id in _POST_ROTATION_FLIP_PART_IDS
+        # Most vanilla sprites treat FlipX / FlipY as local-space transforms, so
+        # apply them before rotation. Half-cell triangle icons are exported on a
+        # padded canvas where the game-facing mirrored look matches rotating the
+        # icon first and then flipping it horizontally, but FlipY remains a
+        # local-space transform for those same parts.
+        if not use_post_rotation_flip_x and resolved_flip_x:
             transformed_icon = transformed_icon.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
         if resolved_flip_y:
             transformed_icon = transformed_icon.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
         if resolved_rotation % 4:
             transformed_icon = transformed_icon.rotate(-90 * (resolved_rotation % 4), expand=True)
+        if use_post_rotation_flip_x and resolved_flip_x:
+            transformed_icon = transformed_icon.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
 
         geometry = self.geometry_cache.get(resolved_part_id)
         if geometry is not None:
