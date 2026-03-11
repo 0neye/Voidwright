@@ -13,6 +13,7 @@ venv/
 # Tooling caches
 .pytest_cache/
 .mypy_cache/
+.coverage
 
 # Generated / local-only data corpora
 downloaded_ships/
