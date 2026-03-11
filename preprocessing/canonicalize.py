@@ -238,7 +238,7 @@ def run_canonicalize(
     input_dir: str | Path = "extracted_ship_data",
     output_dir: str | Path = "extracted_ship_data_canonical",
     report_json: str | Path = "out/ship_canonicalization_report.json",
-    report_md: str | Path = "SHIP_CANONICALIZATION_REPORT.md",
+    report_md: str | Path | None = None,
     workers: int | None = None,
     executor: str = "auto",
 ) -> dict:
@@ -248,7 +248,7 @@ def run_canonicalize(
         input_dir: Directory containing extracted JSON files
         output_dir: Directory where canonical JSON outputs will be written
         report_json: Machine-readable report destination
-        report_md: Human-readable report destination
+        report_md: Optional human-readable report destination
         workers: Optional worker-count override for parallel scan and write tasks
         executor: Executor mode override for the scan phase: `auto`, `thread`, or `process`
 
@@ -259,7 +259,7 @@ def run_canonicalize(
     input_path = Path(input_dir)
     output_path = Path(output_dir)
     report_json_path = Path(report_json)
-    report_md_path = Path(report_md)
+    report_md_path = Path(report_md) if report_md else None
 
     files = list(iter_json_files(input_path))
     sources: List[SourceFile] = []
@@ -392,79 +392,84 @@ def run_canonicalize(
 
     report_json_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
-    report_lines = [
-        "# Ship JSON Canonicalization Report",
-        "",
-        f"- Input directory: `{input_path}`",
-        f"- Canonical output directory: `{output_path}`",
-        f"- Total input JSON files: **{manifest['total_input_json_files']}**",
-        f"- Parsed input JSON files: **{manifest['parsed_input_json_files']}**",
-        f"- Unique-content canonical JSON files: **{manifest['unique_content_groups']}**",
-        f"- Duplicates merged: **{manifest['duplicates_merged']}**",
-        (
-            "- Canonical names that came from stripping `__msg<digits>`: "
-            f"**{manifest['canonical_names_from_stripping_msg_suffix']}**"
-        ),
-        (
-            "- Canonical names that already existed without `__msg`: "
-            f"**{manifest['existing_non_msg_canonical_names']}**"
-        ),
-        f"- Filename collisions between different content groups: **{manifest['filename_collision_count']}**",
-        "",
-        "## Naming / dedupe rules",
-        "",
-        "1. Parse every `*.json` under the source corpus.",
-        (
-            "2. Canonicalize each parsed JSON as a minified object with stable "
-            "recursive key ordering via `json.dumps(..., sort_keys=True, separators=(\",\", \":\"))`."
-        ),
-        "3. Hash the canonicalized JSON bytes with SHA-256 and dedupe by that hash, not by filename.",
-        (
-            "4. Keep only metadata in memory during the scan; re-read one representative "
-            "source file per content group when writing outputs, so the full corpus does not "
-            "need to stay resident in RAM."
-        ),
-        "5. Prefer a canonical filename that already exists without `__msg<digits>` when available.",
-        "6. Otherwise, strip the `__msg<digits>` suffix from a representative filename.",
-        (
-            "7. If different content groups want the same canonical filename, keep the "
-            "unsuffixed name for the lexicographically smallest content hash and append "
-            "`__dedup-<12 hex>` to the rest."
-        ),
-        "",
-        "## Duplicate group size histogram",
-        "",
-    ]
+    if report_md_path is not None:
+        # Keep the markdown report available as an explicit opt-in artifact while
+        # making the JSON manifest the default canonicalization report output.
+        report_lines = [
+            "# Ship JSON Canonicalization Report",
+            "",
+            f"- Input directory: `{input_path}`",
+            f"- Canonical output directory: `{output_path}`",
+            f"- Total input JSON files: **{manifest['total_input_json_files']}**",
+            f"- Parsed input JSON files: **{manifest['parsed_input_json_files']}**",
+            f"- Unique-content canonical JSON files: **{manifest['unique_content_groups']}**",
+            f"- Duplicates merged: **{manifest['duplicates_merged']}**",
+            (
+                "- Canonical names that came from stripping `__msg<digits>`: "
+                f"**{manifest['canonical_names_from_stripping_msg_suffix']}**"
+            ),
+            (
+                "- Canonical names that already existed without `__msg`: "
+                f"**{manifest['existing_non_msg_canonical_names']}**"
+            ),
+            f"- Filename collisions between different content groups: **{manifest['filename_collision_count']}**",
+            "",
+            "## Naming / dedupe rules",
+            "",
+            "1. Parse every `*.json` under the source corpus.",
+            (
+                "2. Canonicalize each parsed JSON as a minified object with stable "
+                "recursive key ordering via `json.dumps(..., sort_keys=True, separators=(\",\", \":\"))`."
+            ),
+            "3. Hash the canonicalized JSON bytes with SHA-256 and dedupe by that hash, not by filename.",
+            (
+                "4. Keep only metadata in memory during the scan; re-read one representative "
+                "source file per content group when writing outputs, so the full corpus does not "
+                "need to stay resident in RAM."
+            ),
+            "5. Prefer a canonical filename that already exists without `__msg<digits>` when available.",
+            "6. Otherwise, strip the `__msg<digits>` suffix from a representative filename.",
+            (
+                "7. If different content groups want the same canonical filename, keep the "
+                "unsuffixed name for the lexicographically smallest content hash and append "
+                "`__dedup-<12 hex>` to the rest."
+            ),
+            "",
+            "## Duplicate group size histogram",
+            "",
+        ]
 
-    for size, count in manifest["duplicate_group_size_histogram"].items():
-        report_lines.append(f"- {count} group(s) with {size} file(s)")
+        for size, count in manifest["duplicate_group_size_histogram"].items():
+            report_lines.append(f"- {count} group(s) with {size} file(s)")
 
-    if parse_failures:
-        report_lines.extend(["", "## Parse failures", ""])
-        for item in parse_failures[:50]:
-            report_lines.append(f"- `{item['file']}`: `{item['error']}`")
-        if len(parse_failures) > 50:
-            report_lines.append(f"- ... and {len(parse_failures) - 50} more")
+        if parse_failures:
+            report_lines.extend(["", "## Parse failures", ""])
+            for item in parse_failures[:50]:
+                report_lines.append(f"- `{item['file']}`: `{item['error']}`")
+            if len(parse_failures) > 50:
+                report_lines.append(f"- ... and {len(parse_failures) - 50} more")
 
-    report_lines.extend(["", "## Filename collisions", ""])
-    if not collisions:
-        report_lines.append("- None")
-    else:
-        for collision in collisions:
-            report_lines.append(
-                f"- Desired canonical name `{collision['desired_name']}` had {len(collision['groups'])} distinct content groups."
-            )
-            report_lines.append(f"  - Resolution: {collision['resolution_rule']}")
-            for group in collision["groups"]:
+        report_lines.extend(["", "## Filename collisions", ""])
+        if not collisions:
+            report_lines.append("- None")
+        else:
+            for collision in collisions:
                 report_lines.append(
-                    "  - "
-                    f"`{group['final_name']}` <- hash `{group['content_hash'][:12]}` "
-                    f"from {group['member_count']} source file(s); "
-                    f"naming source: `{group['canonical_name_source']}`"
+                    f"- Desired canonical name `{collision['desired_name']}` had {len(collision['groups'])} distinct content groups."
                 )
+                report_lines.append(f"  - Resolution: {collision['resolution_rule']}")
+                for group in collision["groups"]:
+                    report_lines.append(
+                        "  - "
+                        f"`{group['final_name']}` <- hash `{group['content_hash'][:12]}` "
+                        f"from {group['member_count']} source file(s); "
+                        f"naming source: `{group['canonical_name_source']}`"
+                    )
 
-    report_lines.extend(["", "## Machine-readable detail", "", f"- Full manifest: `{report_json_path}`"])
-    report_md_path.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
+        report_lines.extend(
+            ["", "## Machine-readable detail", "", f"- Full manifest: `{report_json_path}`"]
+        )
+        report_md_path.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
     return manifest
 
 
@@ -477,7 +482,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-dir", default="extracted_ship_data")
     parser.add_argument("--output-dir", default="extracted_ship_data_canonical")
     parser.add_argument("--report-json", default="out/ship_canonicalization_report.json")
-    parser.add_argument("--report-md", default="SHIP_CANONICALIZATION_REPORT.md")
+    parser.add_argument(
+        "--report-md",
+        default=None,
+        help="Optional path for a human-readable markdown report",
+    )
     add_concurrency_arguments(
         parser,
         help_prefix="ship canonicalization",

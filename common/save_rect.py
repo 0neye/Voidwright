@@ -1,9 +1,8 @@
-"""Helpers for live-game SaveRect anchor semantics.
+"""Helpers for SaveRect-style ship location anchor semantics.
 
-Cosmoteer rule files may define ``SaveRect = [x, y, w, h]`` for a part.
-That suggests ship-file ``Part.Location`` can be serialized relative to a
-sub-rectangle instead of the full local footprint origin. The current repo
-uses normalized top-left footprint origins internally, so parser/encoder
+Cosmoteer ship files may serialize ``Part.Location`` relative to a sub-rect of
+the full local footprint instead of the top-left footprint origin. The repo
+stores normalized footprint origins internally, so parser and encoder
 boundaries need to translate to and from the ship-file coordinate system.
 """
 
@@ -11,9 +10,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
-from common.geometry import load_vanilla_part_geometry
+from common.geometry import PART_ID_ALIASES, PartRect, load_vanilla_part_geometry
 
 
 _ID_RE = re.compile(r"\bID\s*=\s*([^\s/]+)")
@@ -24,6 +24,8 @@ _SAVE_RECT_RE = re.compile(
 
 @dataclass(frozen=True)
 class SaveRect:
+    """Stored-location anchor rect used by Cosmoteer ship save files."""
+
     part_id: str
     x: int
     y: int
@@ -59,33 +61,78 @@ def _rotate_cell(cell: tuple[int, int], rotation: int, width: int, height: int) 
     return y, width - 1 - x
 
 
-# Curated runtime SaveRect overrides derived from the live vanilla game files.
-# These are safe to use without requiring a local game install.
-KNOWN_SAVE_RECTS: dict[str, SaveRect] = {
-    "cosmoteer.shield_gen_small": SaveRect(
-        part_id="cosmoteer.shield_gen_small",
-        x=0,
-        y=1,
-        width=2,
-        height=2,
-        source_file="Data/ships/terran/shield_gen_small/shield_gen_small.rules",
-    ),
-}
+def _save_rect_from_part_rect(part_id: str, rect: PartRect) -> SaveRect:
+    """Convert shared geometry rect metadata into the save-rect helper shape."""
+
+    return SaveRect(
+        part_id=part_id,
+        x=rect.x,
+        y=rect.y,
+        width=rect.width,
+        height=rect.height,
+        source_file=rect.source,
+    )
+
+
+def _canonical_part_id(part_id: str) -> str:
+    """Return the canonical vanilla part ID used by geometry-backed rect data."""
+
+    return PART_ID_ALIASES.get(part_id, part_id)
+
+
+def _effective_rect_from_geometry(part_id: str) -> SaveRect | None:
+    """Resolve the stored-location rect for one vanilla part.
+
+    Ship save files only use explicit ``save_rect`` metadata. When the export
+    leaves that field null, the stored location remains anchored to the full
+    footprint origin.
+    """
+
+    canonical_part_id = _canonical_part_id(part_id)
+    geometry = load_vanilla_part_geometry().get(canonical_part_id)
+    if geometry is None:
+        return None
+
+    rect = geometry.save_rect
+    if rect is None:
+        return None
+    return _save_rect_from_part_rect(canonical_part_id, rect)
+
+
+@lru_cache(maxsize=1)
+def _geometry_save_rects() -> dict[str, SaveRect]:
+    """Build the runtime save-rect table from shared geometry metadata."""
+
+    result: dict[str, SaveRect] = {}
+
+    # Centralize the effective-rect selection here so parser, encoder, and
+    # audit helpers all agree on which vanilla parts need location offsets.
+    for part_id in load_vanilla_part_geometry():
+        save_rect = _effective_rect_from_geometry(part_id)
+        if save_rect is not None:
+            result[part_id] = save_rect
+    return result
+
+
+KNOWN_SAVE_RECTS: dict[str, SaveRect] = _geometry_save_rects()
 
 
 def known_save_rects() -> dict[str, SaveRect]:
-    """Return the curated runtime SaveRect table."""
+    """Return the repo-backed runtime SaveRect table."""
 
-    return KNOWN_SAVE_RECTS
+    return dict(_geometry_save_rects())
 
 
 def _offset_for_part(part_id: str, rotation: int, save_rects: dict[str, SaveRect] | None = None) -> tuple[int, int]:
-    save_rect_map = save_rects if save_rects is not None else KNOWN_SAVE_RECTS
-    save_rect = save_rect_map.get(part_id)
+    """Resolve the rotated stored-location offset for one part placement."""
+
+    canonical_part_id = _canonical_part_id(part_id)
+    save_rect_map = save_rects if save_rects is not None else _geometry_save_rects()
+    save_rect = save_rect_map.get(canonical_part_id) or save_rect_map.get(part_id)
     if save_rect is None:
         return 0, 0
 
-    geometry = load_vanilla_part_geometry().get(part_id)
+    geometry = load_vanilla_part_geometry().get(canonical_part_id) or load_vanilla_part_geometry().get(part_id)
     if geometry is None:
         return 0, 0
     base_geometry = geometry.rotations.get(0)

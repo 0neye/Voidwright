@@ -17,7 +17,7 @@ from typing import Dict, Iterator, Optional, Tuple
 
 Coord = Tuple[int, int]
 DATA_DIR = Path(__file__).resolve().parent / "data"
-VANILLA_PARTS_PATH = DATA_DIR / "vanilla-parts-from-game-files.json"
+VANILLA_PARTS_PATH = DATA_DIR / "vanilla_parts_full_geometry.json"
 VANILLA_NAMESPACE = "cosmoteer."
 PART_ID_ALIASES = {
     "cosmoteer.electro_bolter": "cosmoteer.disruptor",
@@ -76,6 +76,17 @@ NON_TRAVERSABLE_HINTS = (
 
 
 @dataclass(frozen=True)
+class PartRect:
+    """Rectangular local-tile region used by save and collision metadata."""
+
+    x: int
+    y: int
+    width: int
+    height: int
+    source: str
+
+
+@dataclass(frozen=True)
 class RotationGeometry:
     """Geometry for one rotated vanilla part footprint."""
 
@@ -94,6 +105,8 @@ class VanillaPartGeometry:
 
     part_id: str
     rotations: Dict[int, RotationGeometry]
+    save_rect: Optional[PartRect] = None
+    physical_rect: Optional[PartRect] = None
     crew_speed_factor: Optional[float] = None
     crew_congested_speed_factor: Optional[float] = None
     cell_occupancy_factor: Optional[float] = None
@@ -122,6 +135,30 @@ def parse_coord(cell: object) -> Coord:
     return int(cell[0]), int(cell[1])
 
 
+def parse_part_rect(raw_rect: object, *, source: str) -> Optional[PartRect]:
+    """Convert a raw four-element rectangle payload into a typed PartRect.
+
+    Args:
+        raw_rect: Raw JSON payload from the exported vanilla geometry file
+        source: Short label describing where this rect came from
+
+    Returns:
+        A parsed PartRect, or None when the payload is null
+    """
+
+    if raw_rect is None:
+        return None
+    if not isinstance(raw_rect, (list, tuple)) or len(raw_rect) != 4:
+        raise ValueError(f"Expected a four-element rect, got {raw_rect!r}")
+    return PartRect(
+        x=int(raw_rect[0]),
+        y=int(raw_rect[1]),
+        width=int(raw_rect[2]),
+        height=int(raw_rect[3]),
+        source=source,
+    )
+
+
 def is_vanilla_part_id(part_id: str) -> bool:
     """Return True when a part ID belongs to the vanilla Cosmoteer namespace."""
 
@@ -148,6 +185,7 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
         per_rotation = ((part.get("geometry") or {}).get("per_rotation") or {})
         travel_payload = part.get("travel") or {}
         rotations: Dict[int, RotationGeometry] = {}
+        source_file = str(part.get("source_file") or "repo geometry export")
 
         for key, rotation_payload in per_rotation.items():
             rotation = int(rotation_payload.get("rotation_index", key))
@@ -178,6 +216,14 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
             result[part_id] = VanillaPartGeometry(
                 part_id=part_id,
                 rotations=rotations,
+                save_rect=parse_part_rect(
+                    part.get("save_rect"),
+                    source=f"{source_file}:save_rect",
+                ),
+                physical_rect=parse_part_rect(
+                    part.get("physical_rect"),
+                    source=f"{source_file}:physical_rect",
+                ),
                 crew_speed_factor=travel_payload.get("crew_speed_factor"),
                 crew_congested_speed_factor=travel_payload.get("crew_congested_speed_factor"),
                 cell_occupancy_factor=travel_payload.get("cell_occupancy_factor"),
@@ -280,6 +326,7 @@ __all__ = [
     "NON_TRAVERSABLE_HINTS",
     "PART_ID_ALIASES",
     "PartMeta",
+    "PartRect",
     "RotationGeometry",
     "TRAVERSABLE_HINTS",
     "VANILLA_NAMESPACE",

@@ -84,7 +84,7 @@ The codebase is split into five purpose-specific packages, all invoked via `pyth
 - **`training/`** — backend-agnostic router. `router.py` resolves backend names; each backend under `training/backends/<name>/` registers its own CLI parser via `register_build_parser` / `register_validate_parser`.
 - **`generator/`** — same router pattern as training. `generator/backends/markov/backend.py` wires CLI options; `generator/backends/markov/export.py` handles `.ship.png` encoding and roundtrip validation.
 - **`markov/`** — shared Markov internals used by both training and generation: `model.py` (tokens, training, sampling), `symmetry.py` (mirror-mode logic), `inputs.py` (allowlist/seed loading).
-- **`common/`** — geometry metadata (`geometry.py`), file helpers, logging, and `common/cosmoteer/` (parser and encoder for `.ship.png` LSB payloads). `common/data/vanilla-parts-from-game-files.json` is the authoritative part geometry source.
+- **`common/`** — geometry metadata (`geometry.py`), file helpers, logging, and `common/cosmoteer/` (parser and encoder for `.ship.png` LSB payloads). `common/data/vanilla_parts_full_geometry.json` is the authoritative part geometry source.
 
 ### Key data flow
 
@@ -98,7 +98,7 @@ Register it in `training/router.py` and `generator/router.py` alongside the Mark
 
 ## Important conventions
 
-- **Geometry source of truth:** `common/data/vanilla-parts-from-game-files.json` via `common/geometry.py`. All vanilla part footprints, dimensions, and traversability come from here. Non-vanilla parts fall back to regex inference.
+- **Geometry source of truth:** `common/data/vanilla_parts_full_geometry.json` via `common/geometry.py`. All vanilla part footprints, dimensions, traversability, and stored-location rect metadata come from here. Non-vanilla parts fall back to regex inference.
 - **Model artifacts** live under `models/markov/`. Preferred artifact: `markov-model.v2.json` (built from graph corpus). Legacy `v1` artifacts used the raw canonical corpus.
 - **Graph training is preferred** over the legacy `--input-dir` raw-corpus path. Use `--graph-input-dir` when building models.
 - **Canonicalization is content-based.** Files may get `__dedup-<12 hex>` suffixes — this is normal, not a failure.

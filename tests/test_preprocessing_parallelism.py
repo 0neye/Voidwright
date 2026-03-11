@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import preprocessing.concurrency as preprocessing_concurrency
+import preprocessing.pipeline as preprocessing_pipeline
 from preprocessing.canonicalize import run_canonicalize
 from preprocessing.concurrency import resolve_executor_mode
 from preprocessing.extract import run_extract
@@ -103,7 +104,6 @@ def test_canonicalize_single_worker_matches_auto_parallel(tmp_path: Path) -> Non
         input_dir=input_dir,
         output_dir=single_output_dir,
         report_json=tmp_path / "single-report.json",
-        report_md=tmp_path / "single-report.md",
         workers=1,
         executor="thread",
     )
@@ -111,7 +111,6 @@ def test_canonicalize_single_worker_matches_auto_parallel(tmp_path: Path) -> Non
         input_dir=input_dir,
         output_dir=auto_output_dir,
         report_json=tmp_path / "auto-report.json",
-        report_md=tmp_path / "auto-report.md",
         executor="auto",
     )
 
@@ -198,12 +197,93 @@ def test_canonicalize_auto_falls_back_to_threads_when_process_pool_is_unavailabl
         input_dir=input_dir,
         output_dir=output_dir,
         report_json=tmp_path / "report.json",
-        report_md=tmp_path / "report.md",
         executor="auto",
     )
 
     assert manifest["parsed_input_json_files"] == 1
     assert (output_dir / "alpha.json").exists()
+
+
+def test_canonicalize_markdown_report_is_opt_in(tmp_path: Path) -> None:
+    """Canonicalization should only write a markdown report when requested."""
+
+    input_dir = tmp_path / "canonical-input"
+    output_dir = tmp_path / "canonical-output"
+    report_md_path = tmp_path / "report.md"
+    input_dir.mkdir()
+    write_json(input_dir / "alpha.json", {"Parts": [], "Name": "Alpha", "Version": 1})
+
+    run_canonicalize(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        report_json=tmp_path / "report.json",
+        report_md=report_md_path,
+        workers=1,
+        executor="thread",
+    )
+
+    assert report_md_path.exists()
+
+
+def test_pipeline_syncs_stage_outputs_without_deleting_unrelated_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Persistent pipeline dirs should prune stale managed files without wiping the tree."""
+
+    extracted_dir = tmp_path / "persisted-extracted"
+    canonical_dir = tmp_path / "persisted-canonical"
+    graph_output_dir = tmp_path / "graph-output"
+    input_dir = tmp_path / "input"
+    extracted_dir.mkdir()
+    canonical_dir.mkdir()
+    input_dir.mkdir()
+
+    write_json(extracted_dir / "stale.json", {"Name": "stale", "Version": 1, "Parts": [], "Doors": []})
+    (extracted_dir / ".pipeline-managed-extracted.txt").write_text("stale.json\n", encoding="utf-8")
+    write_json(canonical_dir / "stale.json", {"Name": "stale", "Version": 1, "Parts": [], "Doors": []})
+    (canonical_dir / ".pipeline-managed-canonical.txt").write_text("stale.json\n", encoding="utf-8")
+    (canonical_dir / "keep.txt").write_text("preserve me", encoding="utf-8")
+
+    def fake_run_extract(
+        *,
+        input_paths: list[str] | list[Path],
+        output_dir: str | Path,
+        verbose: bool = False,
+        workers: int | None = None,
+        executor: str = "auto",
+    ) -> int:
+        del input_paths, verbose, workers, executor
+        write_json(
+            Path(output_dir) / "alpha.json",
+            {"Name": "Alpha", "Author": "test", "Version": 1, "FlightDirection": 0, "Parts": [], "Doors": []},
+        )
+        return 0
+
+    monkeypatch.setattr(preprocessing_pipeline, "run_extract", fake_run_extract)
+
+    payload = preprocessing_pipeline.run_pipeline(
+        input_paths=[input_dir],
+        output_dir=graph_output_dir,
+        write_extracted_dir=extracted_dir,
+        write_canonical_dir=canonical_dir,
+        extract_workers=1,
+        extract_executor="thread",
+        canonicalize_workers=1,
+        canonicalize_executor="thread",
+        graph_workers=1,
+        graph_executor="thread",
+    )
+
+    assert payload["graphs"]["ships_processed"] == 1
+    assert read_json(graph_output_dir / "manifest.json")["sample_outputs"] == ["alpha.json"]
+    assert (graph_output_dir / "alpha.json").exists()
+
+    assert (extracted_dir / "alpha.json").exists()
+    assert not (extracted_dir / "stale.json").exists()
+    assert (canonical_dir / "alpha.json").exists()
+    assert not (canonical_dir / "stale.json").exists()
+    assert (canonical_dir / "keep.txt").read_text(encoding="utf-8") == "preserve me"
 
 
 def test_graphs_auto_falls_back_to_threads_when_process_pool_is_unavailable(

@@ -242,3 +242,13 @@ def test_corrected_occupancy_matches_for_mixed_payload_frames() -> None:
     )
 
     assert extracted_counter == generated_counter
+
+
+def test_resolve_save_rects_defaults_to_repo_geometry() -> None:
+    """Audit save rect resolution should work without a live game install."""
+
+    audit_module = _load_audit_module()
+    save_rects = audit_module.resolve_save_rects(None)
+
+    assert "cosmoteer.shield_gen_small" in save_rects
+    assert "cosmoteer.shield_gen_large" not in save_rects

@@ -31,6 +31,7 @@ out/
 !common/
 !common/data/
 !common/data/vanilla-parts-from-game-files.json
+!common/data/vanilla_parts_full_geometry.json
 
 # Scratch / local editor state
 .claude/

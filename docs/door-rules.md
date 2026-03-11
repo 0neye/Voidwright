@@ -40,9 +40,10 @@ Default artifact path:
 
 Geometry source of truth for vanilla parts:
 
-- `common/data/vanilla-parts-from-game-files.json`
+- `common/data/vanilla_parts_full_geometry.json`
 
-This geometry is used as the authoritative vanilla footprint and walkability source for the current refinement path.
+This geometry is used as the authoritative vanilla footprint, walkability, and
+stored-location rect source for the current refinement path.
 
 ## Curated override behavior
 
@@ -119,6 +120,7 @@ Practical implication:
 - The current door tooling is strong enough for conservative vanilla-first validation
 - It is not yet a complete or fully solved general door model
 - Future changes in this area should be careful not to guess at transforms without corpus-backed verification
+- Migrating to broader save-rect coverage can change normalized `Part.Location` values in freshly extracted or canonicalized corpora, so older corpora may need re-extraction or a deliberate migration pass
 
 ## What is safe to assume
 

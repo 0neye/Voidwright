@@ -7,6 +7,22 @@
 3. Recruit contributors
 
 
+## Preprocessing:
+
+
+### Relative coords transform:
+Goal:
+Normalize ship positions into a canonical local coordinate frame so model inputs are translation-invariant and consistent across the dataset, while remaining reversible and backward-compatible.
+
+Reasoning:
+Current preprocessing preserves absolute placement on the global grid, which can introduce unnecessary variance from arbitrary ship offsets. We want to remove this failure mode now in a way that also supports future architectures (e.g., heterogeneous graph transformers). Because many ships have even dimensions and no single center cell, use an integer-only 2x scaled coordinate frame centered on the occupied-cell bbox center (allowing half-cell centers without floats). Keep transform metadata so coordinates can be mapped back exactly when needed.
+
+
+## Geometry:
+
+
+
+
 ## Graphs:
 
 Ship connectivity and crew traversal graphs should be processed into hierarchical graphs that encode more meaningful information such as corridor pathways, weapon modules, exterior facing parts, connected ion cores, etc.

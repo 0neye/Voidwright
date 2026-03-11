@@ -91,7 +91,7 @@ Default canonicalization outputs:
 
 - Canonical corpus directory: `extracted_ship_data_canonical`
 - Machine-readable report: `out/ship_canonicalization_report.json`
-- Human-readable report: `SHIP_CANONICALIZATION_REPORT.md`
+- Human-readable markdown report: only when `--report-md <path>` is provided
 
 Practical implication:
 

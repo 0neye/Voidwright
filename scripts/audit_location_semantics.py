@@ -13,7 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from common.geometry import load_vanilla_part_geometry, normalize_part_id
-from common.save_rect import load_live_save_rects
+from common.save_rect import known_save_rects, load_live_save_rects
 
 
 STORED_LOCATION_FRAME = "stored_location"
@@ -21,10 +21,13 @@ NORMALIZED_ORIGIN_FRAME = "normalized_origin"
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser for the location-semantics audit script."""
+
     parser = argparse.ArgumentParser(
         description=(
-            "Compare current top-left footprint semantics against live-game SaveRect "
-            "offsets and report ships whose occupancy/connectivity would change."
+            "Compare current top-left footprint semantics against repo-backed "
+            "effective rect offsets and report ships whose occupancy or "
+            "connectivity would change."
         )
     )
     parser.add_argument(
@@ -34,8 +37,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--game-root",
-        required=True,
-        help="Path to the local Cosmoteer install root.",
+        default=None,
+        help=(
+            "Optional path to a local Cosmoteer install root. When provided, "
+            "live SaveRect values override the repo-backed geometry export."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -49,6 +55,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional cap on number of matching ships to inspect.",
     )
     return parser
+
+
+def resolve_save_rects(game_root: str | Path | None) -> dict:
+    """Resolve the effective save-rect table for audit comparisons.
+
+    Args:
+        game_root: Optional path to a live Cosmoteer install
+
+    Returns:
+        Repo-backed rect metadata, optionally overridden by live SaveRect scans
+    """
+
+    save_rects = known_save_rects()
+    if game_root is None:
+        return save_rects
+
+    # Live rule files remain useful as an override source when validating the
+    # repo export against an installed game version.
+    save_rects.update(load_live_save_rects(game_root))
+    return save_rects
 
 
 def _occupied_cells(parts: list[dict], geometry_cache: dict, save_rects: dict, *, corrected: bool) -> tuple[Counter, list[dict]]:
@@ -175,9 +201,16 @@ def _extract_parts(data: dict, geometry_cache: dict) -> list[dict]:
     return parts
 
 
-def run_audit(input_dir: str | Path, game_root: str | Path, output_path: str | Path, limit: int | None = None) -> dict:
+def run_audit(
+    input_dir: str | Path,
+    game_root: str | Path | None,
+    output_path: str | Path,
+    limit: int | None = None,
+) -> dict:
+    """Audit occupancy changes caused by stored-location rect corrections."""
+
     geometry_cache = load_vanilla_part_geometry()
-    save_rects = load_live_save_rects(game_root)
+    save_rects = resolve_save_rects(game_root)
 
     input_path = Path(input_dir)
     reports: list[dict] = []
@@ -245,7 +278,7 @@ def run_audit(input_dir: str | Path, game_root: str | Path, output_path: str | P
 
     output_file = Path(output_path)
     summary = {
-        "game_root": str(Path(game_root)),
+        "game_root": str(Path(game_root)) if game_root is not None else None,
         "input_dir": str(input_path),
         "output_path": str(output_file),
         "ships_scanned": scanned,
