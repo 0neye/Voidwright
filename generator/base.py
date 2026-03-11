@@ -4,8 +4,38 @@ from __future__ import annotations
 
 import argparse
 from abc import ABC, abstractmethod
+from pathlib import Path
 
-__all__ = ["GeneratorBackend"]
+__all__ = ["GeneratorBackend", "add_visualization_arguments"]
+
+
+def add_visualization_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register shared visualization flags for generator backends."""
+
+    parser.add_argument(
+        "--visualize",
+        action="store_true",
+        default=False,
+        help="Render an MP4 visualizing generation attempts and accepted placements",
+    )
+    parser.add_argument(
+        "--icons-root",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path to a Terran part-icon root "
+            "(for example Data/ships/terran)"
+        ),
+    )
+    parser.add_argument(
+        "--game-root",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path to a local Cosmoteer install root. "
+            "Used to resolve Data/ships/terran automatically."
+        ),
+    )
 
 
 class GeneratorBackend(ABC):

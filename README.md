@@ -154,6 +154,48 @@ Optional diagnostics:
 - `--seed-json` or `--seed-png` seeds generation from an existing layout
 - `--mirror-symmetry`, `--allowlist`, and `--requirements-file` preserve the existing Markov runtime options
 
+### 5. Visualize generation as MP4
+
+The Markov generator can now render one MP4 per generated sample showing the
+ship grow step by step, including accepted placements and renderable rejected
+attempts:
+
+```bash
+python main.py generator generate markov \
+  --model models/markov/markov-model.v2.json \
+  --output-dir out/generated-ships \
+  --count 3 \
+  --seed 1337 \
+  --visualize
+```
+
+Visualization outputs are written here:
+
+- `.ship.png` files: `out/generated-ships/`
+- `.mp4` videos: `out/generated-ships/visualizations/`
+
+Icon discovery order:
+
+1. `--icons-root` if you want to point directly at a Terran icon directory such as `Data/ships/terran`
+2. `--game-root` if you want to point at a local Cosmoteer install root
+3. Windows Steam auto-discovery via the Steam registry and `libraryfolders.vdf`
+4. Repo-local fallback cache under `assets/local/cosmoteer-icons/terran/`
+
+Example with a manual override:
+
+```bash
+python main.py generator generate markov \
+  --model models/markov/markov-model.v2.json \
+  --output-dir out/generated-ships \
+  --count 1 \
+  --visualize \
+  --game-root "F:/SteamLibrary/steamapps/common/Cosmoteer"
+```
+
+If auto-discovery fails, copy the Terran part folders containing `icon.png` into
+`assets/local/cosmoteer-icons/terran/`. That folder is ignored by git on
+purpose, so it can be used as a local cache without polluting the repo.
+
 ## Module layout
 
 - `common/` - shared helper modules plus shared Cosmoteer geometry and PNG parse/encode support
@@ -161,6 +203,7 @@ Optional diagnostics:
 - `training/` - backend router and training adapters
 - `generator/` - backend router and generation adapters
 - `markov/` - shared Markov model, sampling, symmetry, and backend input helpers
+- `visualizer/` - shared generation event recording, icon loading, frame rendering, and MP4 export
 - `scripts/` - miscellaneous operational utilities such as Discord acquisition
 - `models/` - generated model artifacts
 

@@ -21,5 +21,6 @@ the repository's backend-agnostic `generator/` module.
 ## Canonical user-facing docs
 
 Use `docs/markov-generator.md` for the full architecture guide, CLI usage,
-mirror symmetry behavior, and artifact expectations. This README is intentionally
-kept short so it stays aligned with the current package layout.
+mirror symmetry behavior, visualization flags, icon discovery behavior, and
+artifact expectations. This README is intentionally kept short so it stays
+aligned with the current package layout.

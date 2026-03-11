@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "Generate Cosmoteer .ship.png files from preprocessing, training, and Markov-based generation pipelines"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+  "Pillow",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -46,6 +48,7 @@ source = [
   "markov",
   "preprocessing",
   "training",
+  "visualizer",
   "main",
 ]
 
@@ -81,6 +84,8 @@ include = [
   "preprocessing.*",
   "training",
   "training.*",
+  "visualizer",
+  "visualizer.*",
 ]
 
 [tool.setuptools.package-data]

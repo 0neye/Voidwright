@@ -28,6 +28,7 @@ Implemented behavior:
 - Enforce configurable caps for parts, attempts, resamples, and world bounds
 - Export generated layouts back to `.ship.png`
 - Roundtrip-validate exported PNGs with the existing extraction pipeline
+- Optionally render MP4 videos that visualize accepted placements and renderable rejected attempts
 
 Deferred behavior:
 
@@ -119,6 +120,17 @@ python -m generator.cli generate markov \
   --seed 1337
 ```
 
+Generate ships and render visualization videos beside them:
+
+```bash
+python -m generator.cli generate markov \
+  --model models/markov/markov-model.v2.json \
+  --output-dir out/generated-ships \
+  --count 5 \
+  --seed 1337 \
+  --visualize
+```
+
 Optional JSON diagnostics:
 
 ```bash
@@ -128,6 +140,55 @@ python -m generator.cli generate markov \
   --json-output-dir out/generated-json \
   --count 5
 ```
+
+Useful visualization-specific flags:
+
+- `--visualize` enables MP4 rendering for each generated sample
+- `--icons-root` points directly at a Terran icon directory like `Data/ships/terran`
+- `--game-root` points at a local Cosmoteer install root and resolves `Data/ships/terran` automatically
+
+Visualization output layout:
+
+- `sample-000.ship.png`, `sample-001.ship.png`, ... stay in the requested `--output-dir`
+- `sample-000.mp4`, `sample-001.mp4`, ... are written under `<output-dir>/visualizations/`
+
+## Icon discovery and fallback behavior
+
+Visualization uses vanilla Terran `icon.png` files for part rendering.
+
+Resolution order:
+
+1. `--icons-root`
+2. `--game-root`
+3. Windows Steam auto-discovery using the Steam registry plus `libraryfolders.vdf`
+4. Repo-local fallback cache under `assets/local/cosmoteer-icons/terran/`
+
+The fallback cache is intended for local manual copies of the game assets and is
+ignored by git. Mirror the game layout closely, for example:
+
+```text
+assets/local/cosmoteer-icons/terran/
+  armor/icon.png
+  armor_wedge/icon.png
+  control_room_small/icon.png
+```
+
+If neither auto-discovery nor the fallback cache is available, generation fails
+with a clear error that points to `--icons-root`, `--game-root`, and the local
+cache path.
+
+## Visualization behavior
+
+The visualizer is event-log-first rather than live-streamed to the screen.
+
+- Generation records `sample_started`, `part_placed`, `attempt_rejected`, and `sample_finished` events
+- Frames are rendered after the sample completes so the viewport can be sized consistently
+- Accepted placements are shown in sequence as the ship grows
+- Rejected attempts are included when they have a concrete candidate world placement
+- Rejections without a drawable placement, such as missing-anchor cases, are still counted in the summary/header text
+
+This keeps the visualization backend-agnostic while still allowing Markov to
+show meaningful rejection states.
 
 ## Export behavior
 

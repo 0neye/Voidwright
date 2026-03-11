@@ -12,7 +12,7 @@ from markov.inputs import (
     load_seed_parts_from_json,
     load_seed_parts_from_png,
 )
-from generator.base import GeneratorBackend
+from generator.base import GeneratorBackend, add_visualization_arguments
 
 __all__ = ["MarkovGeneratorBackend"]
 from generator.backends.markov.export import export_ship_png
@@ -20,6 +20,12 @@ from markov.model import (
     GenerationConfig,
     RelativeMarkovModel,
     iter_vanilla_parts_from_ship,
+)
+from visualizer import (
+    VisualizationRecorder,
+    ensure_ffmpeg_available,
+    load_part_icon_library,
+    render_events_to_mp4,
 )
 
 
@@ -113,6 +119,7 @@ class MarkovGeneratorBackend(GeneratorBackend):
             default=None,
             help="Optional .ship.png file to seed generation",
         )
+        add_visualization_arguments(parser)
 
     def run_generate(self, args: argparse.Namespace) -> int:
         """Run Markov generation and export encoded ship files."""
@@ -125,6 +132,19 @@ class MarkovGeneratorBackend(GeneratorBackend):
         args.output_dir.mkdir(parents=True, exist_ok=True)
         if args.json_output_dir is not None:
             args.json_output_dir.mkdir(parents=True, exist_ok=True)
+        visualizations_output_dir = args.output_dir / "visualizations"
+        icon_library = None
+        if args.visualize:
+            try:
+                ensure_ffmpeg_available()
+                icon_library = load_part_icon_library(
+                    icons_root=args.icons_root,
+                    game_root=args.game_root,
+                )
+                visualizations_output_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                print(f"[generator:markov] ERROR: unable to initialize visualization: {exc}")
+                return 1
 
         allowlist = load_allowlist(args.allowlist, args.allowlist_file)
         requirements = load_requirements(args.require, args.requirements_file)
@@ -136,6 +156,11 @@ class MarkovGeneratorBackend(GeneratorBackend):
             seed_parts = load_seed_parts_from_png(args.seed_png, iter_vanilla_parts_from_ship)
 
         for sample_index in range(args.count):
+            visualization_recorder = (
+                VisualizationRecorder(sample_index)
+                if args.visualize and icon_library is not None
+                else None
+            )
             generation_config = GenerationConfig(
                 max_parts=args.max_parts,
                 max_attempts=args.max_attempts,
@@ -150,7 +175,11 @@ class MarkovGeneratorBackend(GeneratorBackend):
                 part_requirements=requirements,
             )
             try:
-                payload = model.generate(generation_config, seed_parts=seed_parts)
+                payload = model.generate(
+                    generation_config,
+                    seed_parts=seed_parts,
+                    event_sink=visualization_recorder,
+                )
             except RuntimeError as exc:
                 print(f"[generator:markov] sample-{sample_index:03d} FAILED: {exc}")
                 continue
@@ -179,5 +208,20 @@ class MarkovGeneratorBackend(GeneratorBackend):
                 f"parts={stats['parts_generated']} export={export_status} "
                 f"output={png_output_path}"
             )
+
+            if visualization_recorder is not None and icon_library is not None:
+                mp4_output_path = visualizations_output_dir / f"sample-{sample_index:03d}.mp4"
+                try:
+                    render_events_to_mp4(
+                        visualization_recorder.events,
+                        mp4_output_path,
+                        icon_library=icon_library,
+                    )
+                except Exception as exc:
+                    print(
+                        "[generator:markov] "
+                        f"sample-{sample_index:03d} visualization FAILED: {exc}"
+                    )
+                    return 1
 
         return 0

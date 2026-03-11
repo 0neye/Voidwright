@@ -122,18 +122,19 @@ class RelativeMarkovModel:
             max_y=config.bounds_max_y,
         )
 
-    def generate(self, config: GenerationConfig, *, seed_parts=None) -> dict:
+    def generate(self, config: GenerationConfig, *, seed_parts=None, event_sink=None) -> dict:
         """Generate a ship layout from this model
 
         Args:
             config: Generation configuration
             seed_parts: Optional list of seed parts to pre-place before generation
+            event_sink: Optional visualization recorder for generation attempts
 
         Returns:
             Generation payload with emitted parts, trace, and stats
         """
 
-        return generate_ship_layout(self, config, seed_parts=seed_parts)
+        return generate_ship_layout(self, config, seed_parts=seed_parts, event_sink=event_sink)
 
 
 def build_model_from_corpus(input_dir: Path, config: TrainingConfig) -> RelativeMarkovModel:
