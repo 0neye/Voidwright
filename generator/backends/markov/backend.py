@@ -216,6 +216,7 @@ class MarkovGeneratorBackend(GeneratorBackend):
                         visualization_recorder.events,
                         mp4_output_path,
                         icon_library=icon_library,
+                        fps=args.visualization_fps,
                     )
                 except Exception as exc:
                     print(

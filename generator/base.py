@@ -19,6 +19,13 @@ def add_visualization_arguments(parser: argparse.ArgumentParser) -> None:
         help="Render an MP4 visualizing generation attempts and accepted placements",
     )
     parser.add_argument(
+        "--visualization-fps",
+        type=int,
+        default=24,
+        metavar="FPS",
+        help="Frame rate for the visualization MP4 (default: 24)",
+    )
+    parser.add_argument(
         "--icons-root",
         type=Path,
         default=None,
