@@ -6,6 +6,8 @@ from typing import Optional
 
 from common.geometry import Coord
 
+__all__ = ["DOOR_CELL_DELTAS", "door_adjacent_cells"]
+
 # Cosmoteer ship Door.Cell names the right/bottom occupied cell of the doorway
 # span. These deltas therefore point from the earlier occupied cell to the
 # stored Door.Cell value.

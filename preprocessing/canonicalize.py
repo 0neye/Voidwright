@@ -15,6 +15,18 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 from common.files import iter_json_files
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
 
+__all__ = [
+    "SourceFile",
+    "CanonicalGroup",
+    "canonicalize_json_text",
+    "strip_msg_suffix",
+    "choose_preferred_member",
+    "resolve_collisions",
+    "run_canonicalize",
+    "build_parser",
+    "main",
+]
+
 MSG_SUFFIX_RE = re.compile(r"__msg\d+(?=(\.ship)?\.json$)")
 
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 from abc import ABC, abstractmethod
 
+__all__ = ["GeneratorBackend"]
+
 
 class GeneratorBackend(ABC):
     """Backend contract for runtime ship generation integrations."""

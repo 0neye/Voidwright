@@ -9,6 +9,8 @@ from typing import Sequence
 
 from .door_rules_engine import Thresholds, infer_rules_from_corpus
 
+__all__ = ["build_parser", "run_infer_door_rules", "main"]
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser for door-rule inference."""

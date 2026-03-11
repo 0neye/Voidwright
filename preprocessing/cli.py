@@ -8,6 +8,8 @@ from typing import Sequence
 
 from . import canonicalize, door_rules, extract, graphs, pipeline
 
+__all__ = ["build_parser", "main"]
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level preprocessing CLI parser."""

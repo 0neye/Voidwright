@@ -23,6 +23,16 @@ from typing import Any, Optional
 
 from common.cosmoteer import create_ship_png_bytes, write_ship_png
 
+__all__ = [
+    "generated_parts_to_cosmoteer_parts",
+    "generated_doors_to_cosmoteer_doors",
+    "make_minimal_ship_dict",
+    "graph_to_generated_parts_payload",
+    "roundtrip_validate",
+    "export_ship_png",
+    "export_batch",
+]
+
 
 # ── default field values ──────────────────────────────────────────────────────
 

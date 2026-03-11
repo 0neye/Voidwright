@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+__all__ = ["configure_logging"]
+
 
 def configure_logging(verbose: bool) -> None:
     """Configure repository-wide CLI logging.

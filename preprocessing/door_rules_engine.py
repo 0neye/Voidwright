@@ -17,6 +17,35 @@ from common.geometry import (
 )
 from .layout_helpers import door_adjacent_cells as shared_door_adjacent_cells
 
+__all__ = [
+    "SIDE_BY_ORIENTATION",
+    "ROTATION_NORMALIZATION_OFFSETS",
+    "FALLBACK_ALLOWED_LOCATION_ANCHOR_DELTAS",
+    "REJECT_CLASS_HINTS",
+    "SideSignature",
+    "PlacementObservation",
+    "CandidatePart",
+    "Thresholds",
+    "ValidationResult",
+    "DoorValidationSummary",
+    "DoorPlacementRules",
+    "build_cell_map",
+    "choose_boundary_part",
+    "resolve_observation_from_cells",
+    "door_adjacent_cells",
+    "match_allowed_door_cell_with_anchor_delta",
+    "resolve_vanilla_allowed_location_fallback",
+    "resolve_door_observation",
+    "iter_potential_boundaries",
+    "default_overrides",
+    "classify_override_reject",
+    "crew_rule_for_part",
+    "signature_matches_allowed",
+    "match_crew_override",
+    "infer_rules_from_corpus",
+    "validate_corpus_against_rules",
+]
+
 # Cosmoteer ship Door.Cell is not the low-coordinate occupied cell of the pair.
 # Instead it names the right/bottom cell of the two-cell doorway span:
 # - orientation 0 joins (x, y-1) <-> (x, y)

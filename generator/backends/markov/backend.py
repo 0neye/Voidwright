@@ -13,6 +13,8 @@ from markov.inputs import (
     load_seed_parts_from_png,
 )
 from generator.base import GeneratorBackend
+
+__all__ = ["MarkovGeneratorBackend"]
 from generator.backends.markov.export import export_ship_png
 from markov.model import (
     GenerationConfig,

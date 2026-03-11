@@ -14,6 +14,8 @@ from common.logging import configure_logging
 from common.cosmoteer import parse_ship_png
 from .concurrency import add_concurrency_arguments, create_executor_factory, resolve_executor_mode, resolve_worker_count
 
+__all__ = ["build_parser", "run_extract", "main"]
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser for the extraction stage."""

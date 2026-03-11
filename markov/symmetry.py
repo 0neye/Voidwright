@@ -45,6 +45,17 @@ from __future__ import annotations
 
 from typing import Dict
 
+__all__ = [
+    "MIRROR_ROTATION",
+    "PART_MIRROR_ROTATION_OVERRIDES",
+    "mirror_rotation",
+    "mirror_flip_x",
+    "mirror_part",
+    "primary_root_x",
+    "is_primary_placement",
+    "verify_mirror_footprint",
+]
+
 # mirror_rotation[r] gives the rotation to use for the horizontally mirrored
 # copy of a part that was placed with rotation r.
 MIRROR_ROTATION: Dict[int, int] = {0: 0, 1: 3, 2: 2, 3: 1}
@@ -92,8 +103,8 @@ def mirror_part(part, geometry_cache: dict):
       rotation = (4 - rotation) % 4
     """
 
-    # Import here to avoid circular imports; ShipPart lives in model.
-    from .model import ShipPart
+    # Import from shared types to avoid model runtime import cycles
+    from .types import ShipPart
 
     geom = geometry_cache.get(part.part_id)
     if geom is None:

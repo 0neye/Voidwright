@@ -13,6 +13,7 @@ from .concurrency import add_concurrency_arguments
 from .extract import run_extract
 from .graphs import generate_all
 
+__all__ = ["build_parser", "run_pipeline", "main"]
 
 _EXTRACTED_SYNC_MANIFEST = ".pipeline-managed-extracted.txt"
 _CANONICAL_SYNC_MANIFEST = ".pipeline-managed-canonical.txt"

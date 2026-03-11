@@ -15,6 +15,8 @@ from typing import Any, BinaryIO, Iterator
 
 from common.save_rect import stored_location_to_origin
 
+__all__ = ["parse_ship_png"]
+
 try:
     from PIL import Image
 except Exception:  # noqa: BLE001

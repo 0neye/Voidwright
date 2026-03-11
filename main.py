@@ -14,6 +14,8 @@ from generator import cli as generator_cli
 from preprocessing import cli as preprocessing_cli
 from training import cli as training_cli
 
+__all__ = ["main"]
+
 
 @dataclass(frozen=True)
 class CommandDomain:

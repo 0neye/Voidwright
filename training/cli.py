@@ -7,6 +7,8 @@ from typing import Sequence
 
 from training.router import get_training_backend, get_training_backends
 
+__all__ = ["build_parser", "main"]
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level training CLI parser."""

@@ -5,6 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
+__all__ = [
+    "is_supported_ship_png",
+    "output_name_for_ship_png",
+    "iter_ship_png_files",
+    "iter_json_files",
+]
+
 
 def is_supported_ship_png(path: Path) -> bool:
     """Return True when *path* looks like a supported ship image."""

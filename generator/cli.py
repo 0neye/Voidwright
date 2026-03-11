@@ -7,6 +7,8 @@ from typing import Sequence
 
 from generator.router import get_generator_backend, get_generator_backends
 
+__all__ = ["build_parser", "main"]
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level generator CLI parser."""

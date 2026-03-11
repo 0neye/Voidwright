@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 from abc import ABC, abstractmethod
 
+__all__ = ["TrainingBackend"]
+
 
 class TrainingBackend(ABC):
     """Backend contract for training module integrations."""

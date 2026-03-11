@@ -13,6 +13,19 @@ from common.geometry import PartMeta, infer_meta, load_vanilla_part_geometry, no
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
 from .layout_helpers import door_adjacent_cells
 
+__all__ = [
+    "normalize_parts",
+    "normalize_doors",
+    "part_cells",
+    "part_walkable_cells",
+    "structural_edges",
+    "cell_graph",
+    "process_ship",
+    "generate_all",
+    "build_parser",
+    "main",
+]
+
 Coord = Tuple[int, int]
 
 

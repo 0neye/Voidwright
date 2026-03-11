@@ -7,6 +7,16 @@ from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 import os
 from typing import Any, Callable, Iterable, Literal, TypeVar
 
+__all__ = [
+    "ExecutorMode",
+    "WorkResult",
+    "add_concurrency_arguments",
+    "resolve_executor_mode",
+    "resolve_worker_count",
+    "create_executor_factory",
+    "run_auto_parallel_work",
+]
+
 ExecutorMode = Literal["auto", "thread", "process"]
 WorkResult = TypeVar("WorkResult")
 

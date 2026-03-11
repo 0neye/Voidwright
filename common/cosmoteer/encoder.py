@@ -15,6 +15,8 @@ from typing import Any
 
 from common.save_rect import origin_to_stored_location
 
+__all__ = ["create_ship_png_bytes", "write_ship_png"]
+
 _INT32_KEYS = {
     "FlightDirection",
     "FormationOrder",

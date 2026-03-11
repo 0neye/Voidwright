@@ -15,6 +15,8 @@ from markov.model import (
 )
 from training.base import TrainingBackend
 
+__all__ = ["MarkovTrainingBackend"]
+
 
 class MarkovTrainingBackend(TrainingBackend):
     """Backend adapter that preserves the existing Markov training behavior."""
