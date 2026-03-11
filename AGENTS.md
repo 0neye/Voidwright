@@ -98,6 +98,18 @@ The codebase is split into five purpose-specific packages, all invoked via `pyth
 
 Register it in `training/router.py` and `generator/router.py` alongside the Markov backend. Implement `register_build_parser` / `run_build` (training) and `register_generate_parser` / `run_generate` (generator) following `MarkovTrainingBackend` / `MarkovGeneratorBackend` as templates.
 
+## Commit messages
+
+Include the AI model name in every commit message footer. Format:
+
+```
+<subject line>
+
+<body if needed>
+
+Co-Authored-By: <model-name>
+```
+
 ## Important conventions
 
 - **Geometry source of truth:** `common/data/vanilla_parts_full_geometry.json` via `common/geometry.py`. All vanilla part footprints, dimensions, traversability, and stored-location rect metadata come from here. Non-vanilla parts fall back to regex inference.
