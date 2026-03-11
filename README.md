@@ -1,13 +1,17 @@
 # ship-generator
 
-This repository is organized around three purpose-specific modules:
+This repository is organized around purpose-specific packages:
 
 - `preprocessing/`
-  - local `.ship.png` inputs -> extracted JSON -> canonical JSON -> graph JSON
+  - local `.ship.png` inputs -> centered-2x extracted JSON -> canonical JSON -> graph JSON
 - `training/`
   - backend-agnostic model training router with a Markov backend
 - `generator/`
   - backend-agnostic runtime generation router with a Markov backend
+- `markov/`
+  - shared Markov model, training, validation, and generation internals
+- `ship_layout/`
+  - shared structural geometry, connectivity, and placement validation helpers
 
 Discord acquisition is intentionally separate from preprocessing and stays in `scripts/` as a miscellaneous operational utility.
 
@@ -32,7 +36,7 @@ Markov backend implementation notes now live in `docs/markov-generator.md` and
 3. Add your Discord bot token to `.env` only if you plan to use the standalone Discord download script
 
 ```bash
-pip install -r requirements.txt
+pip install -e .[dev]
 ```
 
 ```env

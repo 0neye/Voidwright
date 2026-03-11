@@ -80,7 +80,7 @@ python scripts/download_ship_images.py --output-dir downloaded_ships --verbose
 
 ## Module architecture
 
-The codebase is split into five purpose-specific packages, all invoked via `python -m <module>.cli`:
+The codebase is split into six purpose-specific packages:
 
 - **`preprocessing/`** — four-stage pipeline (extract → canonicalize → graphs → door-rules). Each stage is its own submodule with a `main(argv)` and `build_parser()`. `pipeline.py` orchestrates all stages.
 - **`training/`** — backend-agnostic router. `router.py` resolves backend names; each backend under `training/backends/<name>/` registers its own CLI parser via `register_build_parser` / `register_validate_parser`.

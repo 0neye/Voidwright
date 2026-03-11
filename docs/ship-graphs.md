@@ -13,20 +13,26 @@ The script produces:
 
 ## Inputs and outputs
 
-Default raw-corpus run:
-
-```bash
-python -m preprocessing.cli graphs \
-  --input-dir extracted_ship_data \
-  --output-dir generated_ship_graphs
-```
-
-Canonical-corpus run:
+Preferred canonical-corpus run:
 
 ```bash
 python -m preprocessing.cli graphs \
   --input-dir extracted_ship_data_canonical \
   --output-dir generated_ship_graphs_canonical
+```
+
+The input corpus is expected to be the extractor/canonicalizer output that already
+stores centered `2x` coordinates plus `coord_transform.center_2x` replay metadata.
+
+Legacy raw extracted payloads without that transform metadata are no longer the
+documented graph-input contract.
+
+Alternate output directory example:
+
+```bash
+python -m preprocessing.cli graphs \
+  --input-dir extracted_ship_data_canonical \
+  --output-dir generated_ship_graphs
 ```
 
 The script writes one JSON output per ship plus `manifest.json`.
@@ -40,8 +46,7 @@ Stored at `graphs.A_structural_part_graph`.
 Nodes represent individual part instances and include:
 
 - normalized part ID
-- extracted legacy location (`location`)
-- centered local 2x companion location (`location_2x`)
+- centered local 2x location (`location_2x`)
 - rotation
 - footprint dimensions and cell count
 - traversability flag
@@ -70,7 +75,7 @@ Nodes represent occupied cells and include:
 Edges are intentionally conservative and include:
 
 - `kind = "intra_part"` for orthogonal traversal within the same traversable part
-- `kind = "door"` for explicit connections derived from `Doors[].Cell` and `Orientation`
+- `kind = "door"` for explicit connections derived from `Doors[].Cell2x` and `Orientation`
 
 The script does not invent free traversal between neighboring separate parts unless a door record exists.
 
@@ -78,14 +83,14 @@ The script does not invent free traversal between neighboring separate parts unl
 
 ### Location anchoring
 
-- Legacy `Location` remains the normalized part-origin grid coordinate used by geometry helpers
-- `Location2x` stores the same point in the ship-local centered 2x frame
-- Ship-level transform metadata lives at `coord_transform`
+- `Location2x` is the source-of-truth part-origin coordinate in the ship-local centered 2x frame
+- `coord_transform.center_2x` provides the ship-level replay anchor needed to recover global grid coordinates when needed
+- World-grid coordinates are reconstructed internally for geometry helpers and final replay/export paths
 - odd rotations still swap width and height for rectangular fallback footprints
 
 ### Door orientation mapping
 
-- `Door.Cell` names the right or bottom occupied cell of the doorway span
+- `Door.Cell2x` stores the right or bottom occupied doorway cell in the same centered 2x frame
 - `Orientation = 0` joins `(x, y-1)` and `(x, y)`
 - `Orientation = 1` joins `(x-1, y)` and `(x, y)`
 

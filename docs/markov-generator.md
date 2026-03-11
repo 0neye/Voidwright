@@ -19,7 +19,8 @@ The preferred public interfaces are now:
 
 Implemented behavior:
 
-- Train only from the canonical corpus in `extracted_ship_data_canonical`
+- Prefer training from the graph corpus in `generated_ship_graphs_canonical`
+- Keep canonical-corpus validation available through `training.cli validate markov`
 - Restrict training and placement to vanilla `cosmoteer.*` parts with known geometry
 - Model ships as a sequence of root and anchor-relative placement tokens
 - Support an explicit END token
@@ -78,7 +79,8 @@ When part requirements are active, `end_token` can also be suppressed until the 
 
 ## Coordinate assumptions and validation
 
-The current model assumes extracted `Location` values are stable part-origin coordinates.
+The current model assumes extracted `Location2x` values are stable centered-`2x`
+part-origin coordinates, together with `coord_transform.center_2x` for world-grid replay.
 That assumption was validated against real canonical ships by reconstructing placements from anchor-relative offsets
 and checking both exact part origins and exact world footprint cells.
 
