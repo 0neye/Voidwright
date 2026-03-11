@@ -16,12 +16,34 @@ from pathlib import Path
 from typing import Dict, Iterator, Optional, Tuple
 
 Coord = Tuple[int, int]
+Coord2x = Tuple[int, int]
 DATA_DIR = Path(__file__).resolve().parent / "data"
 VANILLA_PARTS_PATH = DATA_DIR / "vanilla_parts_full_geometry.json"
 VANILLA_NAMESPACE = "cosmoteer."
 PART_ID_ALIASES = {
     "cosmoteer.electro_bolter": "cosmoteer.disruptor",
+    # The _L variant of each flippable wedge is identical to the base part.
+    # Confirmed via armor_1x2_wedge.rules / structure_1x2_wedge.rules:
+    #   OtherIDs includes both _L and _R; FlipWhenLoadingIDs lists only _R.
+    "cosmoteer.armor_1x2_wedge_L": "cosmoteer.armor_1x2_wedge",
+    "cosmoteer.structure_1x2_wedge_L": "cosmoteer.structure_1x2_wedge",
 }
+
+# Part IDs that map to a base part with a horizontal flip (mirror) applied on
+# load.  The _R wedge variants are stored under the base part ID in the geometry
+# database, but the game mirrors them when deserialising ship files.
+#
+# FlipH also remaps the rotation index.  The rules files specify:
+#   FlipHRotate = [0, 3, 2, 1]
+# meaning a part saved at rotation r is equivalent to the base part at rotation
+# FLIP_H_ROTATE[r] after mirroring.
+FLIP_H_PART_IDS: Dict[str, str] = {
+    "cosmoteer.armor_1x2_wedge_R": "cosmoteer.armor_1x2_wedge",
+    "cosmoteer.structure_1x2_wedge_R": "cosmoteer.structure_1x2_wedge",
+}
+# Rotation remapping applied together with a horizontal flip (index = saved
+# rotation, value = equivalent base-part rotation after mirroring).
+FLIP_H_ROTATE: Tuple[int, int, int, int] = (0, 3, 2, 1)
 
 # These fallback substrings are only used for unknown or non-vanilla parts.
 # They are intentionally conservative and derived from the vanilla corpus:
@@ -74,6 +96,32 @@ NON_TRAVERSABLE_HINTS = (
     "thermal_battery",
 )
 
+__all__ = [
+    "Coord",
+    "Coord2x",
+    "DATA_DIR",
+    "FLIP_H_PART_IDS",
+    "FLIP_H_ROTATE",
+    "NON_TRAVERSABLE_HINTS",
+    "PART_ID_ALIASES",
+    "PartMeta",
+    "PartRect",
+    "RotationGeometry",
+    "TRAVERSABLE_HINTS",
+    "VANILLA_NAMESPACE",
+    "VANILLA_PARTS_PATH",
+    "VanillaPartGeometry",
+    "infer_meta",
+    "is_vanilla_part_id",
+    "iter_ship_files",
+    "load_vanilla_part_geometry",
+    "normalize_part_id",
+    "parse_polygon_vertex",
+    "part_rect_to_2x_bounds",
+    "polygon_vertices_to_2x",
+    "resolve_geometry_part_id_and_rotation",
+]
+
 
 @dataclass(frozen=True)
 class PartRect:
@@ -97,6 +145,7 @@ class RotationGeometry:
     unblocked_tiles: frozenset[Coord]
     blocked_travel_cells: frozenset[Coord]
     allowed_door_locations: Tuple[Coord, ...]
+    polygon_vertices: Tuple[Tuple[float, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -135,6 +184,14 @@ def parse_coord(cell: object) -> Coord:
     return int(cell[0]), int(cell[1])
 
 
+def parse_polygon_vertex(vertex: object) -> Tuple[float, float]:
+    """Convert a raw polygon vertex payload into an `(x, y)` tuple."""
+
+    if not isinstance(vertex, (list, tuple)) or len(vertex) != 2:
+        raise ValueError(f"Expected a two-element polygon vertex, got {vertex!r}")
+    return float(vertex[0]), float(vertex[1])
+
+
 def parse_part_rect(raw_rect: object, *, source: str) -> Optional[PartRect]:
     """Convert a raw four-element rectangle payload into a typed PartRect.
 
@@ -157,6 +214,27 @@ def parse_part_rect(raw_rect: object, *, source: str) -> Optional[PartRect]:
         height=int(raw_rect[3]),
         source=source,
     )
+
+
+def polygon_vertices_to_2x(
+    vertices: Tuple[Tuple[float, float], ...],
+) -> Tuple[Coord2x, ...]:
+    """Convert local tile-space polygon vertices into exact integer 2x points."""
+
+    local_vertices_2x: list[Coord2x] = []
+    for vertex_x, vertex_y in vertices:
+        local_vertices_2x.append((int(round(vertex_x * 2)), int(round(vertex_y * 2))))
+    return tuple(local_vertices_2x)
+
+
+def part_rect_to_2x_bounds(
+    rect: Optional[PartRect],
+) -> Optional[Tuple[int, int, int, int]]:
+    """Convert a PartRect into `(x2, y2, width2, height2)` 2x-space bounds."""
+
+    if rect is None:
+        return None
+    return (rect.x * 2, rect.y * 2, rect.width * 2, rect.height * 2)
 
 
 def is_vanilla_part_id(part_id: str) -> bool:
@@ -210,6 +288,10 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
                     parse_coord(cell)
                     for cell in rotation_payload.get("allowed_door_locations", [])
                 ),
+                polygon_vertices=tuple(
+                    parse_polygon_vertex(vertex)
+                    for vertex in rotation_payload.get("polygon_vertices", [])
+                ),
             )
 
         if part_id and rotations:
@@ -248,6 +330,33 @@ def normalize_part_id(part: dict) -> Optional[str]:
     return PART_ID_ALIASES.get(part_id, part_id)
 
 
+def resolve_geometry_part_id_and_rotation(
+    part_id: str,
+    rotation: int,
+) -> Tuple[str, int]:
+    """Resolve aliases and mirrored IDs to geometry-cache lookup coordinates.
+
+    Args:
+        part_id: Raw or normalized part ID from ship data
+        rotation: Rotation index in Cosmoteer's 0-3 convention
+
+    Returns:
+        Tuple of `(geometry_part_id, geometry_rotation)` that can be used to
+        index `load_vanilla_part_geometry()`
+    """
+
+    resolved_part_id = PART_ID_ALIASES.get(part_id, part_id)
+    resolved_rotation = int(rotation) % 4
+
+    # `_R` wedge IDs are mirrored aliases that must map to the base part ID
+    # plus the FlipH rotation remap before indexing geometry caches.
+    if resolved_part_id in FLIP_H_PART_IDS:
+        resolved_part_id = FLIP_H_PART_IDS[resolved_part_id]
+        resolved_rotation = FLIP_H_ROTATE[resolved_rotation]
+
+    return resolved_part_id, resolved_rotation
+
+
 def infer_meta(part_id: str, rotation: int) -> Tuple[PartMeta, bool]:
     """Return `(PartMeta, is_inferred)` for one part ID and rotation.
 
@@ -259,6 +368,8 @@ def infer_meta(part_id: str, rotation: int) -> Tuple[PartMeta, bool]:
         A metadata record plus a flag indicating whether the result fell back to
         regex/name-hint inference instead of exact vanilla geometry
     """
+
+    part_id, rotation = resolve_geometry_part_id_and_rotation(part_id, rotation)
 
     vanilla_geometry = load_vanilla_part_geometry().get(part_id)
     if vanilla_geometry is not None:
@@ -320,21 +431,3 @@ def iter_ship_files(input_dir: Path) -> Iterator[Path]:
     yield from sorted(input_dir.glob("*.json"))
 
 
-__all__ = [
-    "Coord",
-    "DATA_DIR",
-    "NON_TRAVERSABLE_HINTS",
-    "PART_ID_ALIASES",
-    "PartMeta",
-    "PartRect",
-    "RotationGeometry",
-    "TRAVERSABLE_HINTS",
-    "VANILLA_NAMESPACE",
-    "VANILLA_PARTS_PATH",
-    "VanillaPartGeometry",
-    "infer_meta",
-    "is_vanilla_part_id",
-    "iter_ship_files",
-    "load_vanilla_part_geometry",
-    "normalize_part_id",
-]

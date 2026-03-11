@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from ship_layout.connectivity import parts_structurally_touch
+
 from .types import ShipPart
 
 __all__ = [
@@ -64,15 +66,9 @@ def order_ship_parts(
 
 
 def parts_touch(a: ShipPart, b: ShipPart, geometry_cache: Dict[str, object]) -> bool:
-    """Return True when two placed parts share at least one touching side"""
+    """Return True when two parts share at least one attachable hull side."""
 
-    a_cells = a.footprint_cells(geometry_cache)
-    b_cells = b.footprint_cells(geometry_cache)
-    for ax, ay in a_cells:
-        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            if (ax + dx, ay + dy) in b_cells:
-                return True
-    return False
+    return parts_structurally_touch(a, b, geometry_cache)
 
 
 def order_ship_parts_from_graph(

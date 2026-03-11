@@ -126,6 +126,7 @@ def validate_relative_placement_assumptions(
         "max_abs_dy": max_abs_dy,
         "summary": (
             "Origin-to-origin relative offsets reconstruct exact real-corpus part origins, "
-            "and the resulting vanilla footprint cells also match exactly for the checked canonical ships."
+            "and the resulting vanilla footprint cells also match exactly for the checked canonical ships. "
+            "Touching counts use shared structural hull-side checks."
         ),
     }

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, Sequence
 
 from common.geometry import load_vanilla_part_geometry
+from ship_layout.validation import placement_within_bounds
 
 from .corpus import iter_vanilla_parts_from_graph, iter_vanilla_parts_from_ship
 from .generation import WeightedSampler, generate_ship_layout
@@ -88,29 +89,38 @@ class RelativeMarkovModel:
     def _placement_within_bounds(self, part: ShipPart, config: GenerationConfig) -> bool:
         """Return True when all footprint cells fit within configured bounds"""
 
-        for x, y in part.footprint_cells(self.geometry_cache):
-            if not (
-                config.bounds_min_x <= x <= config.bounds_max_x
-                and config.bounds_min_y <= y <= config.bounds_max_y
-            ):
-                return False
-        return True
+        return placement_within_bounds(
+            part,
+            self.geometry_cache,
+            min_x=config.bounds_min_x,
+            max_x=config.bounds_max_x,
+            min_y=config.bounds_min_y,
+            max_y=config.bounds_max_y,
+        )
 
     def _within_primary_bounds(self, part: ShipPart, config: GenerationConfig) -> bool:
         """Return True when a primary part stays on the left side in mirror mode"""
 
-        for x, y in part.footprint_cells(self.geometry_cache):
-            if not (config.bounds_min_x <= x <= -1 and config.bounds_min_y <= y <= config.bounds_max_y):
-                return False
-        return True
+        return placement_within_bounds(
+            part,
+            self.geometry_cache,
+            min_x=config.bounds_min_x,
+            max_x=-1,
+            min_y=config.bounds_min_y,
+            max_y=config.bounds_max_y,
+        )
 
     def _within_mirror_bounds(self, part: ShipPart, config: GenerationConfig) -> bool:
         """Return True when a mirrored part stays on the right side in mirror mode"""
 
-        for x, y in part.footprint_cells(self.geometry_cache):
-            if not (0 <= x <= config.bounds_max_x and config.bounds_min_y <= y <= config.bounds_max_y):
-                return False
-        return True
+        return placement_within_bounds(
+            part,
+            self.geometry_cache,
+            min_x=0,
+            max_x=config.bounds_max_x,
+            min_y=config.bounds_min_y,
+            max_y=config.bounds_max_y,
+        )
 
     def generate(self, config: GenerationConfig, *, seed_parts=None) -> dict:
         """Generate a ship layout from this model

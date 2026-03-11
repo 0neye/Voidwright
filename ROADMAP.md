@@ -8,7 +8,7 @@
 
 
 ## Preprocessing:
-
+...
 
 ### Relative coords transform:
 Goal:
@@ -17,10 +17,7 @@ Normalize ship positions into a canonical local coordinate frame so model inputs
 Reasoning:
 Current preprocessing preserves absolute placement on the global grid, which can introduce unnecessary variance from arbitrary ship offsets. We want to remove this failure mode now in a way that also supports future architectures (e.g., heterogeneous graph transformers). Because many ships have even dimensions and no single center cell, use an integer-only 2x scaled coordinate frame centered on the occupied-cell bbox center (allowing half-cell centers without floats). Keep transform metadata so coordinates can be mapped back exactly when needed.
 
-
-## Geometry:
-
-
+Status: Completed
 
 
 ## Graphs:
@@ -55,7 +52,14 @@ Graph design: be selective with shortcut edges, don’t create a fake dense grap
 
 ## Verification Layer:
 
-Before implementing a generator, we should implement a robust verification system for part candidates. We should expand this beyond the simple connection/collision checks to include things like crew traversal access, dead zone/exclusion zone overlap, weapon firing arc restrictions, and shield bubble interference.
+1.
+We need to expand the part verification system to check the actual non-rectangular part geometry for applicable parts. These include all wedge/triangle parts, as well as any parts with a physical rect field. Those with a physical
+
+2.
+dead zone/exclusion zone overlap
+
+3.
+Before implementing a generator, we should implement a robust verification system for part candidates. We should expand this beyond the simple connection/collision checks to include things like crew traversal access, weapon firing arc restrictions, and shield bubble interference.
 
 
 ## Generator:

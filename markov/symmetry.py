@@ -45,6 +45,8 @@ from __future__ import annotations
 
 from typing import Dict
 
+from ship_layout.validation import is_primary_placement as _is_primary_placement
+
 __all__ = [
     "MIRROR_ROTATION",
     "PART_MIRROR_ROTATION_OVERRIDES",
@@ -152,7 +154,7 @@ def primary_root_x(part_id: str, rotation: int, geometry_cache: dict) -> int:
 def is_primary_placement(part, geometry_cache: dict) -> bool:
     """Return True when all footprint cells of *part* are on the primary side."""
 
-    return all(cell_x <= -1 for cell_x, _cell_y in part.footprint_cells(geometry_cache))
+    return _is_primary_placement(part, geometry_cache)
 
 
 def verify_mirror_footprint(part, mirror, geometry_cache: dict) -> bool:

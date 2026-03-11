@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from common.geometry import PartMeta, infer_meta, load_vanilla_part_geometry, normalize_part_id
+from ship_layout.connectivity import shared_attachment_sides
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
 from .layout_helpers import door_adjacent_cells
 
@@ -170,8 +171,23 @@ def part_walkable_cells(part: dict, meta: PartMeta) -> Set[Coord]:
     return set()
 
 
-def structural_edges(part_records: List[dict], cell_to_parts: Dict[Coord, Set[int]]) -> List[dict]:
-    """Build conservative touching edges between distinct parts."""
+def _part_from_record(record: dict) -> dict:
+    """Convert one graph part record into a shared placement input payload."""
+
+    return {
+        "part_id": str(record["part_id"]),
+        "rotation": int(record["rotation"]) % 4,
+        "x": int(record["location"][0]),
+        "y": int(record["location"][1]),
+    }
+
+
+def structural_edges(
+    part_records: List[dict],
+    cell_to_parts: Dict[Coord, Set[int]],
+    geometry_cache: Dict[str, object],
+) -> List[dict]:
+    """Build structural-touching edges between distinct parts."""
 
     adjacency: Dict[Tuple[int, int], dict] = {}
     directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
@@ -187,16 +203,19 @@ def structural_edges(part_records: List[dict], cell_to_parts: Dict[Coord, Set[in
                     if owner_a == owner_b:
                         continue
                     key = (owner_a, owner_b) if owner_a < owner_b else (owner_b, owner_a)
-                    edge = adjacency.setdefault(
-                        key,
-                        {
-                            "source": key[0],
-                            "target": key[1],
-                            "kind": "touching",
-                            "shared_sides": 0,
-                        },
-                    )
-                    edge["shared_sides"] += 1
+                    if key in adjacency:
+                        continue
+                    source_part = _part_from_record(part_records[key[0]])
+                    target_part = _part_from_record(part_records[key[1]])
+                    shared_sides = shared_attachment_sides(source_part, target_part, geometry_cache)
+                    if not shared_sides:
+                        continue
+                    adjacency[key] = {
+                        "source": key[0],
+                        "target": key[1],
+                        "kind": "touching",
+                        "shared_sides": len(shared_sides),
+                    }
 
     return sorted(adjacency.values(), key=lambda edge: (edge["source"], edge["target"]))
 
@@ -365,7 +384,7 @@ def process_ship(ship_path: Path) -> dict:
         for record in part_records
     ]
 
-    structure_edges = structural_edges(part_records, cell_to_parts)
+    structure_edges = structural_edges(part_records, cell_to_parts, load_vanilla_part_geometry())
     cells = cell_graph(part_records, cell_to_parts, doors, center_2x=center_2x)
 
     return {
@@ -401,6 +420,12 @@ def process_ship(ship_path: Path) -> dict:
                 "Vanilla part footprints use exact game-file tile data via "
                 "load_vanilla_part_geometry(). Non-vanilla and unknown parts use regex "
                 "dimension inference with rectangular approximation."
+            ),
+            "structural_touch_model": (
+                "Structural edges require a shared attachable hull side. Polygon parts "
+                "(wedge/tri) use axis-aligned polygon edges, parts with physical_rect use "
+                "their core body rect, and remaining parts fall back to footprint boundaries. "
+                "shared_sides counts unit 2x attachment segments, not footprint-cell adjacencies."
             ),
             "door_model": (
                 "Door.Cell names the right or bottom occupied cell of the doorway span. "

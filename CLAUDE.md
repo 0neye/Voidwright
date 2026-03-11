@@ -131,3 +131,4 @@ Co-Authored-By: <model-name>
 - **Graph training silently skips bad corpus files.** `markov/model.py` ignores malformed/unreadable graph JSON files and also ignores `manifest.json` when scanning `--graph-input-dir`.
 - **Build-time validation requires canonical corpus input.** In `training/backends/markov/backend.py`, `--validation-output` only executes when `--input-dir` is provided; graph-only builds skip validation.
 - **Part requirements merge by max, not sum.** `markov/inputs.py` merges duplicate requirement entries by per-part maximum required count.
+- **Python module exports should be declared near the top.** New Python modules should define `__all__` near the top of the file (after imports) instead of at the bottom.

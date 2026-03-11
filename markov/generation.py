@@ -6,6 +6,9 @@ import random
 from dataclasses import asdict
 from typing import Dict, List, Optional
 
+from ship_layout.connectivity import parts_structurally_touch
+from ship_layout.validation import part_overlaps_occupied_cells
+
 from .types import Coord, END_TOKEN, GenerationConfig, RelativePlacementToken, ShipPart, _config_as_dict
 
 __all__ = ["WeightedSampler", "generate_ship_layout"]
@@ -15,6 +18,25 @@ def _requirements_satisfied(part_counts: Dict[str, int], requirements: dict) -> 
     """Return True if all (part_id -> min_count) requirements are met"""
 
     return all(part_counts.get(part_id, 0) >= required for part_id, required in requirements.items())
+
+
+def _is_structurally_connected_to_anchor(
+    candidate_part: ShipPart,
+    anchor_part: ShipPart,
+    geometry_cache: Dict[str, object],
+) -> bool:
+    """Return True when a candidate part shares a structural hull side with its anchor.
+
+    Args:
+        candidate_part: Newly sampled part placement candidate
+        anchor_part: Existing placed part chosen as this token's anchor
+        geometry_cache: Loaded vanilla geometry metadata used for hull checks
+
+    Returns:
+        True when candidate and anchor share at least one attachable side segment
+    """
+
+    return parts_structurally_touch(candidate_part, anchor_part, geometry_cache)
 
 
 class WeightedSampler:
@@ -61,6 +83,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None) ->
     rejected_overlap = 0
     rejected_bounds = 0
     rejected_mirror = 0
+    rejected_structural = 0
     rejected_requirements = 0
     stop_reason = "unknown"
 
@@ -109,7 +132,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None) ->
                 continue
 
             seed_cells = seed_part.footprint_cells(model.geometry_cache)
-            if seed_cells & occupied_cells:
+            if part_overlaps_occupied_cells(seed_part, model.geometry_cache, occupied_cells):
                 seed_skipped_overlap += 1
                 continue
 
@@ -335,11 +358,22 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None) ->
                 )
                 candidate_cells = candidate.footprint_cells(model.geometry_cache)
 
+                # Tokens are trained from anchor-relative deltas but still need
+                # runtime geometry validation because wedge/overhang placements
+                # can be adjacent without a true structural hull connection.
+                if not _is_structurally_connected_to_anchor(
+                    candidate,
+                    anchor_part,
+                    model.geometry_cache,
+                ):
+                    rejected_structural += 1
+                    continue
+
                 if mirror_mode:
                     if not model._within_primary_bounds(candidate, config):
                         rejected_bounds += 1
                         continue
-                    if candidate_cells & occupied_cells:
+                    if part_overlaps_occupied_cells(candidate, model.geometry_cache, occupied_cells):
                         rejected_overlap += 1
                         continue
                     mirror_candidate = _mirror_part(candidate, model.geometry_cache)
@@ -347,7 +381,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None) ->
                         rejected_mirror += 1
                         continue
                     mirror_cells = mirror_candidate.footprint_cells(model.geometry_cache)
-                    if mirror_cells & occupied_cells:
+                    if part_overlaps_occupied_cells(mirror_candidate, model.geometry_cache, occupied_cells):
                         rejected_mirror += 1
                         continue
                     if not model._within_mirror_bounds(mirror_candidate, config):
@@ -387,7 +421,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None) ->
                         }
                     )
                 else:
-                    if candidate_cells & occupied_cells:
+                    if part_overlaps_occupied_cells(candidate, model.geometry_cache, occupied_cells):
                         rejected_overlap += 1
                         continue
                     if not model._placement_within_bounds(candidate, config):
@@ -452,6 +486,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None) ->
             "missing_anchor": rejected_missing_anchor,
             "overlap": rejected_overlap,
             "bounds": rejected_bounds,
+            "structural": rejected_structural,
             "allowlist": rejected_allowlist,
             "requirements": rejected_requirements,
         },
@@ -482,6 +517,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None) ->
     notes = [
         "Vanilla-only first-pass relative-placement Markov sample.",
         "Overlap rejection is footprint-aware using vanilla game-file geometry.",
+        "Anchor deltas are additionally validated with structural hull-side contact checks.",
         "Doors and accessibility cleanup are intentionally deferred to later passes.",
     ]
     if mirror_mode:

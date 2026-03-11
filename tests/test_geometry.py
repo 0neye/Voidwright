@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from common.geometry import VANILLA_PARTS_PATH, infer_meta, load_vanilla_part_geometry
+from common.geometry import (
+    VANILLA_PARTS_PATH,
+    infer_meta,
+    load_vanilla_part_geometry,
+    polygon_vertices_to_2x,
+)
 
 
 def test_unknown_part_fallback_preserves_generic_traversable_aliases() -> None:
@@ -51,3 +56,24 @@ def test_full_geometry_loader_exposes_rect_metadata() -> None:
     assert shield_large.physical_rect is not None
     assert (shield_large.physical_rect.x, shield_large.physical_rect.y) == (0, 2)
     assert (shield_large.physical_rect.width, shield_large.physical_rect.height) == (3, 4)
+
+
+def test_rotation_geometry_exposes_polygon_vertices_for_wedges_and_triangles(
+) -> None:
+    """Wedge and tri parts should keep per-rotation polygon vertices."""
+
+    geometry_cache = load_vanilla_part_geometry()
+    wedge = geometry_cache["cosmoteer.armor_1x2_wedge"].rotations[0]
+    tri = geometry_cache["cosmoteer.armor_tri"].rotations[0]
+
+    assert wedge.polygon_vertices == ((1.0, 0.0), (1.0, 2.0), (0.0, 2.0))
+    assert tri.polygon_vertices == ((0.5, 0.5), (1.0, 1.0), (0.0, 1.0))
+
+
+def test_triangle_polygon_vertices_convert_cleanly_to_integer_2x_coordinates() -> None:
+    """Half-tile triangle points should become integer points in 2x space."""
+
+    geometry_cache = load_vanilla_part_geometry()
+    tri_vertices = geometry_cache["cosmoteer.armor_tri"].rotations[0].polygon_vertices
+
+    assert polygon_vertices_to_2x(tri_vertices) == ((1, 1), (2, 2), (0, 2))
