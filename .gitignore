@@ -23,6 +23,8 @@ generated_ship_graphs/
 generated_ship_graphs_canonical/
 models/
 out/
+tmp*
+tmp*/
 
 # Derived rules / model data / exported ship files
 

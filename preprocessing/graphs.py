@@ -41,11 +41,28 @@ def normalize_doors(value: object) -> List[dict]:
 
     if not isinstance(value, list):
         return []
-    return [
-        door
-        for door in value
-        if isinstance(door, dict) and "Cell" in door and "Orientation" in door
-    ]
+    normalized_doors: List[dict] = []
+    for door in value:
+        if not isinstance(door, dict):
+            continue
+
+        cell = door.get("Cell")
+        if not isinstance(cell, list) or len(cell) != 2:
+            continue
+        if "Orientation" not in door:
+            continue
+
+        # Preserve normalized door records explicitly so downstream replay and
+        # future generation passes can emit real ship doors instead of only
+        # inferring traversable edges from the cell graph summary.
+        normalized_doors.append(
+            {
+                "Cell": [int(cell[0]), int(cell[1])],
+                "Orientation": int(door["Orientation"]),
+            }
+        )
+
+    return normalized_doors
 
 
 def part_cells(part: dict, meta: PartMeta) -> Set[Coord]:
@@ -287,7 +304,11 @@ def process_ship(ship_path: Path) -> dict:
             "version": data.get("Version"),
             "flight_direction": data.get("FlightDirection"),
         },
-        "schema_version": 2,
+        "schema_version": 3,
+        # Keep normalized door records alongside the derived graph so callers can
+        # later replay or synthesize doors without reverse-engineering them from
+        # graph edges and summary counters.
+        "doors": doors,
         "assumptions": {
             "geometry_model": (
                 "Vanilla part footprints use exact game-file tile data via "
@@ -317,6 +338,7 @@ def process_ship(ship_path: Path) -> dict:
         },
         "validation": {
             "normalized_part_count": len(parts),
+            "normalized_door_count": len(doors),
             "raw_part_count": len(raw_parts) if isinstance(raw_parts, list) else 0,
             "unknown_part_ids": dict(sorted(unknown_part_ids.items())),
         },
@@ -386,7 +408,7 @@ def generate_all(
     manifest = {
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
-        "schema_version": 2,
+        "schema_version": 3,
         "geometry_source": "game-file canonical (load_vanilla_part_geometry)",
         "ships_processed": 0,
         "ships_with_unknown_part_ids": 0,

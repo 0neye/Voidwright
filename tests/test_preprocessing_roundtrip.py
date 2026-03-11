@@ -11,7 +11,7 @@ from markov.model import ShipPart
 from preprocessing.pipeline import run_pipeline
 
 
-def _build_normalized_ship(parts: list[dict], *, name: str) -> dict:
+def _build_normalized_ship(parts: list[dict], *, name: str, doors: list[dict] | None = None) -> dict:
     """Build a minimal normalized ship payload for end-to-end roundtrip tests."""
 
     return {
@@ -26,7 +26,7 @@ def _build_normalized_ship(parts: list[dict], *, name: str) -> dict:
         "RoofDecalColor1": ["9A99193E", "9A99193E", "9A99193E", "0000803F"],
         "RoofDecalColor2": ["0000803F", "0000803F", "0000803F", "0000803F"],
         "Parts": parts,
-        "Doors": [],
+        "Doors": doors or [],
     }
 
 
@@ -48,6 +48,23 @@ def _sorted_parts(parts: list[dict]) -> list[tuple]:
     """Sort normalized ship parts into a stable canonical order."""
 
     return sorted(_normalize_part_for_comparison(part) for part in parts)
+
+
+def _normalize_door_for_comparison(door: dict) -> tuple:
+    """Return a stable comparable tuple for one normalized ship door."""
+
+    cell = door.get("Cell", [0, 0])
+    return (
+        int(cell[0]),
+        int(cell[1]),
+        int(door.get("Orientation", 0)),
+    )
+
+
+def _sorted_doors(doors: list[dict]) -> list[tuple]:
+    """Sort normalized ship doors into a stable canonical order."""
+
+    return sorted(_normalize_door_for_comparison(door) for door in doors)
 
 
 def _place_part_on_rightmost_frontier(
@@ -137,6 +154,21 @@ def _build_connected_all_vanilla_parts_ship(*, name: str) -> dict:
     return _build_normalized_ship(normalized_parts, name=name)
 
 
+def _build_two_corridors_with_shared_door(*, name: str) -> dict:
+    """Build a minimal traversable ship with one preserved vertical door."""
+
+    # Use two adjacent corridors so the door sits on a simple, fully walkable
+    # occupied-cell boundary that the graph stage can preserve exactly.
+    return _build_normalized_ship(
+        [
+            {"ID": "cosmoteer.corridor", "Location": [0, 0], "Rotation": 0},
+            {"ID": "cosmoteer.corridor", "Location": [0, 1], "Rotation": 0},
+        ],
+        doors=[{"Cell": [0, 1], "Orientation": 0}],
+        name=name,
+    )
+
+
 def test_pipeline_roundtrip_replays_all_vanilla_parts_from_graph(tmp_path: Path) -> None:
     """The full preprocessing pipeline should replay all vanilla parts exactly."""
 
@@ -186,6 +218,7 @@ def test_pipeline_roundtrip_replays_all_vanilla_parts_from_graph(tmp_path: Path)
     assert graph_payload["graphs"]["A_structural_part_graph"]["summary"]["parts"] == len(
         normalized_ship["Parts"]
     )
+    assert graph_payload["doors"] == []
 
     generated_payload = graph_to_generated_parts_payload(graph_payload, name="graph-replay")
     export_result = export_ship_png(generated_payload, exported_path, validate=True)
@@ -194,6 +227,67 @@ def test_pipeline_roundtrip_replays_all_vanilla_parts_from_graph(tmp_path: Path)
     assert export_result["valid"] is True
     assert generated_payload["stats"]["stop_reason"] == "graph_replay"
     assert len(generated_payload["parts"]) == len(normalized_ship["Parts"])
+    assert generated_payload["doors"] == []
+    assert _sorted_parts(reparsed_payload["Parts"]) == _sorted_parts(normalized_ship["Parts"])
+
+
+def test_pipeline_roundtrip_replays_doors_from_graph(tmp_path: Path) -> None:
+    """The full preprocessing pipeline should preserve and replay doors exactly."""
+
+    normalized_ship = _build_two_corridors_with_shared_door(name="door-roundtrip")
+    source_path = tmp_path / "door-roundtrip.ship.png"
+    extracted_dir = tmp_path / "extracted"
+    canonical_dir = tmp_path / "canonical"
+    graph_dir = tmp_path / "graphs"
+    exported_path = tmp_path / "door-replayed.ship.png"
+
+    source_path.write_bytes(create_ship_png_bytes(normalized_ship))
+
+    # Persist every stage so the test can verify that explicit door records
+    # survive the whole preprocessing and replay pipeline without inference.
+    pipeline_payload = run_pipeline(
+        input_paths=[source_path],
+        output_dir=graph_dir,
+        write_extracted_dir=extracted_dir,
+        write_canonical_dir=canonical_dir,
+        extract_workers=1,
+        extract_executor="thread",
+        canonicalize_workers=1,
+        canonicalize_executor="thread",
+        graph_workers=1,
+        graph_executor="thread",
+    )
+
+    extracted_path = extracted_dir / output_name_for_ship_png(source_path)
+    canonical_path = canonical_dir / output_name_for_ship_png(source_path)
+    graph_path = graph_dir / output_name_for_ship_png(source_path)
+
+    extracted_payload = json.loads(extracted_path.read_text(encoding="utf-8"))
+    canonical_payload = json.loads(canonical_path.read_text(encoding="utf-8"))
+    graph_payload = json.loads(graph_path.read_text(encoding="utf-8"))
+
+    assert pipeline_payload["graphs"]["ships_processed"] == 1
+    assert _sorted_doors(extracted_payload["Doors"]) == _sorted_doors(normalized_ship["Doors"])
+    assert _sorted_doors(canonical_payload["Doors"]) == _sorted_doors(normalized_ship["Doors"])
+    assert _sorted_doors(graph_payload["doors"]) == _sorted_doors(normalized_ship["Doors"])
+    assert graph_payload["validation"]["normalized_door_count"] == len(normalized_ship["Doors"])
+
+    cell_graph_summary = graph_payload["graphs"]["C_cell_graph"]["summary"]
+    assert cell_graph_summary["door_records"] == 1
+    assert cell_graph_summary["valid_door_edges"] == 1
+    assert cell_graph_summary["blocked_door_records"] == 0
+    assert cell_graph_summary["dangling_door_records"] == 0
+
+    generated_payload = graph_to_generated_parts_payload(graph_payload, name="door-graph-replay")
+    export_result = export_ship_png(generated_payload, exported_path, validate=True)
+    reparsed_payload = parse_ship_png(exported_path)
+
+    assert generated_payload["stats"]["doors_preserved"] == len(normalized_ship["Doors"])
+    assert _sorted_doors(generated_payload["doors"]) == _sorted_doors(normalized_ship["Doors"])
+    assert export_result["doors_exported"] == len(normalized_ship["Doors"])
+    assert export_result["valid"] is True
+    assert export_result["roundtrip"]["doors_match"] is True
+    assert _sorted_doors(reparsed_payload["Doors"]) == _sorted_doors(normalized_ship["Doors"])
     assert _sorted_parts(reparsed_payload["Parts"]) == _sorted_parts(normalized_ship["Parts"])
 
 
@@ -226,6 +320,8 @@ def test_graph_replay_payload_preserves_unknown_part_nodes() -> None:
 
     assert generated_payload["name"] == "mixed-graph"
     assert generated_payload["stats"]["parts_generated"] == 2
+    assert generated_payload["stats"]["doors_preserved"] == 0
+    assert generated_payload["doors"] == []
     assert generated_payload["parts"] == [
         {
             "part_id": "cosmoteer.corridor",

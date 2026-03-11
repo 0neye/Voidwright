@@ -4,9 +4,9 @@ This module converts the generator's output format (list of ShipPart dicts with
 ``part_id / rotation / x / y``) into the Cosmoteer binary format and embeds it
 into a carrier PNG, ready to be loaded in-game.
 
-Limitations (first-pass export):
-- No doors are synthesised.  Generated ships will load but crews have no paths
-  to many rooms.  Door synthesis is a second-pass concern.
+Limitations (current export):
+- Door records are preserved when the input payload already contains them, but
+  stochastic generation still does not synthesise new doors yet.
 - Color fields use game-default values; the ship will appear with default
   roof / crew colours.
 - Decals, PartControlGroups, PartUIToggleStates and WeaponSelfTargets are
@@ -21,7 +21,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from common.cosmoteer import create_ship_png_bytes, parse_ship_png, write_ship_png
+from common.cosmoteer import create_ship_png_bytes, write_ship_png
 
 
 # ── default field values ──────────────────────────────────────────────────────
@@ -57,8 +57,37 @@ def generated_parts_to_cosmoteer_parts(parts: list[dict]) -> list[dict]:
     return result
 
 
+def generated_doors_to_cosmoteer_doors(doors: list[dict]) -> list[dict]:
+    """Convert generator door dicts to Cosmoteer ``Doors`` format.
+
+    The generator currently uses the same field names as the Cosmoteer payload
+    so graph replay can preserve normalized door records losslessly.
+    """
+
+    normalized_doors = []
+    for door in doors:
+        if not isinstance(door, dict):
+            continue
+
+        cell = door.get("Cell")
+        if not isinstance(cell, list) or len(cell) != 2:
+            continue
+        if "Orientation" not in door:
+            continue
+
+        normalized_doors.append(
+            {
+                "Cell": [int(cell[0]), int(cell[1])],
+                "Orientation": int(door["Orientation"]),
+            }
+        )
+
+    return normalized_doors
+
+
 def make_minimal_ship_dict(
     parts: list[dict],
+    doors: list[dict] | None = None,
     name: str = "generated",
     flight_direction: int = 1,
     ship_rules_id: str = "cosmoteer.terran",
@@ -66,8 +95,7 @@ def make_minimal_ship_dict(
     """Build a minimal Cosmoteer ship dict from a list of Cosmoteer-format parts.
 
     Only the fields essential for in-game loading are included.  The game treats
-    absent optional fields as defaults, so the ship should load and be flyable
-    (without doors / accessibility cleanup).
+    absent optional fields as defaults, so the ship should load and be flyable.
     """
     return {
         "Version": 1,
@@ -81,7 +109,7 @@ def make_minimal_ship_dict(
         "RoofDecalColor1": _DEFAULT_DECAL_COLOR1,
         "RoofDecalColor2": _DEFAULT_DECAL_COLOR2,
         "Parts": parts,
-        "Doors": [],
+        "Doors": doors or [],
     }
 
 
@@ -100,6 +128,7 @@ def graph_to_generated_parts_payload(
         Generator-style JSON payload containing exact replayable part placements
     """
     nodes = graph_data.get("graphs", {}).get("A_structural_part_graph", {}).get("nodes", [])
+    graph_doors = generated_doors_to_cosmoteer_doors(graph_data.get("doors", []))
     generated_parts = []
     for node in nodes:
         if not isinstance(node, dict):
@@ -128,14 +157,28 @@ def graph_to_generated_parts_payload(
         "generator": "graph_replay",
         "stats": {
             "parts_generated": len(generated_parts),
+            "doors_preserved": len(graph_doors),
             "stop_reason": "graph_replay",
         },
         "parts": generated_parts,
+        "doors": graph_doors,
         "notes": [
             "Deterministic replay of normalized part placements from preprocessing graph JSON.",
+            "Normalized door records are preserved explicitly when present in the graph payload.",
             "This payload intentionally bypasses stochastic Markov sampling.",
         ],
     }
+
+
+def _normalize_door_for_comparison(door: dict) -> tuple:
+    """Return a stable comparable tuple for one Cosmoteer-format door."""
+
+    cell = door.get("Cell", [])
+    return (
+        int(cell[0]) if isinstance(cell, list) and len(cell) == 2 else 0,
+        int(cell[1]) if isinstance(cell, list) and len(cell) == 2 else 0,
+        int(door.get("Orientation", 0)),
+    )
 
 
 # ── roundtrip validation ──────────────────────────────────────────────────────
@@ -149,17 +192,25 @@ def roundtrip_validate(generated_json: dict) -> dict:
         parts_in     – int
         parts_out    – int
         parts_match  – bool
-        mismatches   – list of dicts describing any discrepancies
+        mismatches   – list of dicts describing any part discrepancies
+        doors_in     – int
+        doors_out    – int
+        doors_match  – bool
+        door_mismatches – list of dicts describing any door discrepancies
         warnings     – list of str
         png_bytes    – int (size of generated PNG)
     """
     cosmoteer_parts = generated_parts_to_cosmoteer_parts(generated_json.get("parts", []))
-    ship_dict = make_minimal_ship_dict(cosmoteer_parts, name=generated_json.get("name", "generated"))
+    cosmoteer_doors = generated_doors_to_cosmoteer_doors(generated_json.get("doors", []))
+    ship_dict = make_minimal_ship_dict(
+        cosmoteer_parts,
+        doors=cosmoteer_doors,
+        name=generated_json.get("name", "generated"),
+    )
 
     png_bytes = create_ship_png_bytes(ship_dict)
 
     # Re-extract using the parser
-    import io as _io
     from common.cosmoteer.parser import _decode_ship_data, _extract_embedded_payload
 
     try:
@@ -171,15 +222,23 @@ def roundtrip_validate(generated_json: dict) -> dict:
             "parts_in": len(cosmoteer_parts),
             "parts_out": 0,
             "parts_match": False,
+            "doors_in": len(cosmoteer_doors),
+            "doors_out": 0,
+            "doors_match": False,
             "mismatches": [],
+            "door_mismatches": [],
             "warnings": [f"extraction failed: {exc}"],
             "png_bytes": len(png_bytes),
         }
 
     extracted_parts = extracted.get("Parts", [])
+    extracted_doors = extracted.get("Doors", [])
     parts_in = len(cosmoteer_parts)
     parts_out = len(extracted_parts)
+    doors_in = len(cosmoteer_doors)
+    doors_out = len(extracted_doors)
     mismatches = []
+    door_mismatches = []
     warnings = []
 
     if parts_in != parts_out:
@@ -222,8 +281,49 @@ def roundtrip_validate(generated_json: dict) -> dict:
                 },
             })
 
+    if doors_in != doors_out:
+        warnings.append(f"door count mismatch: encoded {doors_in}, extracted {doors_out}")
+
+    original_sorted_doors = sorted(_normalize_door_for_comparison(door) for door in cosmoteer_doors)
+    extracted_sorted_doors = sorted(
+        _normalize_door_for_comparison(door)
+        for door in extracted_doors
+        if isinstance(door, dict)
+    )
+    if original_sorted_doors != extracted_sorted_doors:
+        # Compare sorted normalized tuples so replay validation remains stable
+        # even if a future encoder/parser changes door record ordering.
+        max_door_count = max(len(original_sorted_doors), len(extracted_sorted_doors))
+        for index in range(max_door_count):
+            original_door = original_sorted_doors[index] if index < len(original_sorted_doors) else None
+            extracted_door = extracted_sorted_doors[index] if index < len(extracted_sorted_doors) else None
+            if original_door == extracted_door:
+                continue
+            door_mismatches.append(
+                {
+                    "index": index,
+                    "orig": (
+                        {
+                            "Cell": [original_door[0], original_door[1]],
+                            "Orientation": original_door[2],
+                        }
+                        if original_door is not None
+                        else None
+                    ),
+                    "extracted": (
+                        {
+                            "Cell": [extracted_door[0], extracted_door[1]],
+                            "Orientation": extracted_door[2],
+                        }
+                        if extracted_door is not None
+                        else None
+                    ),
+                }
+            )
+
     parts_match = parts_in == parts_out and len(mismatches) == 0
-    ok = parts_match and len(warnings) == 0
+    doors_match = doors_in == doors_out and len(door_mismatches) == 0
+    ok = parts_match and doors_match and len(warnings) == 0
 
     # Sanity-check version and basic fields
     if extracted.get("Version") != ship_dict.get("Version"):
@@ -244,7 +344,11 @@ def roundtrip_validate(generated_json: dict) -> dict:
         "parts_in": parts_in,
         "parts_out": parts_out,
         "parts_match": parts_match,
+        "doors_in": doors_in,
+        "doors_out": doors_out,
+        "doors_match": doors_match,
         "mismatches": mismatches[:20],
+        "door_mismatches": door_mismatches[:20],
         "warnings": warnings,
         "png_bytes": len(png_bytes),
     }
@@ -277,12 +381,14 @@ def export_ship_png(
         name = output_path.stem.replace(".ship", "")
 
     cosmoteer_parts = generated_parts_to_cosmoteer_parts(generated_json.get("parts", []))
-    ship_dict = make_minimal_ship_dict(cosmoteer_parts, name=name)
+    cosmoteer_doors = generated_doors_to_cosmoteer_doors(generated_json.get("doors", []))
+    ship_dict = make_minimal_ship_dict(cosmoteer_parts, doors=cosmoteer_doors, name=name)
     write_ship_png(ship_dict, output_path)
 
     result: dict[str, Any] = {
         "output_path": str(output_path),
         "parts_exported": len(cosmoteer_parts),
+        "doors_exported": len(cosmoteer_doors),
         "ship_name": name,
         "generator_stop_reason": generated_json.get("stats", {}).get("stop_reason", "unknown"),
     }
