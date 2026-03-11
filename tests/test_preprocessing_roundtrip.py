@@ -67,6 +67,49 @@ def _sorted_doors(doors: list[dict]) -> list[tuple]:
     return sorted(_normalize_door_for_comparison(door) for door in doors)
 
 
+def _grid_from_local_2x(point: list[int], center_2x: list[int]) -> list[int]:
+    """Convert one centered `2x` coordinate into global grid coordinates."""
+
+    return [
+        (int(point[0]) + int(center_2x[0])) // 2,
+        (int(point[1]) + int(center_2x[1])) // 2,
+    ]
+
+
+def _sorted_parts_from_relative_payload(payload: dict) -> list[tuple]:
+    """Normalize a centered-`2x` payload into stable world-grid part tuples."""
+
+    center_2x = payload.get("coord_transform", {}).get("center_2x", [0, 0])
+    normalized_parts = []
+    for part in payload.get("Parts", []):
+        location = _grid_from_local_2x(part["Location2x"], center_2x)
+        normalized_parts.append(
+            {
+                "ID": part["ID"],
+                "Location": location,
+                "Rotation": part.get("Rotation", 0),
+                "FlipX": part.get("FlipX", False),
+                "FlipY": part.get("FlipY", False),
+            }
+        )
+    return _sorted_parts(normalized_parts)
+
+
+def _sorted_doors_from_relative_payload(payload: dict) -> list[tuple]:
+    """Normalize a centered-`2x` payload into stable world-grid door tuples."""
+
+    center_2x = payload.get("coord_transform", {}).get("center_2x", [0, 0])
+    normalized_doors = []
+    for door in payload.get("Doors", []):
+        normalized_doors.append(
+            {
+                "Cell": _grid_from_local_2x(door["Cell2x"], center_2x),
+                "Orientation": door.get("Orientation", 0),
+            }
+        )
+    return _sorted_doors(normalized_doors)
+
+
 def _place_part_on_rightmost_frontier(
     *,
     part_id: str,
@@ -208,8 +251,8 @@ def test_pipeline_roundtrip_replays_all_vanilla_parts_from_graph(tmp_path: Path)
     canonical_payload = json.loads(canonical_path.read_text(encoding="utf-8"))
     graph_payload = json.loads(graph_path.read_text(encoding="utf-8"))
 
-    assert _sorted_parts(extracted_payload["Parts"]) == _sorted_parts(normalized_ship["Parts"])
-    assert _sorted_parts(canonical_payload["Parts"]) == _sorted_parts(normalized_ship["Parts"])
+    assert _sorted_parts_from_relative_payload(extracted_payload) == _sorted_parts(normalized_ship["Parts"])
+    assert _sorted_parts_from_relative_payload(canonical_payload) == _sorted_parts(normalized_ship["Parts"])
 
     assert pipeline_payload["extract_exit_code"] == 0
     assert pipeline_payload["canonicalization"]["parsed_input_json_files"] == 1
@@ -265,11 +308,12 @@ def test_pipeline_roundtrip_replays_doors_from_graph(tmp_path: Path) -> None:
     extracted_payload = json.loads(extracted_path.read_text(encoding="utf-8"))
     canonical_payload = json.loads(canonical_path.read_text(encoding="utf-8"))
     graph_payload = json.loads(graph_path.read_text(encoding="utf-8"))
+    generated_payload = graph_to_generated_parts_payload(graph_payload, name="door-graph-replay")
 
     assert pipeline_payload["graphs"]["ships_processed"] == 1
-    assert _sorted_doors(extracted_payload["Doors"]) == _sorted_doors(normalized_ship["Doors"])
-    assert _sorted_doors(canonical_payload["Doors"]) == _sorted_doors(normalized_ship["Doors"])
-    assert _sorted_doors(graph_payload["doors"]) == _sorted_doors(normalized_ship["Doors"])
+    assert _sorted_doors_from_relative_payload(extracted_payload) == _sorted_doors(normalized_ship["Doors"])
+    assert _sorted_doors_from_relative_payload(canonical_payload) == _sorted_doors(normalized_ship["Doors"])
+    assert _sorted_doors(generated_payload["doors"]) == _sorted_doors(normalized_ship["Doors"])
     assert graph_payload["validation"]["normalized_door_count"] == len(normalized_ship["Doors"])
 
     cell_graph_summary = graph_payload["graphs"]["C_cell_graph"]["summary"]
@@ -278,12 +322,10 @@ def test_pipeline_roundtrip_replays_doors_from_graph(tmp_path: Path) -> None:
     assert cell_graph_summary["blocked_door_records"] == 0
     assert cell_graph_summary["dangling_door_records"] == 0
 
-    generated_payload = graph_to_generated_parts_payload(graph_payload, name="door-graph-replay")
     export_result = export_ship_png(generated_payload, exported_path, validate=True)
     reparsed_payload = parse_ship_png(exported_path)
 
     assert generated_payload["stats"]["doors_preserved"] == len(normalized_ship["Doors"])
-    assert _sorted_doors(generated_payload["doors"]) == _sorted_doors(normalized_ship["Doors"])
     assert export_result["doors_exported"] == len(normalized_ship["Doors"])
     assert export_result["valid"] is True
     assert export_result["roundtrip"]["doors_match"] is True
@@ -302,18 +344,19 @@ def test_graph_replay_payload_preserves_unknown_part_nodes() -> None:
                     {
                         "id": 0,
                         "part_id": "cosmoteer.corridor",
-                        "location": [0, 0],
+                        "location_2x": [0, 0],
                         "rotation": 0,
                     },
                     {
                         "id": 1,
                         "part_id": "mod.custom_corridor",
-                        "location": [2, 0],
+                        "location_2x": [4, 0],
                         "rotation": 3,
                     },
                 ],
             }
         },
+        "coord_transform": {"version": 1, "frame": "bbox_center_2x", "scale": 2, "center_2x": [0, 0]},
     }
 
     generated_payload = graph_to_generated_parts_payload(graph_payload)

@@ -19,8 +19,8 @@ def _coerce_coord_pair(value: object) -> list[int] | None:
     return [int(value[0]), int(value[1])]
 
 
-def _recover_legacy_coord_from_2x(local_2x: object, center_2x: object) -> list[int] | None:
-    """Recover legacy grid coordinates from centered `2x` coordinates."""
+def _local_2x_to_global_grid(local_2x: object, center_2x: object) -> list[int] | None:
+    """Convert centered `2x` coordinates into global grid coordinates."""
 
     local_pair = _coerce_coord_pair(local_2x)
     center_pair = _coerce_coord_pair(center_2x)
@@ -60,9 +60,9 @@ def iter_vanilla_parts_from_ship(
             continue
         if part_id not in geometry_cache:
             continue
-        location = _coerce_coord_pair(part.get("Location"))
-        if location is None and center_2x is not None:
-            location = _recover_legacy_coord_from_2x(part.get("Location2x"), center_2x)
+        if center_2x is None:
+            continue
+        location = _local_2x_to_global_grid(part.get("Location2x"), center_2x)
         if location is None:
             continue
         rotation = int(part.get("Rotation", 0)) % 4
@@ -105,9 +105,9 @@ def iter_vanilla_parts_from_graph(
         rotation = int(node.get("rotation", 0)) % 4
         if rotation not in geometry_cache[part_id].rotations:
             continue
-        location = _coerce_coord_pair(node.get("location"))
-        if location is None and center_2x is not None:
-            location = _recover_legacy_coord_from_2x(node.get("location_2x"), center_2x)
+        if center_2x is None:
+            continue
+        location = _local_2x_to_global_grid(node.get("location_2x"), center_2x)
         if location is None:
             continue
         node_id = node["id"]

@@ -62,8 +62,8 @@ def canonicalize_json_text(
 
     Args:
         text: Raw JSON document text
-        translation_invariant: When True, hash normalization drops legacy global
-            placement fields in favor of centered local `2x` coordinates
+        translation_invariant: When True, hash normalization keeps only the
+            translation-invariant centered `2x` placement metadata
     """
 
     data = json.loads(text)

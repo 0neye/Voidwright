@@ -77,7 +77,7 @@ def _to_local_2x(point: Sequence[int], center_2x: Sequence[int]) -> list[int]:
 
 
 def _with_location_2x(parts: object, center_2x: Sequence[int]) -> list[dict]:
-    """Copy part records and append `Location2x` to valid coordinate entries."""
+    """Copy part records and replace world `Location` with centered `Location2x`."""
 
     transformed_parts: list[dict] = []
     for raw_part in parts if isinstance(parts, list) else []:
@@ -88,12 +88,13 @@ def _with_location_2x(parts: object, center_2x: Sequence[int]) -> list[dict]:
         location = _coerce_coord_pair(raw_part.get("Location"))
         if location is not None:
             transformed_part["Location2x"] = _to_local_2x(location, center_2x)
+            transformed_part.pop("Location", None)
         transformed_parts.append(transformed_part)
     return transformed_parts
 
 
 def _with_cell_2x(doors: object, center_2x: Sequence[int]) -> list[dict]:
-    """Copy door records and append `Cell2x` to valid coordinate entries."""
+    """Copy door records and replace world `Cell` with centered `Cell2x`."""
 
     transformed_doors: list[dict] = []
     for raw_door in doors if isinstance(doors, list) else []:
@@ -104,25 +105,23 @@ def _with_cell_2x(doors: object, center_2x: Sequence[int]) -> list[dict]:
         door_cell = _coerce_coord_pair(raw_door.get("Cell"))
         if door_cell is not None:
             transformed_door["Cell2x"] = _to_local_2x(door_cell, center_2x)
+            transformed_door.pop("Cell", None)
         transformed_doors.append(transformed_door)
     return transformed_doors
 
 
 def apply_relative_coords_transform(ship_data: dict) -> dict:
-    """Return *ship_data* enriched with centered `2x` local coordinate fields."""
+    """Return *ship_data* rewritten into the centered `2x` local coordinate frame."""
 
     transformed_payload = dict(ship_data)
     center_2x, occupied_bbox = _resolve_bbox_center_2x(ship_data.get("Parts"))
 
-    # Keep legacy coordinates for migration compatibility, while adding local
-    # centered coordinates and transform metadata for new readers.
     transformed_payload["Parts"] = _with_location_2x(ship_data.get("Parts"), center_2x)
     transformed_payload["Doors"] = _with_cell_2x(ship_data.get("Doors", []), center_2x)
     transformed_payload["coord_transform"] = {
         "version": 1,
         "frame": "bbox_center_2x",
         "scale": 2,
-        "legacy_frame": "normalized_origin_grid",
         "center_2x": center_2x,
         "occupied_bbox": occupied_bbox,
     }
@@ -141,12 +140,7 @@ def canonicalize_for_translation_invariant_hash(ship_data: object) -> object:
         if not isinstance(raw_part, dict):
             continue
 
-        projected_part = dict(raw_part)
-        # Prefer canonical local coordinates in content hashing so equal layouts
-        # translated on the global grid collapse into one canonical group.
-        if isinstance(projected_part.get("Location2x"), list):
-            projected_part.pop("Location", None)
-        projected_parts.append(projected_part)
+        projected_parts.append(dict(raw_part))
     projected_payload["Parts"] = projected_parts
 
     projected_doors: list[dict] = []
@@ -154,10 +148,7 @@ def canonicalize_for_translation_invariant_hash(ship_data: object) -> object:
         if not isinstance(raw_door, dict):
             continue
 
-        projected_door = dict(raw_door)
-        if isinstance(projected_door.get("Cell2x"), list):
-            projected_door.pop("Cell", None)
-        projected_doors.append(projected_door)
+        projected_doors.append(dict(raw_door))
     projected_payload["Doors"] = projected_doors
 
     coord_transform = ship_data.get("coord_transform")
@@ -166,7 +157,6 @@ def canonicalize_for_translation_invariant_hash(ship_data: object) -> object:
             "version": int(coord_transform.get("version", 1)),
             "frame": str(coord_transform.get("frame", "bbox_center_2x")),
             "scale": int(coord_transform.get("scale", 2)),
-            "legacy_frame": str(coord_transform.get("legacy_frame", "normalized_origin_grid")),
         }
 
     return projected_payload

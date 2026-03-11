@@ -38,8 +38,8 @@ def _coerce_coord_pair(value: object) -> list[int] | None:
     return [int(value[0]), int(value[1])]
 
 
-def _recover_legacy_coord_from_2x(local_2x: object, center_2x: object) -> list[int] | None:
-    """Recover a legacy grid coordinate from centered `2x` coordinates."""
+def _local_2x_to_global_grid(local_2x: object, center_2x: object) -> list[int] | None:
+    """Convert one centered `2x` coordinate pair into global grid coordinates."""
 
     local_pair = _coerce_coord_pair(local_2x)
     center_pair = _coerce_coord_pair(center_2x)
@@ -62,7 +62,7 @@ def _legacy_to_local_2x(location: Sequence[int], center_2x: Sequence[int] | None
 
 
 def normalize_parts(parts: object, *, center_2x: Sequence[int] | None = None) -> List[dict]:
-    """Filter and normalize raw ship `Parts` records."""
+    """Filter and normalize centered-`2x` ship `Parts` records."""
 
     normalized_parts: List[dict] = []
     for part in parts if isinstance(parts, list) else []:
@@ -72,16 +72,12 @@ def normalize_parts(parts: object, *, center_2x: Sequence[int] | None = None) ->
         if not part_id:
             continue
 
-        location = _coerce_coord_pair(part.get("Location"))
         location_2x = _coerce_coord_pair(part.get("Location2x"))
-
-        # Support phased migration payloads where legacy locations may be absent.
-        if location is None and location_2x is not None and center_2x is not None:
-            location = _recover_legacy_coord_from_2x(location_2x, center_2x)
+        if location_2x is None or center_2x is None:
+            continue
+        location = _local_2x_to_global_grid(location_2x, center_2x)
         if location is None:
             continue
-        if location_2x is None:
-            location_2x = _legacy_to_local_2x(location, center_2x)
 
         normalized_parts.append(
             {
@@ -95,7 +91,7 @@ def normalize_parts(parts: object, *, center_2x: Sequence[int] | None = None) ->
 
 
 def normalize_doors(value: object, *, center_2x: Sequence[int] | None = None) -> List[dict]:
-    """Filter and normalize raw ship `Doors` records."""
+    """Filter and normalize centered-`2x` ship `Doors` records."""
 
     if not isinstance(value, list):
         return []
@@ -104,14 +100,12 @@ def normalize_doors(value: object, *, center_2x: Sequence[int] | None = None) ->
         if not isinstance(door, dict):
             continue
 
-        cell = _coerce_coord_pair(door.get("Cell"))
         cell_2x = _coerce_coord_pair(door.get("Cell2x"))
-        if cell is None and cell_2x is not None and center_2x is not None:
-            cell = _recover_legacy_coord_from_2x(cell_2x, center_2x)
+        if cell_2x is None or center_2x is None:
+            continue
+        cell = _local_2x_to_global_grid(cell_2x, center_2x)
         if cell is None:
             continue
-        if cell_2x is None:
-            cell_2x = _legacy_to_local_2x(cell, center_2x)
         if "Orientation" not in door:
             continue
 
@@ -353,7 +347,7 @@ def process_ship(ship_path: Path) -> dict:
             "index": index,
             "part_id": part["ID"],
             "location": list(map(int, part["Location"])),
-            "location_2x": part.get("Location2x") or _legacy_to_local_2x(part["Location"], center_2x),
+            "location_2x": part["Location2x"],
             "rotation": rotation,
             "width": meta.width,
             "height": meta.height,
@@ -370,7 +364,6 @@ def process_ship(ship_path: Path) -> dict:
         {
             "id": record["index"],
             "part_id": record["part_id"],
-            "location": record["location"],
             "location_2x": record["location_2x"],
             "rotation": record["rotation"],
             "footprint": {
@@ -404,17 +397,18 @@ def process_ship(ship_path: Path) -> dict:
                 else "bbox_center_2x"
             ),
             "scale": int(coord_transform.get("scale", 2)) if isinstance(coord_transform, dict) else 2,
-            "legacy_frame": (
-                str(coord_transform.get("legacy_frame", "normalized_origin_grid"))
-                if isinstance(coord_transform, dict)
-                else "normalized_origin_grid"
-            ),
             "center_2x": center_2x or [0, 0],
         },
         # Keep normalized door records alongside the derived graph so callers can
         # later replay or synthesize doors without reverse-engineering them from
         # graph edges and summary counters.
-        "doors": doors,
+        "doors": [
+            {
+                "Cell2x": door["Cell2x"],
+                "Orientation": door["Orientation"],
+            }
+            for door in doors
+        ],
         "assumptions": {
             "geometry_model": (
                 "Vanilla part footprints use exact game-file tile data via "
@@ -522,7 +516,7 @@ def generate_all(
         "output_dir": str(output_dir),
         "schema_version": 4,
         "geometry_source": "game-file canonical (load_vanilla_part_geometry)",
-        "coord_frame": "legacy grid coordinates with centered 2x companion fields",
+        "coord_frame": "centered 2x local coordinates with global replay metadata",
         "ships_processed": 0,
         "ships_with_unknown_part_ids": 0,
         "total_unknown_part_instances": 0,

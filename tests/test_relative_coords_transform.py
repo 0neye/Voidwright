@@ -51,8 +51,10 @@ def test_apply_relative_coords_transform_uses_centered_integer_2x_frame() -> Non
     assert transformed["coord_transform"]["frame"] == "bbox_center_2x"
     assert transformed["coord_transform"]["scale"] == 2
     assert transformed["coord_transform"]["center_2x"] == [1, 1]
+    assert "Location" not in transformed["Parts"][0]
     assert transformed["Parts"][0]["Location2x"] == [-1, -1]
     assert transformed["Parts"][1]["Location2x"] == [1, 1]
+    assert "Cell" not in transformed["Doors"][0]
     assert transformed["Doors"][0]["Cell2x"] == [1, 1]
 
 
@@ -130,14 +132,14 @@ def test_run_canonicalize_dedupes_shifted_layouts_and_keeps_transform_metadata(t
     canonical_payload = json.loads(written_json_files[0].read_text(encoding="utf-8"))
     assert "coord_transform" in canonical_payload
     assert "center_2x" in canonical_payload["coord_transform"]
-    assert "Location" in canonical_payload["Parts"][0]
+    assert "Location" not in canonical_payload["Parts"][0]
     assert "Location2x" in canonical_payload["Parts"][0]
-    assert "Cell" in canonical_payload["Doors"][0]
+    assert "Cell" not in canonical_payload["Doors"][0]
     assert "Cell2x" in canonical_payload["Doors"][0]
 
 
-def test_process_ship_recovers_legacy_coords_from_location2x_payloads(tmp_path: Path) -> None:
-    """Graph processing should accept payloads that only provide centered 2x coords."""
+def test_process_ship_uses_centered_2x_payloads(tmp_path: Path) -> None:
+    """Graph processing should accept centered-`2x` payloads directly."""
 
     source_path = tmp_path / "ship.json"
     payload = _base_ship_payload(
@@ -149,7 +151,6 @@ def test_process_ship_recovers_legacy_coords_from_location2x_payloads(tmp_path: 
         "version": 1,
         "frame": "bbox_center_2x",
         "scale": 2,
-        "legacy_frame": "normalized_origin_grid",
         "center_2x": [4, 6],
     }
     _write_json(source_path, payload)
@@ -159,21 +160,20 @@ def test_process_ship_recovers_legacy_coords_from_location2x_payloads(tmp_path: 
     door = graph_payload["doors"][0]
 
     assert graph_payload["schema_version"] == 4
-    assert node["location"] == [2, 3]
+    assert "location" not in node
     assert node["location_2x"] == [0, 0]
-    assert door["Cell"] == [2, 4]
+    assert "Cell" not in door
     assert door["Cell2x"] == [0, 2]
 
 
-def test_graph_replay_recovers_locations_from_location_2x_nodes() -> None:
-    """Graph replay payload conversion should recover legacy coordinates from 2x data."""
+def test_graph_replay_converts_location_2x_nodes_for_export() -> None:
+    """Graph replay payload conversion should denormalize `2x` coordinates for export."""
 
     graph_payload = {
         "coord_transform": {
             "version": 1,
             "frame": "bbox_center_2x",
             "scale": 2,
-            "legacy_frame": "normalized_origin_grid",
             "center_2x": [8, -2],
         },
         "doors": [{"Cell2x": [0, 0], "Orientation": 1}],

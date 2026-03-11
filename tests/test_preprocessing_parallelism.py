@@ -57,17 +57,23 @@ def normalize_manifest(manifest: dict) -> dict:
 
 
 def build_graph_ship(*, name: str, part_id: str, location: list[int], rotation: int = 0) -> dict:
-    """Build a minimal ship payload for graph-generation tests."""
+    """Build a minimal centered-`2x` ship payload for graph-generation tests."""
 
     return {
         "Name": name,
         "Author": "test",
         "Version": 1,
         "FlightDirection": 0,
+        "coord_transform": {
+            "version": 1,
+            "frame": "bbox_center_2x",
+            "scale": 2,
+            "center_2x": [0, 0],
+        },
         "Parts": [
             {
                 "ID": part_id,
-                "Location": location,
+                "Location2x": [int(location[0]) * 2, int(location[1]) * 2],
                 "Rotation": rotation,
             }
         ],
