@@ -21,6 +21,12 @@ import discord
 from dotenv import load_dotenv
 from os import getenv
 
+from common.ship_filters import (
+    DEFAULT_OPT_OUT_CSV_PATH,
+    delete_opted_out_ship_files,
+    load_opt_out_author_names,
+)
+
 GUILD_ID = 546229904488923141
 TOKEN_ENV_VAR = "DISCORD_BOT_TOKEN"
 DEFAULT_CHANNEL_ALLOWLIST = [
@@ -94,6 +100,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable verbose logging",
     )
+    parser.add_argument(
+        "--opt-out-csv",
+        default=str(DEFAULT_OPT_OUT_CSV_PATH),
+        help="CSV containing exact author names to exclude after download",
+    )
     return parser.parse_args()
 
 
@@ -154,6 +165,7 @@ class ShipImageDownloader(discord.Client):
         self,
         output_dir: Path,
         channel_ids: list[int],
+        opt_out_author_names: set[str],
         startup_ready_file: Path | None = None,
         **kwargs: object,
     ) -> None:
@@ -161,16 +173,18 @@ class ShipImageDownloader(discord.Client):
         self.output_dir = output_dir
         self.guild_id = GUILD_ID
         self.channel_ids = channel_ids
+        self.opt_out_author_names = opt_out_author_names
         self.downloaded = 0
+        self.filtered = 0
         self.seen_messages = 0
         self.state_path = self.output_dir / "state.json"
         self.state: dict[str, object] = {
             "targets": {},
             "downloaded_filenames": [],
-            "downloaded_attachment_ids": [],
+            "processed_attachment_ids": [],
         }
         self.downloaded_filenames: set[str] = set()
-        self.downloaded_attachment_ids: set[str] = set()
+        self.processed_attachment_ids: set[str] = set()
         self._messages_since_save = 0
         self.ready_event: asyncio.Event = asyncio.Event()
         self.startup_ready_file = startup_ready_file
@@ -198,6 +212,7 @@ class ShipImageDownloader(discord.Client):
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._load_state()
+        self._cleanup_existing_opt_out_files()
 
         scan_targets = await self._collect_scan_targets(guild, me)
         logging.info(
@@ -213,9 +228,10 @@ class ShipImageDownloader(discord.Client):
 
         self._save_state(force=True)
         logging.info(
-            "Completed scan. Messages processed: %d | Matching files downloaded: %d",
+            "Completed scan. Messages processed: %d | Matching files downloaded: %d | Filtered by opt-out: %d",
             self.seen_messages,
             self.downloaded,
+            self.filtered,
         )
         await self.close()
 
@@ -241,24 +257,26 @@ class ShipImageDownloader(discord.Client):
                             continue
 
                         attachment_key = str(attachment.id)
-                        if attachment_key in self.downloaded_attachment_ids:
+                        if attachment_key in self.processed_attachment_ids:
                             continue
 
                         output_path = collision_safe_path(self.output_dir, filename, message.id)
                         output_name = output_path.name
                         if output_name in self.downloaded_filenames:
-                            self._track_state_sets(attachment_key, output_name)
+                            self._track_processed_attachment(attachment_key)
                             continue
 
-                        if await self._save_attachment_with_retries(
+                        download_result = await self._save_attachment_with_retries(
                             attachment,
                             output_path,
                             message_id=message.id,
                             source_name=source_name,
-                        ):
-                            self.downloaded += 1
+                        )
+                        if download_result == "downloaded":
                             downloaded_in_channel += 1
-                            self._track_state_sets(attachment_key, output_name)
+                            self._record_retained_download(attachment_key, output_name)
+                        elif download_result == "filtered":
+                            self.filtered += 1
 
                     self._update_target_progress(target_id, message.id)
 
@@ -299,11 +317,16 @@ class ShipImageDownloader(discord.Client):
         output_path: Path,
         message_id: int,
         source_name: str,
-    ) -> bool:
+    ) -> str:
+        """Download one attachment and delete it immediately when it matches the opt-out list."""
+
         retry_count = 0
         while True:
             try:
                 await attachment.save(output_path, use_cached=False)
+                if self._filter_downloaded_ship_file(output_path):
+                    self._save_state(force=True)
+                    return "filtered"
                 logging.info(
                     "Downloaded %s from message %s in #%s",
                     output_path.name,
@@ -311,7 +334,7 @@ class ShipImageDownloader(discord.Client):
                     source_name,
                 )
                 self._save_state(force=True)
-                return True
+                return "downloaded"
             except RETRYABLE_EXCEPTIONS as exc:
                 retry_count += 1
                 self._save_state(force=True)
@@ -332,7 +355,7 @@ class ShipImageDownloader(discord.Client):
                     message_id,
                     exc,
                 )
-                return False
+                return "failed"
 
     async def _collect_scan_targets(
         self,
@@ -485,7 +508,7 @@ class ShipImageDownloader(discord.Client):
             self.state = {
                 "targets": {},
                 "downloaded_filenames": [],
-                "downloaded_attachment_ids": [],
+                "processed_attachment_ids": [],
             }
             return
 
@@ -496,13 +519,16 @@ class ShipImageDownloader(discord.Client):
             self.state = {
                 "targets": {},
                 "downloaded_filenames": [],
-                "downloaded_attachment_ids": [],
+                "processed_attachment_ids": [],
             }
             return
 
         targets = data.get("targets", {})
         filenames = data.get("downloaded_filenames", [])
-        attachment_ids = data.get("downloaded_attachment_ids", [])
+        attachment_ids = data.get(
+            "processed_attachment_ids",
+            data.get("downloaded_attachment_ids", []),
+        )
 
         if not isinstance(targets, dict):
             targets = {}
@@ -514,15 +540,15 @@ class ShipImageDownloader(discord.Client):
         self.state = {
             "targets": targets,
             "downloaded_filenames": filenames,
-            "downloaded_attachment_ids": attachment_ids,
+            "processed_attachment_ids": attachment_ids,
         }
         self.downloaded_filenames = {str(item) for item in filenames}
-        self.downloaded_attachment_ids = {str(item) for item in attachment_ids}
+        self.processed_attachment_ids = {str(item) for item in attachment_ids}
         logging.info(
-            "Loaded resume state: %d target checkpoint(s), %d tracked filename(s), %d tracked attachment(s)",
+            "Loaded resume state: %d target checkpoint(s), %d tracked filename(s), %d processed attachment(s)",
             len(targets),
             len(self.downloaded_filenames),
-            len(self.downloaded_attachment_ids),
+            len(self.processed_attachment_ids),
         )
 
     def _save_state(self, force: bool = False) -> None:
@@ -533,7 +559,9 @@ class ShipImageDownloader(discord.Client):
         payload = {
             "targets": self.state.get("targets", {}),
             "downloaded_filenames": sorted(self.downloaded_filenames),
-            "downloaded_attachment_ids": sorted(self.downloaded_attachment_ids),
+            # Keep writing the legacy key so older script versions can still resume cleanly
+            "downloaded_attachment_ids": sorted(self.processed_attachment_ids),
+            "processed_attachment_ids": sorted(self.processed_attachment_ids),
         }
 
         tmp_path = self.state_path.with_suffix(".json.tmp")
@@ -566,9 +594,51 @@ class ShipImageDownloader(discord.Client):
 
         return discord.Object(id=last_message_id)
 
-    def _track_state_sets(self, attachment_key: str, output_name: str) -> None:
-        self.downloaded_attachment_ids.add(attachment_key)
+    def _track_processed_attachment(self, attachment_key: str) -> None:
+        """Track an attachment ID whose downloaded file should be kept long term."""
+
+        self.processed_attachment_ids.add(attachment_key)
+
+    def _track_downloaded_filename(self, output_name: str) -> None:
+        """Track one filename that currently exists in the download directory."""
+
         self.downloaded_filenames.add(output_name)
+
+    def _record_retained_download(self, attachment_key: str, output_name: str) -> None:
+        """Record one retained download so future scans can skip it safely."""
+
+        self.downloaded += 1
+        self._track_downloaded_filename(output_name)
+        self._track_processed_attachment(attachment_key)
+
+    def _cleanup_existing_opt_out_files(self) -> None:
+        """Delete any already-downloaded ships that now match the opt-out list."""
+
+        filter_summary = delete_opted_out_ship_files([self.output_dir], self.opt_out_author_names)
+        if filter_summary["ship_files_deleted"] == 0:
+            return
+
+        deleted_filenames = {
+            Path(path_text).name for path_text in filter_summary["deleted_ship_paths"]
+        }
+        self.downloaded_filenames.difference_update(deleted_filenames)
+        logging.info(
+            "Removed %d existing opted-out ship file(s) from %s",
+            filter_summary["ship_files_deleted"],
+            self.output_dir,
+        )
+        self._save_state(force=True)
+
+    def _filter_downloaded_ship_file(self, output_path: Path) -> bool:
+        """Delete one just-downloaded ship file when its author is opted out."""
+
+        filter_summary = delete_opted_out_ship_files([output_path], self.opt_out_author_names)
+        if filter_summary["ship_files_deleted"] == 0:
+            return False
+
+        # Keep the in-memory filename set aligned with what still exists on disk
+        self.downloaded_filenames.discard(output_path.name)
+        return True
 
 
 def _run_single_download(
@@ -576,15 +646,18 @@ def _run_single_download(
     channel_ids: list[int],
     token: str,
     verbose: bool,
+    opt_out_csv: str | Path = DEFAULT_OPT_OUT_CSV_PATH,
     startup_ready_file: Path | None = None,
 ) -> int:
     configure_logging(verbose)
+    opt_out_author_names = load_opt_out_author_names(opt_out_csv)
     intents = discord.Intents.none()
     intents.guilds = True
     intents.messages = True
     client = ShipImageDownloader(
         output_dir=Path(output_dir),
         channel_ids=channel_ids,
+        opt_out_author_names=opt_out_author_names,
         startup_ready_file=startup_ready_file,
         intents=intents,
     )
@@ -604,6 +677,7 @@ def run_download(
     verbose: bool = False,
     channel_ids: list[int] | None = None,
     channels_file: str | None = None,
+    opt_out_csv: str | Path = DEFAULT_OPT_OUT_CSV_PATH,
     startup_timeout_seconds: int = STARTUP_TIMEOUT_SECONDS,
 ) -> int:
     configure_logging(verbose)
@@ -618,6 +692,7 @@ def run_download(
     logging.info("Configured %d channel ID(s) for scanning", len(resolved_channel_ids))
 
     resolved_output_dir = str(Path(output_dir))
+    resolved_opt_out_csv = str(Path(opt_out_csv))
 
     for attempt in range(1, STARTUP_MAX_RETRIES + 1):
         ready_fd, ready_path_str = tempfile.mkstemp(prefix="ship_download_ready_", suffix=".tmp")
@@ -631,6 +706,7 @@ def run_download(
         child_env["SHIP_DOWNLOAD_CHANNEL_IDS"] = json.dumps(resolved_channel_ids)
         child_env["SHIP_DOWNLOAD_READY_FILE"] = str(ready_path)
         child_env["SHIP_DOWNLOAD_VERBOSE"] = "1" if verbose else "0"
+        child_env["SHIP_DOWNLOAD_OPT_OUT_CSV"] = resolved_opt_out_csv
         child_env[TOKEN_ENV_VAR] = token
 
         process = subprocess.Popen(  # noqa: S603
@@ -683,6 +759,7 @@ def main() -> int:
         raw_channel_ids = getenv("SHIP_DOWNLOAD_CHANNEL_IDS", "[]")
         ready_file_value = getenv("SHIP_DOWNLOAD_READY_FILE")
         verbose_value = getenv("SHIP_DOWNLOAD_VERBOSE", "0") == "1"
+        opt_out_csv_value = getenv("SHIP_DOWNLOAD_OPT_OUT_CSV", str(DEFAULT_OPT_OUT_CSV_PATH))
         token = getenv(TOKEN_ENV_VAR)
         if not token:
             logging.error("Missing %s in worker environment", TOKEN_ENV_VAR)
@@ -701,6 +778,7 @@ def main() -> int:
             channel_ids=channel_ids,
             token=token,
             verbose=verbose_value,
+            opt_out_csv=opt_out_csv_value,
             startup_ready_file=ready_file,
         )
 
@@ -710,6 +788,7 @@ def main() -> int:
         verbose=args.verbose,
         channel_ids=args.channel_id,
         channels_file=args.channels_file,
+        opt_out_csv=args.opt_out_csv,
     )
 
 

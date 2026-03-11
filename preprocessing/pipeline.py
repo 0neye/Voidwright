@@ -8,6 +8,12 @@ from pathlib import Path
 import tempfile
 from typing import Sequence
 
+from common.ship_filters import (
+    DEFAULT_OPT_OUT_CSV_PATH,
+    delete_opted_out_ship_files,
+    load_opt_out_author_names,
+)
+
 from .canonicalize import run_canonicalize
 from .concurrency import add_concurrency_arguments
 from .extract import run_extract
@@ -68,6 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--verbose",
         action="store_true",
         help="Enable verbose logging during extraction",
+    )
+    parser.add_argument(
+        "--opt-out-csv",
+        default=str(DEFAULT_OPT_OUT_CSV_PATH),
+        help="CSV containing exact author names to exclude before extraction",
     )
     add_concurrency_arguments(
         parser,
@@ -164,6 +175,7 @@ def run_pipeline(
     report_md: str | Path | None = None,
     limit: int | None = None,
     verbose: bool = False,
+    opt_out_csv: str | Path = DEFAULT_OPT_OUT_CSV_PATH,
     extract_workers: int | None = None,
     extract_executor: str = "auto",
     canonicalize_workers: int | None = None,
@@ -182,6 +194,7 @@ def run_pipeline(
         report_md: Optional canonicalization markdown report path when persisting outputs
         limit: Optional limit for the graph-generation stage
         verbose: When True, enable verbose extraction logging
+        opt_out_csv: CSV containing exact author names to filter before extraction
         extract_workers: Optional extraction worker-count override
         extract_executor: Extraction executor mode override
         canonicalize_workers: Optional canonicalization worker-count override
@@ -198,6 +211,19 @@ def run_pipeline(
     persistent_canonical_dir = Path(write_canonical_dir) if write_canonical_dir else None
     report_json_path = Path(report_json)
     report_md_path = Path(report_md) if report_md else None
+    resolved_input_paths = [Path(input_path) for input_path in input_paths]
+    missing_input_paths = [path for path in resolved_input_paths if not path.exists()]
+    if missing_input_paths:
+        missing_inputs_text = ", ".join(str(path) for path in missing_input_paths)
+        raise RuntimeError(f"Input path does not exist: {missing_inputs_text}")
+
+    # Validate all requested inputs up front so failed invocations never mutate
+    # the user's ship corpus as a side effect of opt-out filtering.
+    opt_out_filter = delete_opted_out_ship_files(
+        resolved_input_paths,
+        load_opt_out_author_names(opt_out_csv),
+    )
+    filtered_input_paths = [path for path in resolved_input_paths if path.exists()]
 
     with tempfile.TemporaryDirectory(prefix="ship_preprocess_") as temp_dir:
         temp_root = Path(temp_dir)
@@ -207,7 +233,7 @@ def run_pipeline(
         canonical_dir.mkdir(parents=True, exist_ok=True)
 
         extract_exit_code = run_extract(
-            input_paths=input_paths,
+            input_paths=filtered_input_paths,
             output_dir=extracted_dir,
             verbose=verbose,
             workers=extract_workers,
@@ -254,6 +280,7 @@ def run_pipeline(
             "canonicalization_report_json": str(report_json_path),
             "canonicalization_report_md": str(report_md_path) if report_md_path else None,
             "extract_exit_code": extract_exit_code,
+            "opt_out_filter": opt_out_filter,
             "canonicalization": canonicalize_manifest,
             "graphs": graph_manifest,
         }
@@ -273,6 +300,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         report_md=args.report_md,
         limit=args.limit,
         verbose=args.verbose,
+        opt_out_csv=args.opt_out_csv,
         extract_workers=args.extract_workers,
         extract_executor=args.extract_executor,
         canonicalize_workers=args.canonicalize_workers,
