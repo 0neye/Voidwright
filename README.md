@@ -20,6 +20,7 @@ Start with the curated docs in `docs/`:
 - `docs/markov-generator.md`
 - `docs/generation-modes.md`
 - `docs/door-rules.md`
+- `tests/README.md` (test strategy and expectations)
 
 Markov backend implementation notes now live in `docs/markov-generator.md` and
 `generator/backends/markov/README.md`.

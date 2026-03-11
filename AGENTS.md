@@ -109,3 +109,13 @@ Register it in `training/router.py` and `generator/router.py` alongside the Mark
 - **The Markov generator does not synthesize doors.** Door-rule logic in `preprocessing/door_rules.py` and `preprocessing/door_rules_engine.py` is for analysis and future passes only.
 - **Mirror symmetry axis** is at `x = -0.5`. Left half: all footprint cells `x <= -1`; right half: `x >= 0`. Parts straddling the axis are rejected.
 - **Token format:** `(part_id, rotation, anchor_part_id, anchor_rotation, dx, dy)`. Root tokens use `anchor_part_id = "__ROOT__"`. END token is `"__END__"`.
+- **Pipeline extract failures are partially tolerated.** `preprocessing/pipeline.py` treats extract exit code `2` as partial success and still runs canonicalize/graphs for successfully extracted files.
+- **Persistent pipeline sync is manifest-scoped.** `preprocessing/pipeline.py` only updates/prunes files listed in `.pipeline-managed-*.txt` manifests and intentionally leaves unrelated files in persistent stage output directories.
+- **Canonical collision naming is hash-ordered.** In `preprocessing/canonicalize.py`, if multiple contents want the same canonical filename, the lexicographically smallest SHA-256 keeps the base name and the rest get `__dedup-<12hex>`.
+- **Parser/encoder location math is save-rect aware.** `common/cosmoteer/parser.py` normalizes `Part.Location` to footprint-origin coordinates and `common/cosmoteer/encoder.py` denormalizes back through `common/save_rect.py` for roundtrip fidelity.
+- **No-arg root CLI is interactive.** `main.py` defaults to REPL when no entrypoint is passed; no-argument runs are not non-interactive help output.
+- **Windows REPL parsing uses native semantics.** `main.py` uses `CommandLineToArgvW` on Windows, so REPL quoting/path behavior follows Win32 command-line parsing rather than POSIX `shlex`.
+- **Generation failures are soft by sample.** `generator/backends/markov/backend.py` skips per-sample `RuntimeError`s with warnings and still exits `0` for the overall command.
+- **Graph training silently skips bad corpus files.** `markov/model.py` ignores malformed/unreadable graph JSON files and also ignores `manifest.json` when scanning `--graph-input-dir`.
+- **Build-time validation requires canonical corpus input.** In `training/backends/markov/backend.py`, `--validation-output` only executes when `--input-dir` is provided; graph-only builds skip validation.
+- **Part requirements merge by max, not sum.** `markov/inputs.py` merges duplicate requirement entries by per-part maximum required count.
