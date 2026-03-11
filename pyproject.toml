@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ship-generator"
+version = "0.1.0"
+description = "Generate Cosmoteer .ship.png files from preprocessing, training, and Markov-based generation pipelines"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-cov",
+  "pytest-xdist",
+  "pyright",
+  "ruff",
+]
+scripts = [
+  "aiohttp",
+  "discord.py>=2.4.0,<3.0.0",
+  "python-dotenv>=1.0.1,<2.0.0",
+]
+
+[project.scripts]
+ship-generator = "main:main"
+ship-generator-preprocessing = "preprocessing.cli:main"
+ship-generator-training = "training.cli:main"
+ship-generator-generate = "generator.cli:main"
+
+[tool.pytest.ini_options]
+addopts = "--cov=common --cov=generator --cov=markov --cov=preprocessing --cov=training --cov=main --cov-report=term-missing"
+norecursedirs = [
+  "tmp*",
+  "review_tmp",
+]
+
+[tool.coverage.run]
+branch = true
+relative_files = true
+source = [
+  "common",
+  "generator",
+  "markov",
+  "preprocessing",
+  "training",
+  "main",
+]
+
+[tool.coverage.report]
+omit = [
+  "tests/*",
+]
+show_missing = true
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "UP"]
+
+[tool.pyright]
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
+
+[tool.setuptools]
+py-modules = ["main"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = [
+  "common",
+  "common.*",
+  "generator",
+  "generator.*",
+  "markov",
+  "markov.*",
+  "preprocessing",
+  "preprocessing.*",
+  "training",
+  "training.*",
+]
+
+[tool.setuptools.package-data]
+common = ["data/*.json"]

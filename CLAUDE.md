@@ -16,7 +16,9 @@ Generates Cosmoteer `.ship.png` files from a learned model. The full pipeline is
 
 **Install dependencies:**
 ```bash
-pip install -r requirements.txt
+pip install -e .[dev]
+# For the Discord download script only:
+pip install -e .[scripts]
 ```
 
 **Full preprocessing pipeline** (images → graph JSON):
