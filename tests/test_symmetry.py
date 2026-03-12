@@ -2,6 +2,12 @@ from common.geometry import load_vanilla_part_geometry
 from generator.backends.markov.export import generated_parts_to_cosmoteer_parts, roundtrip_validate
 from markov.model import ShipPart
 from markov.symmetry import mirror_rotation
+from ship_layout.validation import (
+    footprint_is_mirror_balanced,
+    is_anchor_eligible_mirror_primary,
+    mirror_cells_x,
+    occupied_cells_are_mirror_balanced,
+)
 
 
 def test_default_horizontal_mirror_rule_is_preserved() -> None:
@@ -83,6 +89,31 @@ def test_mirror_part_keeps_triangle_rotation_and_toggles_flip_x() -> None:
     assert mirrored is not None
     assert mirrored.rotation == 3
     assert mirrored.flip_x is True
+
+
+def test_mirror_cell_helpers_detect_balanced_centerline_footprints() -> None:
+    """Mirror-cell helpers should treat centerline-straddling sets as balanced."""
+
+    centered_cells = frozenset({(-1, 0), (0, 0), (-1, 1), (0, 1)})
+    assert mirror_cells_x(centered_cells) == centered_cells
+    assert occupied_cells_are_mirror_balanced(centered_cells) is True
+
+    off_center_cells = frozenset({(-2, 0), (-1, 0), (0, 0)})
+    assert occupied_cells_are_mirror_balanced(off_center_cells) is False
+
+
+def test_anchor_eligibility_accepts_balanced_straddlers() -> None:
+    """Mirror primary anchors should include balanced centerline straddlers."""
+
+    geometry_cache = load_vanilla_part_geometry()
+    centered_two_wide = ShipPart(part_id="cosmoteer.armor_2x1", rotation=0, x=-1, y=4)
+    left_only = ShipPart(part_id="cosmoteer.armor_2x1", rotation=0, x=-3, y=4)
+    right_only = ShipPart(part_id="cosmoteer.armor_2x1", rotation=0, x=1, y=4)
+
+    assert footprint_is_mirror_balanced(centered_two_wide, geometry_cache) is True
+    assert is_anchor_eligible_mirror_primary(centered_two_wide, geometry_cache) is True
+    assert is_anchor_eligible_mirror_primary(left_only, geometry_cache) is True
+    assert is_anchor_eligible_mirror_primary(right_only, geometry_cache) is False
 
 
 def test_export_preserves_flip_flags() -> None:

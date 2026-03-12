@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from common.cosmoteer import parse_ship_png
+from preprocessing.relative_coords import apply_relative_coords_transform
 
 __all__ = [
     "load_allowlist",
@@ -14,6 +15,84 @@ __all__ = [
     "load_seed_parts_from_json",
     "load_seed_parts_from_png",
 ]
+
+
+def _coerce_coord_pair(value: object) -> list[int] | None:
+    """Return an integer coordinate pair when *value* looks like `[x, y]`."""
+
+    if not isinstance(value, list) or len(value) != 2:
+        return None
+    return [int(value[0]), int(value[1])]
+
+
+def _local_2x_to_global_grid(local_2x: object, center_2x: object) -> list[int] | None:
+    """Convert centered `2x` coordinates into global grid coordinates."""
+
+    local_pair = _coerce_coord_pair(local_2x)
+    center_pair = _coerce_coord_pair(center_2x)
+    if local_pair is None or center_pair is None:
+        return None
+
+    summed_x = local_pair[0] + center_pair[0]
+    summed_y = local_pair[1] + center_pair[1]
+    if summed_x % 2 != 0 or summed_y % 2 != 0:
+        return None
+    return [summed_x // 2, summed_y // 2]
+
+
+def _is_preprocessed_relative_payload(ship_data: object) -> bool:
+    """Return True when payload already has centered-`2x` preprocessing metadata.
+
+    Args:
+        ship_data: Parsed ship payload from PNG extraction
+
+    Returns:
+        True when `coord_transform.center_2x` and at least one `Parts[*].Location2x`
+        coordinate are present
+    """
+
+    if not isinstance(ship_data, dict):
+        return False
+    coord_transform = ship_data.get("coord_transform")
+    center_2x = (
+        _coerce_coord_pair(coord_transform.get("center_2x"))
+        if isinstance(coord_transform, dict)
+        else None
+    )
+    if center_2x is None:
+        return False
+    for raw_part in ship_data.get("Parts", []) if isinstance(ship_data.get("Parts"), list) else []:
+        if isinstance(raw_part, dict) and _coerce_coord_pair(raw_part.get("Location2x")) is not None:
+            return True
+    return False
+
+
+def _contains_world_location_parts(ship_data: object) -> bool:
+    """Return True when payload still uses world-grid `Parts[*].Location` fields."""
+
+    if not isinstance(ship_data, dict):
+        return False
+    for raw_part in ship_data.get("Parts", []) if isinstance(ship_data.get("Parts"), list) else []:
+        if isinstance(raw_part, dict) and _coerce_coord_pair(raw_part.get("Location")) is not None:
+            return True
+    return False
+
+
+def _prepare_seed_ship_for_markov(ship_data: dict) -> dict:
+    """Normalize parsed seed payload into preprocessing's centered `2x` frame.
+
+    This mirrors the preprocessing extract stage behavior so `--seed-png` ships
+    with only world `Location` fields still flow through the same coordinate
+    normalization before Markov seed loading.
+    """
+
+    # Keep already-normalized payloads untouched so existing `Location2x` +
+    # `coord_transform` metadata is preserved exactly.
+    if _is_preprocessed_relative_payload(ship_data):
+        return ship_data
+    if _contains_world_location_parts(ship_data):
+        return apply_relative_coords_transform(ship_data)
+    return ship_data
 
 
 def load_allowlist(
@@ -119,20 +198,33 @@ def load_seed_parts_from_json(seed_json_path: Path) -> list[dict]:
             if isinstance(part, dict) and "ID" in part and "Location" in part
         ]
     if "Parts" in data:
+        prepared_data = _prepare_seed_ship_for_markov(data) if isinstance(data, dict) else data
+        coord_transform = prepared_data.get("coord_transform", {}) if isinstance(prepared_data, dict) else {}
+        center_2x = (
+            _coerce_coord_pair(coord_transform.get("center_2x"))
+            if isinstance(coord_transform, dict)
+            else None
+        )
         return [
             {
                 "part_id": part["ID"],
                 "rotation": int(part.get("Rotation", 0)),
-                "x": int(part["Location"][0]),
-                "y": int(part["Location"][1]),
+                "x": int(location[0]),
+                "y": int(location[1]),
                 "flip_x": bool(part.get("FlipX", False)),
                 "flip_y": bool(part.get("FlipY", False)),
             }
-            for part in data["Parts"]
+            for part in prepared_data.get("Parts", []) if isinstance(prepared_data, dict)
             if isinstance(part, dict)
             and "ID" in part
-            and isinstance(part.get("Location"), list)
-            and len(part["Location"]) == 2
+            and (
+                (
+                    center_2x is not None
+                    and (location := _local_2x_to_global_grid(part.get("Location2x"), center_2x))
+                    is not None
+                )
+                or ((location := _coerce_coord_pair(part.get("Location"))) is not None)
+            )
         ]
     raise ValueError(
         f"Could not parse seed parts from {seed_json_path}: expected 'parts' or 'Parts' key"
@@ -147,7 +239,7 @@ def load_seed_parts_from_png(seed_png_path: Path, vanilla_part_loader) -> list[d
         vanilla_part_loader: Callable that converts extracted ship JSON into ShipPart records
     """
 
-    ship_data = parse_ship_png(seed_png_path)
+    ship_data = _prepare_seed_ship_for_markov(parse_ship_png(seed_png_path))
     return [
         {
             "part_id": ship_part.part_id,

@@ -7,7 +7,7 @@ from dataclasses import asdict
 from typing import Dict, List, Optional
 
 from ship_layout.connectivity import parts_structurally_touch
-from ship_layout.validation import part_overlaps_occupied_cells
+from ship_layout.validation import occupied_cells_are_mirror_balanced, part_overlaps_occupied_cells
 from visualizer.events import VisualizationPart
 
 from .types import Coord, END_TOKEN, GenerationConfig, RelativePlacementToken, ShipPart, _config_as_dict
@@ -85,6 +85,79 @@ def _emit_attempt_rejected(
     )
 
 
+def _resolve_transition_options_for_history(model, history: List[str]) -> Optional[Dict[str, int]]:
+    """Resolve transition options for the current history with order fallback.
+
+    Args:
+        model: Loaded `RelativeMarkovModel` that stores transition counters
+        history: Token-key history in emission order
+
+    Returns:
+        Transition counter for the best available state, or None when no state
+        has any transition options
+    """
+
+    state_options = model.transition_counts.get(model._state_key(history, model.order))
+    if state_options:
+        return state_options
+    if model.order > 0:
+        for fallback_order in range(model.order - 1, -1, -1):
+            fallback_options = model.transition_counts.get(model._state_key(history, fallback_order))
+            if fallback_options:
+                return fallback_options
+    return None
+
+
+def _filtered_counter(counter: Dict[str, int], allowed_keys: set[str]) -> Dict[str, int]:
+    """Build a weighted counter subset that keeps only positive allowed keys."""
+
+    return {key: weight for key, weight in counter.items() if weight > 0 and key in allowed_keys}
+
+
+def _has_seed_viable_transition(
+    model,
+    root_key: str,
+    *,
+    available_anchor_signatures: set[tuple[str, int]],
+    allowlist,
+) -> bool:
+    """Return True when seeded bootstrap root can emit at least one viable token.
+
+    Args:
+        model: Loaded `RelativeMarkovModel` with transition counts
+        root_key: Candidate synthetic seeded-history root token key
+        available_anchor_signatures: Anchor signatures currently present in the seeded ship
+        allowlist: Optional allowed part-id set from generation config
+
+    Returns:
+        True when the root state's transition options include at least one
+        non-END token that can reference an available seed anchor signature and
+        passes lightweight part-id/geometry validation
+    """
+
+    transition_options = _resolve_transition_options_for_history(model, [root_key])
+    if not transition_options:
+        return False
+
+    for token_key in transition_options:
+        if token_key == END_TOKEN:
+            continue
+        token = RelativePlacementToken.from_key(token_key)
+        anchor_signature = (token.anchor_part_id, token.anchor_rotation)
+        if anchor_signature not in available_anchor_signatures:
+            continue
+        if allowlist is not None and token.part_id not in allowlist:
+            continue
+        if (
+            token.part_id not in model.geometry_cache
+            or token.rotation not in model.geometry_cache[token.part_id].rotations
+        ):
+            continue
+        return True
+
+    return False
+
+
 class WeightedSampler:
     """Sample weighted counters without converting them to expanded lists."""
 
@@ -140,7 +213,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
 
     if mirror_mode:
         from .symmetry import (
-            is_primary_placement as _is_primary_placement,
+            is_anchor_eligible_mirror_primary as _is_anchor_eligible_mirror_primary,
             mirror_part as _mirror_part,
             primary_root_x as _primary_root_x,
         )
@@ -212,10 +285,10 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
             occupied_cells.update(seed_cells)
             part_counts[seed_part.part_id] = part_counts.get(seed_part.part_id, 0) + 1
 
-            is_primary = True
+            is_primary_anchor = True
             if mirror_mode:
-                is_primary = _is_primary_placement(seed_part, model.geometry_cache)
-            if is_primary:
+                is_primary_anchor = _is_anchor_eligible_mirror_primary(seed_part, model.geometry_cache)
+            if is_primary_anchor:
                 primary_indices.append(placed_index)
 
             placement_trace.append(
@@ -225,14 +298,18 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
                     "placed_index": placed_index,
                     "world_origin": [seed_part.x, seed_part.y],
                     "is_seed": True,
-                    "is_mirror": not is_primary,
+                    "is_mirror": not is_primary_anchor,
                 }
             )
             _emit_part_placed(
                 event_sink,
                 seed_part,
                 message="Accepted seed placement",
-                metadata={"placed_index": placed_index, "is_seed": True, "is_mirror": not is_primary},
+                metadata={
+                    "placed_index": placed_index,
+                    "is_seed": True,
+                    "is_mirror": not is_primary_anchor,
+                },
             )
 
         seed_stats = {
@@ -251,46 +328,85 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
                 f"{seed_skipped_overlap} skipped: overlap)"
             )
 
-        if not primary_indices:
+        if mirror_mode and not occupied_cells_are_mirror_balanced(occupied_cells):
             raise RuntimeError(
-                "seed provided but no primary-side parts were found; "
-                "in mirror mode all seed parts must have all footprint cells at x ≤ -1 "
-                "to serve as Markov anchors."
+                "seed provided but occupied footprint is not mirror-symmetric around x = -0.5; "
+                "mirror mode accepts asymmetric part placement only when occupied cells match "
+                "on both sides of the mirror axis."
             )
 
-        seed_part_ids = frozenset(placed[idx].part_id for idx in primary_indices)
-        virtual_root_key = None
-        virtual_root_attempts = max(256, len(model.start_counts) // 20)
+        if not primary_indices:
+            raise RuntimeError(
+                "seed provided but no mirror-primary anchor candidates were found; "
+                "mirror mode requires at least one left-side or self-mirroring centerline "
+                "part to serve as a Markov anchor."
+            )
 
-        # Prefer virtual roots already represented in the seed, then fall back
-        for _ in range(virtual_root_attempts):
-            candidate_key = WeightedSampler.sample(model.start_counts, rng)
-            candidate = RelativePlacementToken.from_key(candidate_key)
-            if allowlist is not None and candidate.part_id not in allowlist:
+        if mirror_mode:
+            anchor_indexes_for_seed = list(primary_indices)
+        else:
+            anchor_indexes_for_seed = list(range(len(placed)))
+
+        available_anchor_signatures = {
+            (placed[idx].part_id, placed[idx].rotation) for idx in anchor_indexes_for_seed
+        }
+        virtual_root_key = None
+        virtual_root_selection = "unselected"
+
+        valid_start_keys: set[str] = set()
+        compatible_start_keys: set[str] = set()
+        viable_start_keys: set[str] = set()
+
+        # Build root-key buckets once so seeded startup can sample from the
+        # most compatible distribution instead of repeatedly retrying the full
+        # root counter and risking incompatible anchor signatures.
+        for start_key in model.start_counts:
+            start_token = RelativePlacementToken.from_key(start_key)
+            if allowlist is not None and start_token.part_id not in allowlist:
                 continue
             if (
-                candidate.part_id not in model.geometry_cache
-                or candidate.rotation not in model.geometry_cache[candidate.part_id].rotations
+                start_token.part_id not in model.geometry_cache
+                or start_token.rotation not in model.geometry_cache[start_token.part_id].rotations
             ):
                 continue
-            if candidate.part_id in seed_part_ids:
-                virtual_root_key = candidate_key
-                break
-        if virtual_root_key is None:
-            for _ in range(virtual_root_attempts):
-                candidate_key = WeightedSampler.sample(model.start_counts, rng)
-                candidate = RelativePlacementToken.from_key(candidate_key)
-                if allowlist is not None and candidate.part_id not in allowlist:
-                    continue
-                if (
-                    candidate.part_id in model.geometry_cache
-                    and candidate.rotation in model.geometry_cache[candidate.part_id].rotations
-                ):
-                    virtual_root_key = candidate_key
-                    break
+            valid_start_keys.add(start_key)
+            if (start_token.part_id, start_token.rotation) in available_anchor_signatures:
+                compatible_start_keys.add(start_key)
+            if _has_seed_viable_transition(
+                model,
+                start_key,
+                available_anchor_signatures=available_anchor_signatures,
+                allowlist=allowlist,
+            ):
+                viable_start_keys.add(start_key)
+
+        preferred_buckets = [
+            ("compatible_with_viable_transition", compatible_start_keys & viable_start_keys),
+            ("viable_transition_only", viable_start_keys),
+            ("compatible_signature_only", compatible_start_keys),
+            ("valid_start_only", valid_start_keys),
+        ]
+        for selection_name, candidate_bucket in preferred_buckets:
+            if not candidate_bucket:
+                continue
+            weighted_bucket = _filtered_counter(model.start_counts, candidate_bucket)
+            if not weighted_bucket:
+                continue
+            virtual_root_key = WeightedSampler.sample(weighted_bucket, rng)
+            virtual_root_selection = selection_name
+            break
+
         if virtual_root_key is None:
             raise RuntimeError("could not sample a virtual root token for seeded generation")
         history = [virtual_root_key]
+        if seed_stats is not None:
+            chosen_virtual_root = RelativePlacementToken.from_key(virtual_root_key)
+            seed_stats["virtual_root"] = {
+                "selection": virtual_root_selection,
+                "part_id": chosen_virtual_root.part_id,
+                "rotation": chosen_virtual_root.rotation,
+                "available_anchor_signatures": len(available_anchor_signatures),
+            }
     else:
         root_key = None
         root = None
@@ -356,31 +472,32 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
             )
             if mirror_root is not None:
                 mirror_cells = mirror_root.footprint_cells(model.geometry_cache)
-                mirror_idx = len(placed)
-                placed.append(mirror_root)
-                occupied_cells.update(mirror_cells)
-                part_counts[mirror_root.part_id] = part_counts.get(mirror_root.part_id, 0) + 1
-                placement_trace.append(
-                    {
-                        "token": root.to_dict(),
-                        "anchor_index": None,
-                        "placed_index": mirror_idx,
-                        "world_origin": [mirror_root.x, mirror_root.y],
-                        "is_mirror": True,
-                        "mirror_of": root_primary_idx,
-                    }
-                )
-                _emit_part_placed(
-                    event_sink,
-                    mirror_root,
-                    message="Accepted mirrored root placement",
-                    metadata={
-                        "placed_index": mirror_idx,
-                        "anchor_index": None,
-                        "is_mirror": True,
-                        "mirror_of": root_primary_idx,
-                    },
-                )
+                if mirror_cells != root_cells:
+                    mirror_idx = len(placed)
+                    placed.append(mirror_root)
+                    occupied_cells.update(mirror_cells)
+                    part_counts[mirror_root.part_id] = part_counts.get(mirror_root.part_id, 0) + 1
+                    placement_trace.append(
+                        {
+                            "token": root.to_dict(),
+                            "anchor_index": None,
+                            "placed_index": mirror_idx,
+                            "world_origin": [mirror_root.x, mirror_root.y],
+                            "is_mirror": True,
+                            "mirror_of": root_primary_idx,
+                        }
+                    )
+                    _emit_part_placed(
+                        event_sink,
+                        mirror_root,
+                        message="Accepted mirrored root placement",
+                        metadata={
+                            "placed_index": mirror_idx,
+                            "anchor_index": None,
+                            "is_mirror": True,
+                            "mirror_of": root_primary_idx,
+                        },
+                    )
         else:
             root_part = ShipPart(part_id=root.part_id, rotation=root.rotation, x=0, y=0)
             root_cells = root_part.footprint_cells(model.geometry_cache)
@@ -405,22 +522,21 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
         history.append(root_key)
 
     while len(placed) < config.max_parts and attempts < config.max_attempts:
-        state = model._state_key(history, model.order)
-        options = model.transition_counts.get(state)
-        if not options and model.order > 0:
-            for fallback_order in range(model.order - 1, -1, -1):
-                options = model.transition_counts.get(model._state_key(history, fallback_order))
-                if options:
-                    break
+        options = _resolve_transition_options_for_history(model, history)
         if not options:
             stop_reason = "no_transition_for_state"
             break
 
+        # Step-local mutable options avoid wasting retries on the exact same
+        # token after it has already been proven invalid for the current state.
+        step_options = {token_key: weight for token_key, weight in options.items() if weight > 0}
         token_key = None
         all_end_tokens_by_req = True
         for _ in range(config.max_resample_per_step):
+            if not step_options:
+                break
             attempts += 1
-            candidate_key = WeightedSampler.sample(options, rng)
+            candidate_key = WeightedSampler.sample(step_options, rng)
             if candidate_key == END_TOKEN:
                 if config.part_requirements is not None and not _requirements_satisfied(
                     part_counts, config.part_requirements
@@ -432,6 +548,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
                         message="END token rejected until requirements are satisfied",
                         metadata={"attempts": attempts},
                     )
+                    step_options.pop(candidate_key, None)
                     continue
                 token_key = END_TOKEN
                 break
@@ -446,6 +563,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
                     message="Candidate rejected by allowlist",
                     metadata={"attempts": attempts, "token": token.to_dict()},
                 )
+                step_options.pop(candidate_key, None)
                 continue
             if (
                 token.part_id not in model.geometry_cache
@@ -457,6 +575,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
                     message="Candidate rejected: missing vanilla geometry",
                     metadata={"attempts": attempts, "token": token.to_dict()},
                 )
+                step_options.pop(candidate_key, None)
                 continue
 
             if mirror_mode:
@@ -481,6 +600,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
                     message="Candidate rejected: no matching anchor was available",
                     metadata={"attempts": attempts, "token": token.to_dict()},
                 )
+                step_options.pop(candidate_key, None)
                 continue
 
             accepted = False
@@ -618,34 +738,38 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
                         },
                     )
 
-                    mirror_idx = len(placed)
-                    placed.append(mirror_candidate)
-                    occupied_cells.update(mirror_cells)
-                    part_counts[mirror_candidate.part_id] = (
-                        part_counts.get(mirror_candidate.part_id, 0) + 1
-                    )
-                    placement_trace.append(
-                        {
-                            "token": token.to_dict(),
-                            "anchor_index": None,
-                            "placed_index": mirror_idx,
-                            "world_origin": [mirror_candidate.x, mirror_candidate.y],
-                            "is_mirror": True,
-                            "mirror_of": primary_idx,
-                        }
-                    )
-                    _emit_part_placed(
-                        event_sink,
-                        mirror_candidate,
-                        message="Accepted mirrored placement",
-                        metadata={
-                            "placed_index": mirror_idx,
-                            "attempts": attempts,
-                            "token": token.to_dict(),
-                            "is_mirror": True,
-                            "mirror_of": primary_idx,
-                        },
-                    )
+                    # If mirroring maps this placement back onto the same occupied
+                    # cells, keep only one centered part instead of creating an
+                    # overlapping duplicate "mirror" copy.
+                    if mirror_cells != candidate_cells:
+                        mirror_idx = len(placed)
+                        placed.append(mirror_candidate)
+                        occupied_cells.update(mirror_cells)
+                        part_counts[mirror_candidate.part_id] = (
+                            part_counts.get(mirror_candidate.part_id, 0) + 1
+                        )
+                        placement_trace.append(
+                            {
+                                "token": token.to_dict(),
+                                "anchor_index": None,
+                                "placed_index": mirror_idx,
+                                "world_origin": [mirror_candidate.x, mirror_candidate.y],
+                                "is_mirror": True,
+                                "mirror_of": primary_idx,
+                            }
+                        )
+                        _emit_part_placed(
+                            event_sink,
+                            mirror_candidate,
+                            message="Accepted mirrored placement",
+                            metadata={
+                                "placed_index": mirror_idx,
+                                "attempts": attempts,
+                                "token": token.to_dict(),
+                                "is_mirror": True,
+                                "mirror_of": primary_idx,
+                            },
+                        )
                 else:
                     if part_overlaps_occupied_cells(candidate, model.geometry_cache, occupied_cells):
                         rejected_overlap += 1
@@ -706,6 +830,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
                 break
             if accepted:
                 break
+            step_options.pop(candidate_key, None)
 
         if token_key is None:
             if all_end_tokens_by_req and rejected_requirements > 0:
@@ -783,8 +908,8 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
     if mirror_mode:
         notes.append(
             "Mirror symmetry: left-right across axis x = -0.5 (between columns -1 and 0). "
-            "Primary placements on left half (x ≤ -1); mirrors placed on right half (x ≥ 0). "
-            "Only primary parts serve as Markov anchors."
+            "Primary anchors can be left-side placements or self-mirroring centerline straddlers. "
+            "Mirrored companions are emitted only when the reflected footprint is distinct."
         )
     if config.part_requirements:
         notes.append(
@@ -794,7 +919,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
     if seeded:
         notes.append(
             "Seeded generation: existing ship parts were pre-placed before Markov sampling began. "
-            "Markov history was reconstructed from the ordered primary seed parts."
+            "Seeded startup chooses a virtual root token that is compatible with available seed anchors."
         )
 
     payload = {

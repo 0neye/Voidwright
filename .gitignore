@@ -41,6 +41,7 @@ tmp*/
 # Scratch / local editor state
 .claude/
 memory/
+TEMP*
 
 # Google Form responses
 Voidwright Ship Design Opt-Out Form (Excelsior Community).csv
