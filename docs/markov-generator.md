@@ -7,7 +7,8 @@ model. It is split by responsibility across:
 
 - `training/backends/markov/` for CLI-facing build and validation adapters
 - `generator/backends/markov/` for CLI-facing runtime generation and export adapters
-- `markov/` for the shared model, symmetry, and backend-specific input helpers
+- `markov/` for the shared model and backend-specific input helpers
+- `ship_layout/` for placement validation (`PlacementValidator`), mirror symmetry, geometry, and connectivity — shared infrastructure usable by any generator backend
 
 It is designed to produce structurally plausible layouts, not fully game-ready ships.
 
@@ -59,15 +60,24 @@ The Markov state is the recent token history, with order controlled by `--markov
 
 Generation samples a root, then repeatedly samples the next token from the current Markov state.
 
+All placement validation is handled by `ship_layout.validator.PlacementValidator`,
+which is initialized once per generation run and reused across every candidate
+attempt. This makes the validation logic available to any future generator backend
+without duplicating it.
+
 For each sampled placement token:
 
 - The runtime finds an already placed anchor with matching part ID and rotation
 - The new part origin is reconstructed as `anchor_origin + (dx, dy)`
-- The placement is rejected if:
-  - no matching anchor is available
-  - the candidate does not make structural hull-side contact with its anchor
-  - the footprint overlaps occupied cells
-  - the footprint exceeds configured bounds
+- `PlacementValidator.validate_candidate` runs the full check chain and returns a `ValidationResult`:
+  - `geometry_unknown` — part or rotation absent from the geometry cache
+  - `allowlist` — part not in the configured allowlist
+  - `connectivity` — no structural hull-side contact with the anchor
+  - `overlap` — footprint overlaps occupied cells
+  - `bounds` — footprint exceeds configured world bounds
+  - `mirror_construction` — mirror placement could not be computed (mirror mode only)
+  - `mirror_overlap` / `mirror_bounds` — mirror companion fails overlap or bounds check (mirror mode only)
+- The result also carries pre-computed `primary_cells` and `companion_cells` so the caller does not need to recompute footprints after acceptance
 
 Generation stops on:
 
