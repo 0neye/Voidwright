@@ -65,6 +65,7 @@ For each sampled placement token:
 - The new part origin is reconstructed as `anchor_origin + (dx, dy)`
 - The placement is rejected if:
   - no matching anchor is available
+  - the candidate does not make structural hull-side contact with its anchor
   - the footprint overlaps occupied cells
   - the footprint exceeds configured bounds
 
@@ -78,12 +79,28 @@ Generation stops on:
 
 When part requirements are active, `end_token` can also be suppressed until the requirements are met or attempts are exhausted.
 
+Seeded generation bootstraps Markov history with a synthetic virtual root. The
+runtime prefers start tokens that have a viable next transition from the
+currently available seed anchors before falling back to roots that only match a
+seed anchor signature.
+
+Mirror symmetry still uses the fixed axis at `x = -0.5`, but centerline parts
+whose occupied footprint mirrors onto itself are valid primary anchors. When a
+root or mirrored companion reflects onto the same occupied cells, the runtime
+keeps only the centered self-mirroring part instead of creating an overlapping
+duplicate.
+
 ## Coordinate assumptions and validation
 
 The current model assumes extracted `Location2x` values are stable centered-`2x`
 part-origin coordinates, together with `coord_transform.center_2x` for world-grid replay.
 That assumption was validated against real canonical ships by reconstructing placements from anchor-relative offsets
 and checking both exact part origins and exact world footprint cells.
+
+Seed PNG inputs follow the same contract at runtime: when a parsed `.ship.png`
+payload still contains world `Parts[*].Location` fields, generation first routes
+it through `preprocessing.relative_coords.apply_relative_coords_transform` so
+seed loading sees the same centered `Location2x` representation as the corpus.
 
 Important implication:
 

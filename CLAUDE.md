@@ -5,10 +5,10 @@ Any changes to this file should be mirrored in AGENTS.md.
 
 ## What this repo does
 
-Generates Cosmoteer `.ship.png` files from a learned model. The full pipeline is:
+Generates Cosmoteer `.ship.png` files from a learned model. The main workflow is:
 
 1. (Optional) Download `.ship.png` files from Discord
-2. Preprocess local images: extract embedded JSON → canonicalize → build ship graphs
+2. Preprocess local images: extract embedded JSON -> canonicalize -> build ship graphs
 3. Train a Markov model from graph outputs
 4. Generate new encoded `.ship.png` files from the trained model
 
@@ -21,9 +21,16 @@ pip install -e .[dev]
 pip install -e .[scripts]
 ```
 
-**Full preprocessing pipeline** (images → graph JSON):
+**Root CLI discovery:**
 ```bash
-python -m preprocessing.cli pipeline downloaded_ships \
+python main.py commands
+python main.py help
+python main.py repl
+```
+
+**Full preprocessing pipeline** (images -> graph JSON):
+```bash
+python main.py preprocessing pipeline downloaded_ships \
   --output-dir generated_ship_graphs_canonical \
   --write-extracted-dir extracted_ship_data \
   --write-canonical-dir extracted_ship_data_canonical \
@@ -39,10 +46,18 @@ Pipeline concurrency defaults are hardware-agnostic. Stage-specific overrides ar
 
 **Preprocessing stages individually:**
 ```bash
-python -m preprocessing.cli extract downloaded_ships --output-dir extracted_ship_data
-python -m preprocessing.cli canonicalize --input-dir extracted_ship_data --output-dir extracted_ship_data_canonical
-python -m preprocessing.cli graphs --input-dir extracted_ship_data_canonical --output-dir generated_ship_graphs_canonical
-python -m preprocessing.cli door-rules --input-dir extracted_ship_data_canonical
+python main.py preprocessing extract downloaded_ships --output-dir extracted_ship_data
+python main.py preprocessing canonicalize --input-dir extracted_ship_data --output-dir extracted_ship_data_canonical
+python main.py preprocessing graphs --input-dir extracted_ship_data_canonical --output-dir generated_ship_graphs_canonical
+python main.py preprocessing door-rules --input-dir extracted_ship_data_canonical
+```
+
+The package-level CLIs remain supported:
+
+```bash
+python -m preprocessing.cli ...
+python -m training.cli ...
+python -m generator.cli ...
 ```
 
 The `extract`, `canonicalize`, and `graphs` stages also accept:
@@ -50,28 +65,36 @@ The `extract`, `canonicalize`, and `graphs` stages also accept:
 - `--workers <n>`
 - `--executor {auto,thread,process}`
 
-**Train a Markov model** (preferred — from graph corpus):
+**Train a Markov model** (preferred - from graph corpus):
 ```bash
-python -m training.cli build markov \
+python main.py training build markov \
   --graph-input-dir generated_ship_graphs_canonical \
   --output models/markov/markov-model.v2.json
 ```
 
 **Validate coordinate assumptions:**
 ```bash
-python -m training.cli validate markov \
+python main.py training validate markov \
   --input-dir extracted_ship_data_canonical \
   --output models/markov/coordinate-validation.v2.json
 ```
 
 **Generate ships:**
 ```bash
-python -m generator.cli generate markov \
+python main.py generator generate markov \
   --model models/markov/markov-model.v2.json \
   --output-dir out/generated-ships \
   --count 5 \
   --seed 1337
 ```
+
+Useful generation options:
+
+- `--json-output-dir` writes generated JSON payloads
+- `--seed-json` / `--seed-png` seeds generation from an existing layout
+- `--mirror-symmetry` enables runtime left-right symmetry
+- `--allowlist`, `--allowlist-file`, `--require`, and `--requirements-file` constrain output
+- `--visualize` and `--visualization-fps` render MP4 growth videos alongside samples
 
 **Discord acquisition** (requires `DISCORD_BOT_TOKEN` in `.env`):
 ```bash
@@ -80,18 +103,20 @@ python scripts/download_ship_images.py --output-dir downloaded_ships --verbose
 
 ## Module architecture
 
-The codebase is split into six purpose-specific packages:
+The codebase is split into purpose-specific packages:
 
-- **`preprocessing/`** — four-stage pipeline (extract → canonicalize → graphs → door-rules). Each stage is its own submodule with a `main(argv)` and `build_parser()`. `pipeline.py` orchestrates all stages.
-- **`training/`** — backend-agnostic router. `router.py` resolves backend names; each backend under `training/backends/<name>/` registers its own CLI parser via `register_build_parser` / `register_validate_parser`.
-- **`generator/`** — same router pattern as training. `generator/backends/markov/backend.py` wires CLI options; `generator/backends/markov/export.py` handles `.ship.png` encoding and roundtrip validation.
-- **`markov/`** — shared Markov internals used by both training and generation: `model.py` (tokens, training, sampling), `symmetry.py` (mirror-mode logic), `inputs.py` (allowlist/seed loading).
-- **`common/`** — geometry metadata (`geometry.py`), file helpers, logging, and `common/cosmoteer/` (parser and encoder for `.ship.png` LSB payloads). `common/data/vanilla_parts_full_geometry.json` is the authoritative part geometry source.
+- **`preprocessing/`** - four-stage pipeline (extract -> canonicalize -> graphs -> door-rules). Each stage is its own submodule with a `main(argv)` and `build_parser()`. `pipeline.py` orchestrates all stages.
+- **`training/`** - backend-agnostic router. `router.py` resolves backend names; each backend under `training/backends/<name>/` registers its own CLI parser via `register_build_parser` / `register_validate_parser`.
+- **`generator/`** - backend-agnostic generation router. `generator/backends/markov/backend.py` wires CLI options; `generator/backends/markov/export.py` handles `.ship.png` encoding and roundtrip validation.
+- **`markov/`** - shared Markov internals used by both training and generation: `model.py`, `generation.py`, `symmetry.py`, `inputs.py`, and related helpers.
+- **`ship_layout/`** - shared structural geometry, connectivity, mirror validation, and placement checks used by generation and analysis.
+- **`visualizer/`** - event capture, icon loading, frame rendering, and MP4 export for generation visualization.
+- **`common/`** - geometry metadata (`geometry.py`), file helpers, logging, and `common/cosmoteer/` (parser and encoder for `.ship.png` LSB payloads). `common/data/vanilla_parts_full_geometry.json` is the authoritative part geometry source.
 
 ### Key data flow
 
-```
-.ship.png → parser → raw JSON → canonicalize → graph JSON → Markov model → generated JSON → encoder → .ship.png
+```text
+.ship.png -> parser -> raw JSON -> centered 2x extracted JSON -> canonical JSON -> graph JSON -> Markov model -> generated JSON -> encoder -> .ship.png
 ```
 
 ### Adding a new backend
@@ -102,7 +127,7 @@ Register it in `training/router.py` and `generator/router.py` alongside the Mark
 
 Include the AI model name in every commit message footer. Format:
 
-```
+```text
 <subject line>
 
 <body if needed>
@@ -112,14 +137,18 @@ Co-Authored-By: <model-name>
 
 ## Important conventions
 
-- **Geometry source of truth:** `common/data/vanilla_parts_full_geometry.json` via `common/geometry.py`. All vanilla part footprints, dimensions, traversability, and stored-location rect metadata come from here. Non-vanilla parts fall back to regex inference.
+- **Geometry source of truth:** `common/data/vanilla_parts_full_geometry.json` via `common/geometry.py`. All vanilla part footprints, dimensions, traversability, stored-location rect metadata, and most mirrored-footprint behavior come from here. Non-vanilla parts fall back to regex inference.
 - **Model artifacts** live under `models/markov/`. Preferred artifact: `markov-model.v2.json` (built from graph corpus). Legacy `v1` artifacts used the raw canonical corpus.
 - **Graph training is preferred** over the legacy `--input-dir` raw-corpus path. Use `--graph-input-dir` when building models.
-- **Canonicalization is content-based.** Files may get `__dedup-<12 hex>` suffixes — this is normal, not a failure.
+- **Canonicalization is content-based.** Files may get `__dedup-<12 hex>` suffixes - this is normal, not a failure.
 - **Preprocessing concurrency is deterministic.** Parallel scan and graph workers are allowed, but manifests and output naming are reduced in sorted order so results stay stable across runs. Bad files during parallel graph generation are skipped with a warning rather than aborting the batch.
 - **Adding a preprocessing stage** requires registering it in `_AUTO_STAGE_EXECUTORS` in `preprocessing/concurrency.py`; omitting it raises a `ValueError` when the stage runs with `executor=auto`.
 - **The Markov generator does not synthesize doors.** Door-rule logic in `preprocessing/door_rules.py` and `preprocessing/door_rules_engine.py` is for analysis and future passes only.
-- **Mirror symmetry axis** is at `x = -0.5`. Left half: all footprint cells `x <= -1`; right half: `x >= 0`. Parts straddling the axis are rejected.
+- **Mirror symmetry axis** is at `x = -0.5`. Left half: all footprint cells `x <= -1`; right half: `x >= 0`. Centerline-straddling parts are allowed only when their occupied footprint is mirror-balanced, and such parts count as valid primary anchors.
+- **Mirror generation roots and companions can collapse to one part.** If a root or mirrored placement reflects onto the same occupied cells, generation keeps only the centered self-mirroring part instead of emitting an overlapping duplicate.
+- **Seeded mirror mode validates occupied cells, not just part lists.** Asymmetric part compositions are accepted when the combined occupied footprint is mirror-balanced; asymmetric occupied footprints are rejected.
+- **Seeded startup uses a synthetic virtual root.** Seeded generation picks a start token compatible with available seed anchors, preferring roots that have a viable next transition before roots that only match a seed signature.
+- **`--seed-png` input is normalized through preprocessing coordinates.** Parsed PNG payloads with world `Parts[*].Location` values are rewritten through `preprocessing.relative_coords.apply_relative_coords_transform` so seed loading sees the same centered `Location2x` / `coord_transform.center_2x` frame as extracted corpus files.
 - **Token format:** `(part_id, rotation, anchor_part_id, anchor_rotation, dx, dy)`. Root tokens use `anchor_part_id = "__ROOT__"`. END token is `"__END__"`.
 - **Pipeline extract failures are partially tolerated.** `preprocessing/pipeline.py` treats extract exit code `2` as partial success and still runs canonicalize/graphs for successfully extracted files.
 - **Persistent pipeline sync is manifest-scoped.** `preprocessing/pipeline.py` only updates/prunes files listed in `.pipeline-managed-*.txt` manifests and intentionally leaves unrelated files in persistent stage output directories.

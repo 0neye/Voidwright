@@ -31,7 +31,7 @@ Axis convention:
 - The mirror axis is fixed at `x = -0.5`
 - Primary placements live entirely on the left half where all footprint cells satisfy `x <= -1`
 - Mirrored placements live on the right half where all footprint cells satisfy `x >= 0`
-- No part is allowed to straddle the axis
+- Centerline-straddling parts are allowed only when their occupied footprint is mirror-balanced across the axis
 
 Mirror transform:
 
@@ -44,16 +44,17 @@ Mirror transform:
 
 Generation rules:
 
-1. The root is placed flush against the axis on the left half
+1. The root is placed flush against the axis, preferring a centered self-mirroring placement when the footprint allows it
 2. Each accepted primary placement must also have a valid mirror placement
-3. Primary and mirror placements are committed atomically
-4. Only primary-side parts are used as future Markov anchors
+3. Primary and mirror placements are committed atomically unless the mirrored footprint is identical, in which case the centered part is kept only once
+4. Primary-side anchors include both left-only placements and self-mirroring centerline placements
 
 Important semantics:
 
 - `--max-parts` counts total parts, not unique left-side parts
 - Mirror mode tends to terminate earlier because a placement is rejected if either side fails
 - Increasing `--max-attempts` helps compensate for the stricter acceptance rule
+- Mirror mode validates symmetry by occupied cells, not by requiring the part list itself to be pairwise mirrored
 
 ## Part requirements
 
@@ -106,7 +107,7 @@ Seed loading behavior:
 
 - Generated sample JSON is detected by a `parts` key
 - Extracted Cosmoteer JSON is detected by a `Parts` key
-- `.ship.png` input is parsed through the existing extraction path
+- `.ship.png` input is parsed through the existing extraction path and normalized into preprocessing's centered `Location2x` / `coord_transform.center_2x` frame when needed
 
 Seed placement rules:
 
@@ -118,7 +119,8 @@ Seed placement rules:
 Runtime behavior:
 
 - The seed creates the initial occupied map
-- Generation then samples a virtual root and continues using the placed seed parts as the anchor pool
+- Generation then samples a synthetic virtual root and continues using the placed seed parts as the anchor pool
+- Virtual-root selection prefers roots that can actually emit a viable next transition from the available seed anchors before roots that only match a seed part signature
 - Output JSON includes `stats.seed` with counts for placed and skipped seed parts
 
 Best seeds:
@@ -139,10 +141,12 @@ Seed placement happens before mirror-mode generation logic takes over.
 
 Important rule in mirror mode:
 
-- Only seed parts whose entire footprint lies on the primary left half can become active anchors for continued generation
-- Seed parts on the right half can exist as occupied cells but are not useful for further growth
+- Seeded occupied cells must be mirror-balanced across `x = -0.5`
+- Active anchors can be either left-half placements or self-mirroring centerline placements
+- Seed parts on the right half may remain as occupied cells, but only anchor-eligible primary placements participate in continued growth
 
 Practical implication:
 
-- Mirror-mode seeds should be authored on the left half only
-- Non-symmetric full-ship seeds are usually poor starting points for mirror-mode continuation
+- Mirror-mode seeds can describe a full symmetric ship, even with asymmetric part composition, as long as the occupied footprint mirrors exactly
+- Left-half-only or centered seeds are still the most reliable way to leave room for continued growth
+- Non-symmetric occupied footprints are rejected up front
