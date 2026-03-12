@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from markov.inputs import load_seed_parts_from_png
+from markov.inputs import load_seed_parts_from_json, load_seed_parts_from_png
 from markov.model import iter_vanilla_parts_from_ship
 from markov.types import ShipPart
 
@@ -87,3 +88,70 @@ def test_load_seed_parts_from_real_seed_fixture() -> None:
     assert loaded_seed_parts
     assert all("part_id" in seed_part for seed_part in loaded_seed_parts)
     assert all("rotation" in seed_part for seed_part in loaded_seed_parts)
+
+
+def test_load_seed_parts_from_json_applies_relative_transform_for_world_locations(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Seed JSON loading should normalize world `Location` payloads through preprocessing."""
+
+    seed_json_path = tmp_path / "seed.json"
+    seed_json_path.write_text(
+        json.dumps({"Parts": [{"ID": "cosmoteer.corridor", "Location": [4, 6], "Rotation": 1}]}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "markov.inputs.apply_relative_coords_transform",
+        lambda _ship_data: {
+            "coord_transform": {"version": 1, "frame": "bbox_center_2x", "scale": 2, "center_2x": [8, 12]},
+            "Parts": [{"ID": "cosmoteer.corridor", "Location2x": [10, 2], "Rotation": 1}],
+        },
+    )
+
+    loaded_seed_parts = load_seed_parts_from_json(seed_json_path)
+
+    assert loaded_seed_parts == [
+        {
+            "part_id": "cosmoteer.corridor",
+            "rotation": 1,
+            "x": 9,
+            "y": 7,
+            "flip_x": False,
+            "flip_y": False,
+        }
+    ]
+
+
+def test_load_seed_parts_from_json_supports_preprocessed_relative_payload(tmp_path: Path) -> None:
+    """Seed JSON loading should read extracted payloads that only include `Location2x`."""
+
+    seed_json_path = tmp_path / "seed-relative.json"
+    seed_json_path.write_text(
+        json.dumps(
+            {
+                "coord_transform": {
+                    "version": 1,
+                    "frame": "bbox_center_2x",
+                    "scale": 2,
+                    "center_2x": [8, 12],
+                },
+                "Parts": [{"ID": "cosmoteer.corridor", "Location2x": [10, 2], "Rotation": 1}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded_seed_parts = load_seed_parts_from_json(seed_json_path)
+
+    assert loaded_seed_parts == [
+        {
+            "part_id": "cosmoteer.corridor",
+            "rotation": 1,
+            "x": 9,
+            "y": 7,
+            "flip_x": False,
+            "flip_y": False,
+        }
+    ]
