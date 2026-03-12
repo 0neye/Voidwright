@@ -135,6 +135,11 @@ Include the AI model name in every commit message footer. Format:
 Co-Authored-By: <model-name>
 ```
 
+## Major change workflow
+
+After making a major change or refactor and running appropriate tests, please update the AGENTS.md and CLAUDE.md as well as any applicable docs, when you deem it appropriate. If unsure, prompt the user.
+
+
 ## Important conventions
 
 - **Geometry source of truth:** `common/data/vanilla_parts_full_geometry.json` via `common/geometry.py`. All vanilla part footprints, dimensions, traversability, stored-location rect metadata, and most mirrored-footprint behavior come from here. Non-vanilla parts fall back to regex inference.
