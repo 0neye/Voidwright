@@ -1,7 +1,22 @@
 """Regression tests for preprocessing cell-graph and structural-edge rules."""
 
-from common.geometry import load_vanilla_part_geometry
-from preprocessing.graphs import cell_graph, structural_edges
+from collections import defaultdict
+
+from common.geometry import infer_meta, load_vanilla_part_geometry
+from preprocessing.graphs import cell_graph, part_cells, structural_edges
+
+
+def _build_cell_to_parts(part_records: list[dict]) -> dict:
+    """Derive cell_to_parts from part_records using the real geometry, mirroring
+    what process_ship() does so tests stay consistent with footprint changes."""
+
+    cell_to_parts: dict = defaultdict(set)
+    for record in part_records:
+        meta, _ = infer_meta(record["part_id"], record["rotation"])
+        part_dict = {"Location": record["location"], "Rotation": record["rotation"]}
+        for cell in part_cells(part_dict, meta):
+            cell_to_parts[cell].add(record["index"])
+    return dict(cell_to_parts)
 
 
 def make_part_record(index: int, cells: set[tuple[int, int]], walkable_cells: set[tuple[int, int]]) -> dict:
@@ -80,13 +95,10 @@ def test_structural_edges_filter_out_wedge_air_contacts() -> None:
             "rotation": 0,
         },
     ]
-    # This adjacency map provides a legacy rectangle-neighbor candidate pair.
-    # Shared structural checks should drop it because the wedge has no top flat
-    # hull face at this position.
-    cell_to_parts = {
-        (0, 0): {0},
-        (0, -1): {1},
-    }
+    # Derive cell_to_parts from real geometry so the map stays consistent with
+    # footprint changes.  The armor directly above the wedge's air side should
+    # produce no structural edge.
+    cell_to_parts = _build_cell_to_parts(part_records)
 
     assert structural_edges(part_records, cell_to_parts, geometry_cache) == []
 
@@ -109,11 +121,9 @@ def test_structural_edges_accept_r_wedge_alias_ids() -> None:
             "rotation": 0,
         },
     ]
-    cell_to_parts = {
-        (0, 0): {0},
-        (0, 1): {0},
-        (1, 0): {1},
-    }
+    # Derive cell_to_parts from real geometry so the test stays consistent with
+    # footprint changes and does not rely on a manually guessed cell layout.
+    cell_to_parts = _build_cell_to_parts(part_records)
 
     edges = structural_edges(part_records, cell_to_parts, geometry_cache)
     assert len(edges) == 1

@@ -24,7 +24,13 @@ def test_shield_generator_save_rect_rotates_with_part() -> None:
 
 
 def test_known_save_rects_include_explicit_save_rect_parts() -> None:
-    """Repo-backed save rects should cover every explicit stored-location rect."""
+    """Repo-backed save rects should cover every explicit stored-location rect.
+
+    This is an exhaustive snapshot: it must match the exact set of parts that
+    carry save-rect metadata in vanilla_parts_full_geometry.json.  When a new
+    vanilla part with a stored-location rect is added to the game data, add it
+    to `expected_part_ids` here as well.
+    """
 
     save_rects = known_save_rects()
     expected_part_ids = {

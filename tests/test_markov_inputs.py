@@ -86,8 +86,16 @@ def test_load_seed_parts_from_real_seed_fixture() -> None:
     loaded_seed_parts = load_seed_parts_from_png(fixture_png_path, iter_vanilla_parts_from_ship)
 
     assert loaded_seed_parts
-    assert all("part_id" in seed_part for seed_part in loaded_seed_parts)
-    assert all("rotation" in seed_part for seed_part in loaded_seed_parts)
+    required_keys = {"part_id", "rotation", "x", "y", "flip_x", "flip_y"}
+    for seed_part in loaded_seed_parts:
+        assert required_keys <= seed_part.keys(), (
+            f"Seed part missing keys {required_keys - seed_part.keys()}: {seed_part}"
+        )
+        assert isinstance(seed_part["x"], int), f"x should be int, got {type(seed_part['x'])}"
+        assert isinstance(seed_part["y"], int), f"y should be int, got {type(seed_part['y'])}"
+        assert isinstance(seed_part["rotation"], int), f"rotation should be int"
+        assert isinstance(seed_part["flip_x"], bool)
+        assert isinstance(seed_part["flip_y"], bool)
 
 
 def test_load_seed_parts_from_json_applies_relative_transform_for_world_locations(

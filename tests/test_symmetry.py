@@ -1,7 +1,7 @@
 from common.geometry import load_vanilla_part_geometry
 from generator.backends.markov.export import generated_parts_to_cosmoteer_parts, roundtrip_validate
 from markov.model import ShipPart
-from markov.symmetry import mirror_rotation
+from ship_layout.symmetry import mirror_rotation
 from ship_layout.validation import (
     footprint_is_mirror_balanced,
     is_anchor_eligible_mirror_primary,
@@ -45,7 +45,7 @@ def test_half_cell_triangles_keep_rotation_when_mirrored_horizontally() -> None:
 def test_mirror_part_toggles_flip_x_for_mirrored_parts() -> None:
     """Mirroring should toggle FlipX while preserving valid mirrored placement."""
 
-    from markov.symmetry import mirror_part
+    from ship_layout.symmetry import mirror_part
 
     geometry_cache = load_vanilla_part_geometry()
     original = ShipPart(
@@ -75,7 +75,7 @@ def test_mirror_part_toggles_flip_x_for_mirrored_parts() -> None:
 def test_mirror_part_keeps_triangle_rotation_and_toggles_flip_x() -> None:
     """Triangle parts should mirror with the same rotation plus FlipX."""
 
-    from markov.symmetry import mirror_part
+    from ship_layout.symmetry import mirror_part
 
     geometry_cache = load_vanilla_part_geometry()
     original = ShipPart(
