@@ -415,7 +415,7 @@ def test_seeded_generation_avoids_retrying_same_overlap_token(monkeypatch) -> No
         return next(iter(counter))
 
     monkeypatch.setattr(WeightedSampler, "sample", staticmethod(_prefer_overlap))
-    monkeypatch.setattr("markov.generation._is_structurally_connected_to_anchor", lambda *_args: True)
+    monkeypatch.setattr("ship_layout.validator.parts_structurally_touch", lambda *_args: True)
 
     generated_payload = model.generate(config, seed_parts=seed_parts)
 
