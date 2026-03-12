@@ -6,14 +6,12 @@ The mirror axis sits at x = -0.5, i.e. between grid columns -1 and 0.
 
   - PRIMARY placements:  all footprint cells have x <= -1  (left half)
   - MIRROR placements:   all footprint cells have x >= 0   (right half)
+  - CENTERLINE parts:    may straddle both halves when their occupied footprint
+                         is mirror-balanced across the axis
   - Mirror of footprint cell (cx, cy) is (-cx - 1, cy)
   - Mirror part origin:  mirror_x = -origin_x - W
       where W = part width for its rotation
   - y-coordinate is unchanged.
-
-No part can sit "on" the axis (no integer x satisfies x = -0.5), so there are
-no centerline-straddling parts to handle. Parts at x = -1 (1-cell wide) mirror
-to x = 0, giving a two-cell-wide symmetric band around the centerline.
 
 Rotation convention
 -------------------
@@ -34,7 +32,13 @@ from __future__ import annotations
 
 from typing import Dict
 
-from ship_layout.validation import is_primary_placement as _is_primary_placement
+from ship_layout.validation import (
+    footprint_is_mirror_balanced as _footprint_is_mirror_balanced,
+    is_anchor_eligible_mirror_primary as _is_anchor_eligible_mirror_primary,
+    is_primary_placement as _is_primary_placement,
+    mirror_cells_x as _mirror_cells_x,
+    occupied_cells_are_mirror_balanced as _occupied_cells_are_mirror_balanced,
+)
 
 __all__ = [
     "MIRROR_ROTATION",
@@ -43,7 +47,9 @@ __all__ = [
     "mirror_flip_x",
     "mirror_part",
     "primary_root_x",
+    "is_anchor_eligible_mirror_primary",
     "is_primary_placement",
+    "footprint_is_mirror_balanced",
     "verify_mirror_footprint",
 ]
 
@@ -129,6 +135,8 @@ def primary_root_x(part_id: str, rotation: int, geometry_cache: dict) -> int:
     so its mirror's leftmost cell lands at x = 0.
 
     For a part of width W: origin_x = -W -> rightmost cell = -W + W - 1 = -1.
+    When possible, this helper prefers a centerline-straddling root origin whose
+    footprint mirrors onto itself (for example 2-wide parts at x = -1).
     """
 
     geom = geometry_cache.get(part_id)
@@ -137,6 +145,13 @@ def primary_root_x(part_id: str, rotation: int, geometry_cache: dict) -> int:
     rot_geom = geom.rotations.get(rotation)
     if rot_geom is None:
         return -1
+    # Try centered placements first so mirror mode can emit one self-mirroring
+    # part instead of forcing left-only roots when geometry allows it.
+    local_cells = set(rot_geom.footprint_tiles)
+    for candidate_x in range(-rot_geom.width, 1):
+        candidate_cells = {(candidate_x + local_x, local_y) for local_x, local_y in local_cells}
+        if _occupied_cells_are_mirror_balanced(candidate_cells):
+            return candidate_x
     return -rot_geom.width
 
 
@@ -146,10 +161,22 @@ def is_primary_placement(part, geometry_cache: dict) -> bool:
     return _is_primary_placement(part, geometry_cache)
 
 
+def is_anchor_eligible_mirror_primary(part, geometry_cache: dict) -> bool:
+    """Return True when a part can be used as a primary-side mirror anchor."""
+
+    return _is_anchor_eligible_mirror_primary(part, geometry_cache)
+
+
+def footprint_is_mirror_balanced(part, geometry_cache: dict) -> bool:
+    """Return True when a part footprint is symmetric around x = -0.5."""
+
+    return _footprint_is_mirror_balanced(part, geometry_cache)
+
+
 def verify_mirror_footprint(part, mirror, geometry_cache: dict) -> bool:
     """Confirm that *mirror* equals the horizontal reflection of *part*."""
 
     original_cells = part.footprint_cells(geometry_cache)
-    expected_mirror = frozenset((-cell_x - 1, cell_y) for cell_x, cell_y in original_cells)
+    expected_mirror = _mirror_cells_x(original_cells)
     actual_mirror = mirror.footprint_cells(geometry_cache)
     return expected_mirror == actual_mirror
