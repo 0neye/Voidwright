@@ -108,8 +108,8 @@ The codebase is split into purpose-specific packages:
 - **`preprocessing/`** - four-stage pipeline (extract -> canonicalize -> graphs -> door-rules). Each stage is its own submodule with a `main(argv)` and `build_parser()`. `pipeline.py` orchestrates all stages.
 - **`training/`** - backend-agnostic router. `router.py` resolves backend names; each backend under `training/backends/<name>/` registers its own CLI parser via `register_build_parser` / `register_validate_parser`.
 - **`generator/`** - backend-agnostic generation router. `generator/backends/markov/backend.py` wires CLI options; `generator/backends/markov/export.py` handles `.ship.png` encoding and roundtrip validation.
-- **`markov/`** - shared Markov internals used by both training and generation: `model.py`, `generation.py`, `symmetry.py`, `inputs.py`, and related helpers.
-- **`ship_layout/`** - shared structural geometry, connectivity, mirror validation, and placement checks used by generation and analysis.
+- **`markov/`** - shared Markov internals used by both training and generation: `model.py`, `generation.py`, `inputs.py`, and related helpers. `symmetry.py` is a backward-compat shim; mirror computation lives in `ship_layout/symmetry.py`.
+- **`ship_layout/`** - shared structural geometry, connectivity, mirror symmetry (`symmetry.py`), and the `PlacementValidator` API (`validator.py`) used by generation and analysis.
 - **`visualizer/`** - event capture, icon loading, frame rendering, and MP4 export for generation visualization.
 - **`common/`** - geometry metadata (`geometry.py`), file helpers, logging, and `common/cosmoteer/` (parser and encoder for `.ship.png` LSB payloads). `common/data/vanilla_parts_full_geometry.json` is the authoritative part geometry source.
 
@@ -149,6 +149,7 @@ After making a major change or refactor and running appropriate tests, please up
 - **Preprocessing concurrency is deterministic.** Parallel scan and graph workers are allowed, but manifests and output naming are reduced in sorted order so results stay stable across runs. Bad files during parallel graph generation are skipped with a warning rather than aborting the batch.
 - **Adding a preprocessing stage** requires registering it in `_AUTO_STAGE_EXECUTORS` in `preprocessing/concurrency.py`; omitting it raises a `ValueError` when the stage runs with `executor=auto`.
 - **The Markov generator does not synthesize doors.** Door-rule logic in `preprocessing/door_rules.py` and `preprocessing/door_rules_engine.py` is for analysis and future passes only.
+- **Placement validation lives in `ship_layout`.** `ship_layout/validator.py` owns `PlacementValidator` and `ValidationResult`. New generator backends should use this API for all geometry, allowlist, connectivity, overlap, bounds, and mirror checks rather than implementing their own inline chains.
 - **Mirror symmetry axis** is at `x = -0.5`. Left half: all footprint cells `x <= -1`; right half: `x >= 0`. Centerline-straddling parts are allowed only when their occupied footprint is mirror-balanced, and such parts count as valid primary anchors.
 - **Mirror generation roots and companions can collapse to one part.** If a root or mirrored placement reflects onto the same occupied cells, generation keeps only the centered self-mirroring part instead of emitting an overlapping duplicate.
 - **Seeded mirror mode validates occupied cells, not just part lists.** Asymmetric part compositions are accepted when the combined occupied footprint is mirror-balanced; asymmetric occupied footprints are rejected.

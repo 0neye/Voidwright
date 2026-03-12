@@ -10,7 +10,9 @@ the repository's backend-agnostic `generator/` module.
 - `generator/backends/markov/export.py`
   - `.ship.png` export and roundtrip validation
 - `markov/`
-  - shared model, symmetry helpers, and backend-specific input parsing used by both training and generation
+  - shared model and backend-specific input parsing used by both training and generation
+- `ship_layout/`
+  - mirror symmetry computation (`ship_layout/symmetry.py`) and the `PlacementValidator` API (`ship_layout/validator.py`) used during generation
 - `training/backends/markov/`
   - build and validation adapters
 - `preprocessing/door_rules.py` and `preprocessing/door_rules_engine.py`

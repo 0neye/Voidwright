@@ -11,7 +11,7 @@ This repository is organized around purpose-specific packages:
 - `markov/`
   - shared Markov model, training, validation, and generation internals
 - `ship_layout/`
-  - shared structural geometry, connectivity, and placement validation helpers
+  - shared structural geometry, connectivity, mirror symmetry, and placement validation — including the `PlacementValidator` API used by all generator backends
 
 Discord acquisition is intentionally separate from preprocessing and stays in `scripts/` as a miscellaneous operational utility.
 
@@ -204,7 +204,7 @@ purpose, so it can be used as a local cache without polluting the repo.
 - `preprocessing/` - extraction, canonicalization, graph generation, and local pipeline orchestration
 - `training/` - backend router and training adapters
 - `generator/` - backend router and generation adapters
-- `markov/` - shared Markov model, sampling, symmetry, and backend input helpers
+- `markov/` - shared Markov model, sampling, and backend input helpers; `markov/symmetry.py` is a backward-compat shim over `ship_layout/symmetry.py`
 - `visualizer/` - shared generation event recording, icon loading, frame rendering, and MP4 export
 - `scripts/` - miscellaneous operational utilities such as Discord acquisition
 - `models/` - generated model artifacts
