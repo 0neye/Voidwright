@@ -7,13 +7,6 @@ from pathlib import Path
 from typing import Dict, Sequence
 
 from common.geometry import load_vanilla_part_geometry
-from ship_layout.validation import (
-    footprint_is_mirror_balanced,
-    is_mirror_placement,
-    is_primary_placement,
-    placement_within_bounds,
-)
-
 from .corpus import iter_vanilla_parts_from_graph, iter_vanilla_parts_from_ship
 from .generation import WeightedSampler, generate_ship_layout
 from .order import choose_root, order_ship_parts, parts_touch
@@ -90,58 +83,6 @@ class RelativeMarkovModel:
         with path.open("w", encoding="utf-8") as file_handle:
             json.dump(self.payload, file_handle, separators=(",", ":"), sort_keys=True)
             file_handle.write("\n")
-
-    def _placement_within_bounds(self, part: ShipPart, config: GenerationConfig) -> bool:
-        """Return True when all footprint cells fit within configured bounds"""
-
-        return placement_within_bounds(
-            part,
-            self.geometry_cache,
-            min_x=config.bounds_min_x,
-            max_x=config.bounds_max_x,
-            min_y=config.bounds_min_y,
-            max_y=config.bounds_max_y,
-        )
-
-    def _within_primary_bounds(self, part: ShipPart, config: GenerationConfig) -> bool:
-        """Return True when a primary-side mirror candidate stays valid.
-
-        Mirror-mode primary candidates may be either fully left-side or
-        centerline-straddling when their occupied footprint is self-mirroring.
-        """
-
-        if not placement_within_bounds(
-            part,
-            self.geometry_cache,
-            min_x=config.bounds_min_x,
-            max_x=config.bounds_max_x,
-            min_y=config.bounds_min_y,
-            max_y=config.bounds_max_y,
-        ):
-            return False
-        return is_primary_placement(part, self.geometry_cache) or footprint_is_mirror_balanced(
-            part, self.geometry_cache
-        )
-
-    def _within_mirror_bounds(self, part: ShipPart, config: GenerationConfig) -> bool:
-        """Return True when a mirrored companion part stays valid.
-
-        Mirrored companions are normally right-side placements but can also be
-        centerline-straddling self-mirrors.
-        """
-
-        if not placement_within_bounds(
-            part,
-            self.geometry_cache,
-            min_x=config.bounds_min_x,
-            max_x=config.bounds_max_x,
-            min_y=config.bounds_min_y,
-            max_y=config.bounds_max_y,
-        ):
-            return False
-        return is_mirror_placement(part, self.geometry_cache) or footprint_is_mirror_balanced(
-            part, self.geometry_cache
-        )
 
     def generate(self, config: GenerationConfig, *, seed_parts=None, event_sink=None) -> dict:
         """Generate a ship layout from this model

@@ -6,38 +6,12 @@ import random
 from dataclasses import asdict
 from typing import Dict, List, Optional
 
-from ship_layout.connectivity import parts_structurally_touch
-from ship_layout.validation import occupied_cells_are_mirror_balanced, part_overlaps_occupied_cells
+from ship_layout.validator import PlacementValidator
 from visualizer.events import VisualizationPart
 
 from .types import Coord, END_TOKEN, GenerationConfig, RelativePlacementToken, ShipPart, _config_as_dict
 
 __all__ = ["WeightedSampler", "generate_ship_layout"]
-
-
-def _requirements_satisfied(part_counts: Dict[str, int], requirements: dict) -> bool:
-    """Return True if all (part_id -> min_count) requirements are met"""
-
-    return all(part_counts.get(part_id, 0) >= required for part_id, required in requirements.items())
-
-
-def _is_structurally_connected_to_anchor(
-    candidate_part: ShipPart,
-    anchor_part: ShipPart,
-    geometry_cache: Dict[str, object],
-) -> bool:
-    """Return True when a candidate part shares a structural hull side with its anchor.
-
-    Args:
-        candidate_part: Newly sampled part placement candidate
-        anchor_part: Existing placed part chosen as this token's anchor
-        geometry_cache: Loaded vanilla geometry metadata used for hull checks
-
-    Returns:
-        True when candidate and anchor share at least one attachable side segment
-    """
-
-    return parts_structurally_touch(candidate_part, anchor_part, geometry_cache)
 
 
 def _visualization_part_from_ship_part(part: ShipPart) -> VisualizationPart:
@@ -211,6 +185,17 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
     rejected_allowlist = 0
     mirror_mode = config.mirror_symmetry
 
+    validator = PlacementValidator(
+        model.geometry_cache,
+        min_x=config.bounds_min_x,
+        max_x=config.bounds_max_x,
+        min_y=config.bounds_min_y,
+        max_y=config.bounds_max_y,
+        mirror_mode=mirror_mode,
+        part_allowlist=allowlist,
+        part_requirements=config.part_requirements,
+    )
+
     if mirror_mode:
         from .symmetry import (
             is_anchor_eligible_mirror_primary as _is_anchor_eligible_mirror_primary,
@@ -244,45 +229,40 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
             else:
                 seed_part = raw_part
 
-            if (
-                seed_part.part_id not in model.geometry_cache
-                or seed_part.rotation not in model.geometry_cache[seed_part.part_id].rotations
-            ):
-                seed_skipped_geometry += 1
-                _emit_attempt_rejected(
-                    event_sink,
-                    reason="seed_geometry",
-                    part=seed_part,
-                    message="Seed part skipped: missing vanilla geometry",
-                    metadata={"is_seed": True},
-                )
-                continue
-            if allowlist is not None and seed_part.part_id not in allowlist:
-                seed_skipped_allowlist += 1
-                _emit_attempt_rejected(
-                    event_sink,
-                    reason="seed_allowlist",
-                    part=seed_part,
-                    message="Seed part skipped: not in allowlist",
-                    metadata={"is_seed": True},
-                )
-                continue
-
-            seed_cells = seed_part.footprint_cells(model.geometry_cache)
-            if part_overlaps_occupied_cells(seed_part, model.geometry_cache, occupied_cells):
-                seed_skipped_overlap += 1
-                _emit_attempt_rejected(
-                    event_sink,
-                    reason="seed_overlap",
-                    part=seed_part,
-                    message="Seed part skipped: overlaps existing seed placement",
-                    metadata={"is_seed": True},
-                )
+            seed_result = validator.validate_seed_part(seed_part, occupied_cells)
+            if not seed_result.accepted:
+                if seed_result.rejection == "geometry_unknown":
+                    seed_skipped_geometry += 1
+                    _emit_attempt_rejected(
+                        event_sink,
+                        reason="seed_geometry",
+                        part=seed_part,
+                        message="Seed part skipped: missing vanilla geometry",
+                        metadata={"is_seed": True},
+                    )
+                elif seed_result.rejection == "allowlist":
+                    seed_skipped_allowlist += 1
+                    _emit_attempt_rejected(
+                        event_sink,
+                        reason="seed_allowlist",
+                        part=seed_part,
+                        message="Seed part skipped: not in allowlist",
+                        metadata={"is_seed": True},
+                    )
+                elif seed_result.rejection == "overlap":
+                    seed_skipped_overlap += 1
+                    _emit_attempt_rejected(
+                        event_sink,
+                        reason="seed_overlap",
+                        part=seed_part,
+                        message="Seed part skipped: overlaps existing seed placement",
+                        metadata={"is_seed": True},
+                    )
                 continue
 
             placed_index = len(placed)
             placed.append(seed_part)
-            occupied_cells.update(seed_cells)
+            occupied_cells.update(seed_result.primary_cells)
             part_counts[seed_part.part_id] = part_counts.get(seed_part.part_id, 0) + 1
 
             is_primary_anchor = True
@@ -328,7 +308,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
                 f"{seed_skipped_overlap} skipped: overlap)"
             )
 
-        if mirror_mode and not occupied_cells_are_mirror_balanced(occupied_cells):
+        if not validator.seed_state_mirror_valid(occupied_cells):
             raise RuntimeError(
                 "seed provided but occupied footprint is not mirror-symmetric around x = -0.5; "
                 "mirror mode accepts asymmetric part placement only when occupied cells match "
@@ -538,9 +518,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
             attempts += 1
             candidate_key = WeightedSampler.sample(step_options, rng)
             if candidate_key == END_TOKEN:
-                if config.part_requirements is not None and not _requirements_satisfied(
-                    part_counts, config.part_requirements
-                ):
+                if not validator.requirements_satisfied(part_counts):
                     rejected_requirements += 1
                     _emit_attempt_rejected(
                         event_sink,
@@ -555,28 +533,6 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
 
             all_end_tokens_by_req = False
             token = RelativePlacementToken.from_key(candidate_key)
-            if allowlist is not None and token.part_id not in allowlist:
-                rejected_allowlist += 1
-                _emit_attempt_rejected(
-                    event_sink,
-                    reason="allowlist",
-                    message="Candidate rejected by allowlist",
-                    metadata={"attempts": attempts, "token": token.to_dict()},
-                )
-                step_options.pop(candidate_key, None)
-                continue
-            if (
-                token.part_id not in model.geometry_cache
-                or token.rotation not in model.geometry_cache[token.part_id].rotations
-            ):
-                _emit_attempt_rejected(
-                    event_sink,
-                    reason="geometry",
-                    message="Candidate rejected: missing vanilla geometry",
-                    metadata={"attempts": attempts, "token": token.to_dict()},
-                )
-                step_options.pop(candidate_key, None)
-                continue
 
             if mirror_mode:
                 anchor_indexes = [
@@ -612,61 +568,33 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
                     x=anchor_part.x + token.dx,
                     y=anchor_part.y + token.dy,
                 )
-                candidate_cells = candidate.footprint_cells(model.geometry_cache)
+                result = validator.validate_candidate(candidate, anchor_part, occupied_cells)
 
-                # Tokens are trained from anchor-relative deltas but still need
-                # runtime geometry validation because wedge/overhang placements
-                # can be adjacent without a true structural hull connection.
-                if not _is_structurally_connected_to_anchor(
-                    candidate,
-                    anchor_part,
-                    model.geometry_cache,
-                ):
-                    rejected_structural += 1
-                    _emit_attempt_rejected(
-                        event_sink,
-                        reason="structural",
-                        part=candidate,
-                        message="Candidate rejected: no structural contact with anchor",
-                        metadata={
-                            "attempts": attempts,
-                            "token": token.to_dict(),
-                            "anchor_index": anchor_idx,
-                        },
-                    )
-                    continue
+                if not result.accepted:
+                    rejection = result.rejection
 
-                if mirror_mode:
-                    if not model._within_primary_bounds(candidate, config):
-                        rejected_bounds += 1
+                    if rejection == "geometry_unknown":
                         _emit_attempt_rejected(
                             event_sink,
-                            reason="bounds",
-                            part=candidate,
-                            message="Candidate rejected: primary placement left configured bounds",
-                            metadata={
-                                "attempts": attempts,
-                                "token": token.to_dict(),
-                                "anchor_index": anchor_idx,
-                            },
+                            reason="geometry",
+                            message="Candidate rejected: missing vanilla geometry",
+                            metadata={"attempts": attempts, "token": token.to_dict()},
                         )
-                        continue
-                    if part_overlaps_occupied_cells(candidate, model.geometry_cache, occupied_cells):
-                        rejected_overlap += 1
+                        step_options.pop(candidate_key, None)
+                        break
+
+                    if rejection == "allowlist":
+                        rejected_allowlist += 1
                         _emit_attempt_rejected(
                             event_sink,
-                            reason="overlap",
-                            part=candidate,
-                            message="Candidate rejected: overlaps existing ship cells",
-                            metadata={
-                                "attempts": attempts,
-                                "token": token.to_dict(),
-                                "anchor_index": anchor_idx,
-                            },
+                            reason="allowlist",
+                            message="Candidate rejected by allowlist",
+                            metadata={"attempts": attempts, "token": token.to_dict()},
                         )
-                        continue
-                    mirror_candidate = _mirror_part(candidate, model.geometry_cache)
-                    if mirror_candidate is None:
+                        step_options.pop(candidate_key, None)
+                        break
+
+                    if rejection == "mirror_construction":
                         rejected_mirror += 1
                         _emit_attempt_rejected(
                             event_sink,
@@ -679,29 +607,16 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
                                 "anchor_index": anchor_idx,
                             },
                         )
-                        continue
-                    mirror_cells = mirror_candidate.footprint_cells(model.geometry_cache)
-                    if part_overlaps_occupied_cells(mirror_candidate, model.geometry_cache, occupied_cells):
-                        rejected_mirror += 1
+                        step_options.pop(candidate_key, None)
+                        break
+
+                    if rejection == "connectivity":
+                        rejected_structural += 1
                         _emit_attempt_rejected(
                             event_sink,
-                            reason="mirror_overlap",
-                            part=mirror_candidate,
-                            message="Candidate rejected: mirrored placement overlaps existing ship cells",
-                            metadata={
-                                "attempts": attempts,
-                                "token": token.to_dict(),
-                                "anchor_index": anchor_idx,
-                            },
-                        )
-                        continue
-                    if not model._within_mirror_bounds(mirror_candidate, config):
-                        rejected_mirror += 1
-                        _emit_attempt_rejected(
-                            event_sink,
-                            reason="mirror_bounds",
-                            part=mirror_candidate,
-                            message="Candidate rejected: mirrored placement left configured bounds",
+                            reason="structural",
+                            part=candidate,
+                            message="Candidate rejected: no structural contact with anchor",
                             metadata={
                                 "attempts": attempts,
                                 "token": token.to_dict(),
@@ -710,68 +625,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
                         )
                         continue
 
-                    primary_idx = len(placed)
-                    placed.append(candidate)
-                    occupied_cells.update(candidate_cells)
-                    primary_indices.append(primary_idx)
-                    part_counts[candidate.part_id] = part_counts.get(candidate.part_id, 0) + 1
-                    history.append(candidate_key)
-                    placement_trace.append(
-                        {
-                            "token": token.to_dict(),
-                            "anchor_index": anchor_idx,
-                            "placed_index": primary_idx,
-                            "world_origin": [candidate.x, candidate.y],
-                            "is_mirror": False,
-                        }
-                    )
-                    _emit_part_placed(
-                        event_sink,
-                        candidate,
-                        message="Accepted primary placement",
-                        metadata={
-                            "placed_index": primary_idx,
-                            "anchor_index": anchor_idx,
-                            "attempts": attempts,
-                            "token": token.to_dict(),
-                            "is_mirror": False,
-                        },
-                    )
-
-                    # If mirroring maps this placement back onto the same occupied
-                    # cells, keep only one centered part instead of creating an
-                    # overlapping duplicate "mirror" copy.
-                    if mirror_cells != candidate_cells:
-                        mirror_idx = len(placed)
-                        placed.append(mirror_candidate)
-                        occupied_cells.update(mirror_cells)
-                        part_counts[mirror_candidate.part_id] = (
-                            part_counts.get(mirror_candidate.part_id, 0) + 1
-                        )
-                        placement_trace.append(
-                            {
-                                "token": token.to_dict(),
-                                "anchor_index": None,
-                                "placed_index": mirror_idx,
-                                "world_origin": [mirror_candidate.x, mirror_candidate.y],
-                                "is_mirror": True,
-                                "mirror_of": primary_idx,
-                            }
-                        )
-                        _emit_part_placed(
-                            event_sink,
-                            mirror_candidate,
-                            message="Accepted mirrored placement",
-                            metadata={
-                                "placed_index": mirror_idx,
-                                "attempts": attempts,
-                                "token": token.to_dict(),
-                                "is_mirror": True,
-                                "mirror_of": primary_idx,
-                            },
-                        )
-                else:
-                    if part_overlaps_occupied_cells(candidate, model.geometry_cache, occupied_cells):
+                    if rejection == "overlap":
                         rejected_overlap += 1
                         _emit_attempt_rejected(
                             event_sink,
@@ -785,13 +639,18 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
                             },
                         )
                         continue
-                    if not model._placement_within_bounds(candidate, config):
+
+                    if rejection == "bounds":
                         rejected_bounds += 1
                         _emit_attempt_rejected(
                             event_sink,
                             reason="bounds",
                             part=candidate,
-                            message="Candidate rejected: left configured bounds",
+                            message=(
+                                "Candidate rejected: primary placement left configured bounds"
+                                if mirror_mode
+                                else "Candidate rejected: left configured bounds"
+                            ),
                             metadata={
                                 "attempts": attempts,
                                 "token": token.to_dict(),
@@ -799,37 +658,115 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
                             },
                         )
                         continue
-                    placed.append(candidate)
-                    occupied_cells.update(candidate_cells)
-                    primary_indices.append(len(placed) - 1)
-                    part_counts[candidate.part_id] = part_counts.get(candidate.part_id, 0) + 1
-                    history.append(candidate_key)
+
+                    if rejection == "mirror_overlap":
+                        rejected_mirror += 1
+                        _emit_attempt_rejected(
+                            event_sink,
+                            reason="mirror_overlap",
+                            part=candidate,
+                            message="Candidate rejected: mirrored placement overlaps existing ship cells",
+                            metadata={
+                                "attempts": attempts,
+                                "token": token.to_dict(),
+                                "anchor_index": anchor_idx,
+                            },
+                        )
+                        continue
+
+                    if rejection == "mirror_bounds":
+                        rejected_mirror += 1
+                        _emit_attempt_rejected(
+                            event_sink,
+                            reason="mirror_bounds",
+                            part=candidate,
+                            message="Candidate rejected: mirrored placement left configured bounds",
+                            metadata={
+                                "attempts": attempts,
+                                "token": token.to_dict(),
+                                "anchor_index": anchor_idx,
+                            },
+                        )
+                        continue
+
+                    # Unknown rejection — treat as anchor-level, try next anchor
+                    continue
+
+                # Accepted — place primary
+                primary_idx = len(placed)
+                placed.append(candidate)
+                occupied_cells.update(result.primary_cells)
+                primary_indices.append(primary_idx)
+                part_counts[candidate.part_id] = part_counts.get(candidate.part_id, 0) + 1
+                history.append(candidate_key)
+                placement_trace.append(
+                    {
+                        "token": token.to_dict(),
+                        "anchor_index": anchor_idx,
+                        "placed_index": primary_idx,
+                        "world_origin": [candidate.x, candidate.y],
+                        "is_mirror": False,
+                    }
+                )
+                _emit_part_placed(
+                    event_sink,
+                    candidate,
+                    message="Accepted primary placement" if mirror_mode else "Accepted placement",
+                    metadata={
+                        "placed_index": primary_idx,
+                        "anchor_index": anchor_idx,
+                        "attempts": attempts,
+                        "token": token.to_dict(),
+                        "is_mirror": False,
+                    },
+                )
+
+                # Place mirror companion (only when mirror mode + not self-mirroring)
+                if result.mirror_companion is not None:
+                    mirror_candidate = ShipPart(
+                        part_id=result.mirror_companion.part_id,
+                        rotation=result.mirror_companion.rotation,
+                        x=result.mirror_companion.x,
+                        y=result.mirror_companion.y,
+                        flip_x=result.mirror_companion.flip_x,
+                        flip_y=result.mirror_companion.flip_y,
+                    )
+                    mirror_idx = len(placed)
+                    placed.append(mirror_candidate)
+                    occupied_cells.update(result.companion_cells)
+                    part_counts[mirror_candidate.part_id] = (
+                        part_counts.get(mirror_candidate.part_id, 0) + 1
+                    )
                     placement_trace.append(
                         {
                             "token": token.to_dict(),
-                            "anchor_index": anchor_idx,
-                            "placed_index": len(placed) - 1,
-                            "world_origin": [candidate.x, candidate.y],
+                            "anchor_index": None,
+                            "placed_index": mirror_idx,
+                            "world_origin": [mirror_candidate.x, mirror_candidate.y],
+                            "is_mirror": True,
+                            "mirror_of": primary_idx,
                         }
                     )
                     _emit_part_placed(
                         event_sink,
-                        candidate,
-                        message="Accepted placement",
+                        mirror_candidate,
+                        message="Accepted mirrored placement",
                         metadata={
-                            "placed_index": len(placed) - 1,
-                            "anchor_index": anchor_idx,
+                            "placed_index": mirror_idx,
                             "attempts": attempts,
                             "token": token.to_dict(),
-                            "is_mirror": False,
+                            "is_mirror": True,
+                            "mirror_of": primary_idx,
                         },
                     )
 
                 accepted = True
                 token_key = candidate_key
                 break
+
             if accepted:
                 break
+            # Token exhausted across all anchors (or popped in the anchor loop): try another token
             step_options.pop(candidate_key, None)
 
         if token_key is None:
@@ -847,7 +784,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
         elif attempts >= config.max_attempts:
             stop_reason = "max_attempts"
 
-    if config.part_requirements and not _requirements_satisfied(part_counts, config.part_requirements):
+    if config.part_requirements and not validator.requirements_satisfied(part_counts):
         if stop_reason == "end_token":
             stop_reason = "requirements_unsatisfied"
         elif stop_reason == "max_attempts":
@@ -893,7 +830,7 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
             for part_id, required_count in config.part_requirements.items()
         }
         stats["requirements"] = {
-            "satisfied": _requirements_satisfied(part_counts, config.part_requirements),
+            "satisfied": validator.requirements_satisfied(part_counts),
             "progress": progress,
         }
     if seed_stats is not None:
