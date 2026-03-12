@@ -157,6 +157,18 @@ class PartIconLibrary:
 
         transformed_icon = base_icon.copy()
         use_post_rotation_flip_x = resolved_part_id in _POST_ROTATION_FLIP_PART_IDS
+        if (
+            not use_post_rotation_flip_x
+            and resolved_part_id in _PRE_FLIP_ROTATION_REMAP_PART_IDS
+            and resolved_flip_x
+            and (resolved_rotation % 2 == 1)
+        ):
+            # Remapped 1x1 wedge mirrors saved as rotation 0/2 + FlipX become
+            # odd rotations after `_FLIP_X_ROTATION_REMAP`. Applying FlipX
+            # before rotation makes those placements look like a vertical flip
+            # in screen space; applying FlipX after rotation matches ship-file
+            # mirror parity in the visualizer.
+            use_post_rotation_flip_x = True
         # Most vanilla sprites treat FlipX / FlipY as local-space transforms, so
         # apply them before rotation. Half-cell triangle icons are exported on a
         # padded canvas where the game-facing mirrored look matches rotating the

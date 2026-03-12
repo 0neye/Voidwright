@@ -440,6 +440,39 @@ def test_half_cell_wedges_preserve_distinct_flipped_rotations(tmp_path: Path) ->
     assert list(transformed_icon.getdata()) == list(expected_icon.getdata())
 
 
+@pytest.mark.parametrize(
+    ("part_id", "icon_folder"),
+    [
+        ("cosmoteer.armor_wedge", "armor_wedge"),
+        ("cosmoteer.structure_wedge", "structure_wedge"),
+        ("cosmoteer.armor_structure_hybrid_1x1", "armor_structure_hybrid_1x1"),
+    ],
+)
+def test_half_cell_wedge_mirror_pair_keeps_horizontal_screen_parity(
+    tmp_path: Path,
+    part_id: str,
+    icon_folder: str,
+) -> None:
+    """Mirrored 1x1 wedge pairs should read as horizontal mirrors in screen space."""
+
+    icons_root = _write_asymmetric_icon(tmp_path / "icons", icon_folder)
+    icon_library = load_part_icon_library(icons_root=icons_root, cell_size=10)
+
+    left_icon = icon_library.get_icon(
+        part_id,
+        rotation=1,
+        flip_x=False,
+    )
+    mirrored_icon = icon_library.get_icon(
+        part_id,
+        rotation=0,
+        flip_x=True,
+    )
+    expected_icon = left_icon.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+
+    assert list(mirrored_icon.getdata()) == list(expected_icon.getdata())
+
+
 def test_render_events_to_mp4_writes_video(tmp_path: Path) -> None:
     """Video writer should encode rendered frames into the sample MP4 path."""
 
