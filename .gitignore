@@ -9,6 +9,7 @@ __pycache__/
 *.so
 .venv/
 venv/
+voidwright.egg-info/
 
 # Tooling caches
 .pytest_cache/
