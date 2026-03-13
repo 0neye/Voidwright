@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
@@ -10,7 +11,16 @@ __all__ = [
     "output_name_for_ship_png",
     "iter_ship_png_files",
     "iter_json_files",
+    "prune_stale_json_outputs",
+    "inputs_needing_regeneration",
+    "read_output_version",
+    "write_output_version",
 ]
+
+# Hidden sentinel file written to each managed output directory.  It stores
+# one or more version keys so callers can detect when a schema or backend
+# version bump requires full regeneration of that directory's outputs.
+_VERSION_SENTINEL = ".pipeline-version.json"
 
 
 def is_supported_ship_png(path: Path) -> bool:
@@ -56,4 +66,136 @@ def iter_ship_png_files(input_paths: Sequence[Path]) -> Iterator[Path]:
 def iter_json_files(input_dir: Path) -> Iterable[Path]:
     """Return all JSON files under *input_dir* in deterministic order."""
 
-    return sorted(path for path in input_dir.rglob("*.json") if path.is_file())
+    return sorted(
+        path
+        for path in input_dir.rglob("*.json")
+        if path.is_file() and not path.name.startswith(".")
+    )
+
+
+def prune_stale_json_outputs(
+    output_dir: Path,
+    expected_names: Iterable[str],
+    *,
+    exclude: Iterable[str] = (),
+) -> int:
+    """Delete JSON files in *output_dir* that are not in *expected_names*.
+
+    Hidden files (names starting with ``"."``) are never deleted so that
+    pipeline sentinel files such as :data:`_VERSION_SENTINEL` are preserved.
+
+    Args:
+        output_dir: Directory to prune.
+        expected_names: Filenames that should be kept.
+        exclude: Additional filenames to keep regardless of *expected_names*
+            (e.g. ``["manifest.json"]``).
+
+    Returns:
+        Number of files deleted.
+    """
+
+    keep = set(expected_names) | set(exclude)
+    pruned = 0
+    for path in sorted(output_dir.glob("*.json")):
+        if path.name.startswith("."):
+            continue
+        if path.name not in keep:
+            path.unlink()
+            pruned += 1
+    return pruned
+
+
+def inputs_needing_regeneration(
+    input_files: Sequence[Path],
+    output_dir: Path,
+    *,
+    current_version: int,
+    version_key: str,
+) -> tuple[list[Path], list[Path]]:
+    """Return ``(to_process, skipped)`` for the given input files.
+
+    Reads the version stored in *output_dir*'s :data:`_VERSION_SENTINEL` file
+    and compares it against *current_version*:
+
+    - **Version mismatch or no sentinel**: all *input_files* are returned as
+      *to_process* so the caller regenerates every output (e.g. after a schema
+      bump).  *skipped* is empty.
+    - **Version matches**: files whose corresponding output is absent or older
+      than the input go into *to_process*; the rest go into *skipped*.
+
+    Call :func:`write_output_version` after successfully writing all outputs
+    to persist the current version for the next run.
+
+    Args:
+        input_files: Full set of input files for this run.
+        output_dir: Directory that receives generated output files.
+        current_version: Version value that represents up-to-date output.
+        version_key: Key used to store and retrieve the version in the sentinel.
+
+    Returns:
+        A tuple ``(to_process, skipped)`` where *to_process* are files that
+        need (re)generation and *skipped* are already up-to-date files.
+    """
+
+    if read_output_version(output_dir, version_key) != current_version:
+        return list(input_files), []
+
+    # Version matches — split files into those needing regen and those that don't.
+    def _needs_regen(f: Path) -> bool:
+        out = output_dir / f.name
+        if f == out:
+            # In-place mode: input and output are the same file, so mtime
+            # comparison is meaningless.  Version match above is the only
+            # staleness signal; the file is considered up-to-date.
+            return False
+        try:
+            out_stat = out.stat()
+        except FileNotFoundError:
+            return True
+        return f.stat().st_mtime > out_stat.st_mtime
+
+    to_process: list[Path] = []
+    skipped: list[Path] = []
+    for f in input_files:
+        (to_process if _needs_regen(f) else skipped).append(f)
+    return to_process, skipped
+
+
+def read_output_version(output_dir: Path, version_key: str) -> int | None:
+    """Read the stored version value for *version_key* from *output_dir*'s sentinel.
+
+    Returns the stored integer version, or ``None`` when the sentinel is absent
+    or the key is not present.
+    """
+
+    sentinel = output_dir / _VERSION_SENTINEL
+    try:
+        data = json.loads(sentinel.read_text(encoding="utf-8"))
+        val = data.get(version_key)
+        if val is not None:
+            return int(val)
+    except Exception:
+        pass
+    return None
+
+
+def write_output_version(output_dir: Path, version_key: str, version: int) -> None:
+    """Persist a version value in *output_dir*'s :data:`_VERSION_SENTINEL` file.
+
+    Multiple version keys can coexist in the same sentinel so a directory used
+    by more than one versioned stage retains all its markers.
+
+    Args:
+        output_dir: Target directory (must already exist).
+        version_key: Key under which to store the version value.
+        version: Current version number to record.
+    """
+
+    sentinel = output_dir / _VERSION_SENTINEL
+    data: dict = {}
+    try:
+        data = json.loads(sentinel.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    data[version_key] = version
+    sentinel.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")

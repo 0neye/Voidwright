@@ -9,10 +9,14 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
+from common.files import inputs_needing_regeneration, iter_json_files, prune_stale_json_outputs, write_output_version
 from common.geometry import PartMeta, infer_meta, load_vanilla_part_geometry, normalize_part_id
 from ship_layout.connectivity import shared_attachment_sides
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
 from .layout_helpers import door_adjacent_cells
+
+_GRAPH_SCHEMA_VERSION = 5
+_GRAPH_SCHEMA_VERSION_KEY = "graph_schema_version"
 
 __all__ = [
     "normalize_parts",
@@ -424,7 +428,7 @@ def process_ship(ship_path: Path) -> dict:
             "version": data.get("Version"),
             "flight_direction": data.get("FlightDirection"),
         },
-        "schema_version": 5,
+        "schema_version": _GRAPH_SCHEMA_VERSION,
         "coord_transform": {
             "version": int(coord_transform.get("version", 1)) if isinstance(coord_transform, dict) else 1,
             "frame": (
@@ -498,6 +502,34 @@ def process_ship(ship_path: Path) -> dict:
     }
 
 
+def _read_existing_graph_summary(output_path: Path) -> dict | None:
+    """Read a compact summary from an already-generated graph JSON file.
+
+    Returns the same shape as the dict returned by _generate_single_graph, or
+    None if the file cannot be read or is structurally incomplete.
+    """
+    try:
+        with output_path.open(encoding="utf-8") as fh:
+            graph_data = json.load(fh)
+        struct_summary = graph_data["graphs"]["A_structural_part_graph"]["summary"]
+        validation = graph_data["validation"]
+        return {
+            "output_name": output_path.name,
+            "unknown_part_ids": validation["unknown_part_ids"],
+            "door_stats": {
+                "door_records": struct_summary["door_records"],
+                "door_edges": struct_summary["door_edges"],
+                "dangling_door_records": struct_summary["dangling_door_records"],
+                "internal_door_records": struct_summary["internal_door_records"],
+                "non_structural_door_records": struct_summary["non_structural_door_records"],
+                "occupied_cells": validation["occupied_cells"],
+                "traversable_cells": validation["traversable_cells"],
+            },
+        }
+    except Exception:
+        return None
+
+
 def _generate_single_graph(source_json_path: str, output_dir: str) -> dict:
     """Process and write graph artifacts for one ship JSON file.
 
@@ -556,17 +588,28 @@ def generate_all(
     """
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    files = sorted(path for path in input_dir.glob("*.json") if path.name != "manifest.json")
+    files = [f for f in iter_json_files(input_dir) if f.name != "manifest.json"]
     if limit is not None:
         files = files[:limit]
+
+    files_to_process, skipped_files = inputs_needing_regeneration(
+        files,
+        output_dir,
+        current_version=_GRAPH_SCHEMA_VERSION,
+        version_key=_GRAPH_SCHEMA_VERSION_KEY,
+    )
+    ships_skipped = len(skipped_files)
+    if ships_skipped:
+        print(f"Skipping {ships_skipped} up-to-date graph file(s) in {output_dir}", flush=True)
 
     manifest = {
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
-        "schema_version": 5,
+        "schema_version": _GRAPH_SCHEMA_VERSION,
         "geometry_source": "game-file canonical (load_vanilla_part_geometry)",
         "coord_frame": "centered 2x local coordinates with global replay metadata",
         "ships_processed": 0,
+        "ships_skipped": ships_skipped,
         "ships_with_unknown_part_ids": 0,
         "total_unknown_part_instances": 0,
         "unknown_part_ids": Counter(),
@@ -575,9 +618,9 @@ def generate_all(
     }
 
     graph_results: List[dict] = []
-    if files:
+    if files_to_process:
         worker_count = resolve_worker_count(
-            task_count=len(files),
+            task_count=len(files_to_process),
             stage_name="graphs",
             requested_workers=workers,
             requested_mode=executor,
@@ -590,7 +633,7 @@ def generate_all(
             with executor_factory(max_workers=worker_count) as graph_executor:
                 future_to_path = {
                     graph_executor.submit(_generate_single_graph, str(ship_path), str(output_dir)): ship_path
-                    for ship_path in files
+                    for ship_path in files_to_process
                 }
                 for index, future in enumerate(as_completed(future_to_path), start=1):
                     try:
@@ -603,7 +646,7 @@ def generate_all(
                         )
                     if index % 1000 == 0:
                         print(
-                            f"Generated {index}/{len(files)} graph files with {worker_count} worker(s)...",
+                            f"Generated {index}/{len(files_to_process)} graph files with {worker_count} worker(s)...",
                             flush=True,
                         )
             return results
@@ -614,6 +657,27 @@ def generate_all(
             worker_count=worker_count,
             submit_work=submit_graph_work,
         )
+
+    # Number of files that needed generation but failed (no output written).
+    # Captured here before skipped-file summaries are appended to graph_results.
+    files_failed = len(files_to_process) - len(graph_results)
+
+    # Prune stale outputs left over from previous runs, but only when processing
+    # the full input set.  A limited run is a non-destructive validation subset,
+    # so its truncated keep-list must never be used to delete unrelated outputs.
+    if limit is None:
+        pruned_count = prune_stale_json_outputs(
+            output_dir, (f.name for f in files), exclude=["manifest.json"]
+        )
+        if pruned_count:
+            print(f"Pruned {pruned_count} stale graph file(s) from {output_dir}", flush=True)
+
+    # Collect summaries from skipped (up-to-date) output files so the manifest
+    # reflects the full corpus, not just the incremental delta.
+    for skipped_path in skipped_files:
+        summary = _read_existing_graph_summary(output_dir / skipped_path.name)
+        if summary is not None:
+            graph_results.append(summary)
 
     # Reduce the worker summaries in filename order so manifest counters and
     # sample-output lists remain stable no matter which worker finished first.
@@ -631,6 +695,13 @@ def generate_all(
 
     manifest["unknown_part_ids"] = dict(manifest["unknown_part_ids"].most_common())
     manifest["door_stats"] = dict(manifest["door_stats"])
+
+    # Only persist the version sentinel when every file that needed
+    # (re)generation succeeded.  If any file failed its old output may still
+    # be present on disk; writing the sentinel here would tell the next run to
+    # skip that file via mtime comparison, permanently hiding the stale artifact.
+    if limit is None and files_failed == 0:
+        write_output_version(output_dir, _GRAPH_SCHEMA_VERSION_KEY, _GRAPH_SCHEMA_VERSION)
 
     with (output_dir / "manifest.json").open("w", encoding="utf-8") as file_handle:
         json.dump(manifest, file_handle, indent=2)
@@ -650,12 +721,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--input-dir",
-        default="extracted_ship_data",
+        default="extracted_ship_data_canonical",
         help="Directory with extracted *.json ship files",
     )
     parser.add_argument(
         "--output-dir",
-        default="generated_ship_graphs",
+        default="generated_ship_graphs_canonical",
         help="Directory to write per-ship graph JSON files",
     )
     parser.add_argument(

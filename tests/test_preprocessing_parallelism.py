@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import time
 
 import pytest
 
 import preprocessing.concurrency as preprocessing_concurrency
 import preprocessing.pipeline as preprocessing_pipeline
+from common.cosmoteer import create_ship_png_bytes
 from preprocessing.canonicalize import run_canonicalize
 from preprocessing.concurrency import resolve_executor_mode
 from preprocessing.extract import run_extract
@@ -75,6 +77,25 @@ def build_graph_ship(*, name: str, part_id: str, location: list[int], rotation: 
                 "ID": part_id,
                 "Location2x": [int(location[0]) * 2, int(location[1]) * 2],
                 "Rotation": rotation,
+            }
+        ],
+        "Doors": [],
+    }
+
+
+def build_png_ship(*, name: str, author: str = "test") -> dict:
+    """Build a minimal ship payload suitable for PNG extraction fixtures."""
+
+    return {
+        "Version": 1,
+        "Name": name,
+        "Author": author,
+        "FlightDirection": 0,
+        "Parts": [
+            {
+                "ID": "cosmoteer.corridor",
+                "Location": [0, 0],
+                "Rotation": 0,
             }
         ],
         "Doors": [],
@@ -246,33 +267,47 @@ def test_pipeline_syncs_stage_outputs_without_deleting_unrelated_files(
     input_dir.mkdir()
 
     write_json(extracted_dir / "stale.json", {"Name": "stale", "Version": 1, "Parts": [], "Doors": []})
-    (extracted_dir / ".pipeline-managed-extracted.txt").write_text("stale.json\n", encoding="utf-8")
     write_json(canonical_dir / "stale.json", {"Name": "stale", "Version": 1, "Parts": [], "Doors": []})
-    (canonical_dir / ".pipeline-managed-canonical.txt").write_text("stale.json\n", encoding="utf-8")
     (canonical_dir / "keep.txt").write_text("preserve me", encoding="utf-8")
 
     def fake_run_extract(
         *,
         input_paths: list[str] | list[Path],
         output_dir: str | Path,
+        limit: int | None = None,
         verbose: bool = False,
         workers: int | None = None,
         executor: str = "auto",
-    ) -> int:
-        del input_paths, verbose, workers, executor
+    ) -> dict:
+        del input_paths, limit, verbose, workers, executor
+        stale_path = Path(output_dir) / "stale.json"
+        if stale_path.exists():
+            stale_path.unlink()
         write_json(
             Path(output_dir) / "alpha.json",
             {"Name": "Alpha", "Author": "test", "Version": 1, "FlightDirection": 0, "Parts": [], "Doors": []},
         )
-        return 0
+        return {
+            "inputs": [],
+            "output_dir": str(output_dir),
+            "schema_version": 1,
+            "schema_version_key": "extract_schema_version",
+            "ship_files_discovered": 1,
+            "ship_files_considered": 1,
+            "ships_processed": 1,
+            "ships_skipped": 0,
+            "files_failed": 0,
+            "sample_outputs": ["alpha.json"],
+            "exit_code": 0,
+        }
 
     monkeypatch.setattr(preprocessing_pipeline, "run_extract", fake_run_extract)
 
     payload = preprocessing_pipeline.run_pipeline(
         input_paths=[input_dir],
         output_dir=graph_output_dir,
-        write_extracted_dir=extracted_dir,
-        write_canonical_dir=canonical_dir,
+        extracted_dir=extracted_dir,
+        canonical_dir=canonical_dir,
         extract_workers=1,
         extract_executor="thread",
         canonicalize_workers=1,
@@ -352,12 +387,12 @@ def test_extract_auto_falls_back_to_threads_when_process_pool_is_unavailable(
     # Write a minimal 1x1 PNG so iter_ship_png_files returns nothing (no .ship.png)
     # and the early-exit path is exercised without needing real ship files.
     # Use an empty input_paths list to exercise the no-files-found early return.
-    exit_code = run_extract(
+    manifest = run_extract(
         input_paths=[str(input_dir)],
         output_dir=str(output_dir),
         executor="auto",
     )
-    assert exit_code == 0
+    assert manifest["exit_code"] == 0
 
 
 def test_extract_explicit_process_executor_raises_when_unavailable(
@@ -404,3 +439,127 @@ def test_graphs_skips_bad_files_and_processes_good_ones(tmp_path: Path) -> None:
     assert manifest["ships_processed"] == 1
     assert (output_dir / "good.json").exists()
     assert not (output_dir / "bad.json").exists()
+
+
+def test_extract_limit_is_nondestructive_and_does_not_update_version_sentinel(tmp_path: Path) -> None:
+    """Limited extract runs should not prune unrelated outputs or rewrite schema sentinel."""
+
+    input_dir = tmp_path / "extract-input"
+    output_dir = tmp_path / "extract-output"
+    input_dir.mkdir()
+    (input_dir / "alpha.ship.png").write_bytes(create_ship_png_bytes(build_png_ship(name="Alpha")))
+    (input_dir / "beta.ship.png").write_bytes(create_ship_png_bytes(build_png_ship(name="Beta")))
+
+    full_manifest = run_extract(
+        input_paths=[input_dir],
+        output_dir=output_dir,
+        workers=1,
+        executor="thread",
+    )
+    assert full_manifest["exit_code"] == 0
+    sentinel_path = output_dir / ".pipeline-version.json"
+    before_sentinel_mtime = sentinel_path.stat().st_mtime_ns
+
+    stale_output_path = output_dir / "stale.json"
+    write_json(stale_output_path, {"Name": "stale", "Version": 1, "Parts": [], "Doors": []})
+
+    time.sleep(0.01)
+    limited_manifest = run_extract(
+        input_paths=[input_dir],
+        output_dir=output_dir,
+        limit=1,
+        workers=1,
+        executor="thread",
+    )
+
+    assert limited_manifest["ship_files_considered"] == 1
+    assert stale_output_path.exists()
+    assert sentinel_path.stat().st_mtime_ns == before_sentinel_mtime
+
+
+def test_canonicalize_limit_is_nondestructive_and_does_not_update_version_sentinel(tmp_path: Path) -> None:
+    """Limited canonicalize runs should keep stale outputs and leave sentinel untouched."""
+
+    input_dir = tmp_path / "canonical-input"
+    output_dir = tmp_path / "canonical-output"
+    input_dir.mkdir()
+    write_json(input_dir / "alpha.json", {"Parts": [], "Name": "Alpha", "Version": 1})
+    write_json(input_dir / "beta.json", {"Parts": [], "Name": "Beta", "Version": 1})
+
+    full_manifest = run_canonicalize(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        report_json=tmp_path / "full-report.json",
+        workers=1,
+        executor="thread",
+    )
+    assert full_manifest["canonical_outputs_failed"] == 0
+    sentinel_path = output_dir / ".pipeline-version.json"
+    before_sentinel_mtime = sentinel_path.stat().st_mtime_ns
+
+    stale_output_path = output_dir / "stale.json"
+    write_json(stale_output_path, {"Parts": [], "Name": "Stale", "Version": 1})
+
+    time.sleep(0.01)
+    limited_manifest = run_canonicalize(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        report_json=tmp_path / "limited-report.json",
+        limit=1,
+        workers=1,
+        executor="thread",
+    )
+
+    assert limited_manifest["considered_input_json_files"] == 1
+    assert stale_output_path.exists()
+    assert sentinel_path.stat().st_mtime_ns == before_sentinel_mtime
+
+
+def test_pipeline_canonical_schema_bump_forces_downstream_graph_recompute(tmp_path: Path) -> None:
+    """Canonical schema-version invalidation should force a full downstream graph rerun."""
+
+    source_dir = tmp_path / "ships"
+    extracted_dir = tmp_path / "extracted"
+    canonical_dir = tmp_path / "canonical"
+    graph_dir = tmp_path / "graphs"
+    source_dir.mkdir()
+    (source_dir / "alpha.ship.png").write_bytes(create_ship_png_bytes(build_png_ship(name="Alpha")))
+
+    first_payload = preprocessing_pipeline.run_pipeline(
+        input_paths=[source_dir],
+        output_dir=graph_dir,
+        extracted_dir=extracted_dir,
+        canonical_dir=canonical_dir,
+        extract_workers=1,
+        extract_executor="thread",
+        canonicalize_workers=1,
+        canonicalize_executor="thread",
+        graph_workers=1,
+        graph_executor="thread",
+    )
+    assert first_payload["graphs"]["ships_processed"] == 1
+
+    graph_file_path = graph_dir / "alpha.ship.json"
+    first_graph_mtime = graph_file_path.stat().st_mtime_ns
+
+    canonical_sentinel_path = canonical_dir / ".pipeline-version.json"
+    sentinel_data = read_json(canonical_sentinel_path)
+    sentinel_data["canonical_schema_version"] = 0
+    write_json(canonical_sentinel_path, sentinel_data)
+
+    time.sleep(0.01)
+    second_payload = preprocessing_pipeline.run_pipeline(
+        input_paths=[source_dir],
+        output_dir=graph_dir,
+        extracted_dir=extracted_dir,
+        canonical_dir=canonical_dir,
+        extract_workers=1,
+        extract_executor="thread",
+        canonicalize_workers=1,
+        canonicalize_executor="thread",
+        graph_workers=1,
+        graph_executor="thread",
+    )
+
+    assert second_payload["graphs"]["ships_processed"] == 1
+    assert graph_file_path.stat().st_mtime_ns > first_graph_mtime

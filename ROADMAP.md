@@ -2,8 +2,8 @@
 ## Project:
 
 1. ~~Decide on a name~~ → **Voidwright**
-2. Post ship training opt-out form on Excelsior
-3. Open-source repo
+2. ~~Post ship training opt-out form on Excelsior~~
+3. ~~Open-source repo~~
 3. Recruit contributors
 
 
