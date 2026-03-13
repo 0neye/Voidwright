@@ -127,7 +127,7 @@ def test_run_canonicalize_dedupes_shifted_layouts_and_keeps_transform_metadata(t
     assert manifest["parsed_input_json_files"] == 2
     assert manifest["unique_content_groups"] == 1
 
-    written_json_files = sorted(path for path in output_dir.glob("*.json") if path.name != "manifest.json")
+    written_json_files = sorted(path for path in output_dir.glob("*.json") if path.name != "manifest.json" and not path.name.startswith("."))
     assert len(written_json_files) == 1
     canonical_payload = json.loads(written_json_files[0].read_text(encoding="utf-8"))
     assert "coord_transform" in canonical_payload

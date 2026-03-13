@@ -427,6 +427,6 @@ def infer_meta(part_id: str, rotation: int) -> Tuple[PartMeta, bool]:
 def iter_ship_files(input_dir: Path) -> Iterator[Path]:
     """Yield ship JSON files in deterministic order for corpus processing."""
 
-    yield from sorted(input_dir.glob("*.json"))
+    yield from sorted(p for p in input_dir.glob("*.json") if not p.name.startswith("."))
 
 
