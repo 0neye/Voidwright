@@ -21,22 +21,45 @@ _BACKEND_NAME = "structural"
 _EXPANSION_VERSION = 1
 _EXPANSION_GRAPH_NAME = "X_expansion_structural"
 
+# Part-ID substrings that identify corridor and moving-walkway parts.  These
+# part types do not require a door to be crew-traversable to each other when
+# their walkable cells are adjacent.
+_CORRIDOR_LIKE_SUBSTRINGS: tuple[str, ...] = ("corridor", "walkway")
 
-def _build_traversable_clusters(nodes: list[dict]) -> list[list[int]]:
-    """Group node IDs into traversable clusters via adjacent walkable-cell connectivity.
 
-    Two parts are placed in the same cluster when any of their walkable cells
-    are adjacent (differ by 2 in exactly one axis in the 2x coordinate frame,
-    which corresponds to touching grid cells in game space).
+def _is_corridor_like(part_id: str) -> bool:
+    """Return True when *part_id* identifies a corridor or moving-walkway part."""
+    lower_id = part_id.lower()
+    return any(token in lower_id for token in _CORRIDOR_LIKE_SUBSTRINGS)
+
+
+def _build_traversable_clusters(nodes: list[dict], edges: list[dict]) -> list[list[int]]:
+    """Group node IDs into traversable clusters.
+
+    Two parts join the same cluster when either condition holds:
+
+    1. **Door edge**: they are connected by an edge with ``kind == "door"`` in
+       the structural part graph (applies to any two walkable parts).
+    2. **Corridor-like adjacency**: both parts are corridor or moving-walkway
+       parts (matched via :data:`_CORRIDOR_LIKE_SUBSTRINGS`) *and* at least one
+       walkable cell of each part is adjacent in the 2x coordinate frame
+       (differs by 2 in exactly one axis).
+
+    Args:
+        nodes: Structural part graph nodes.  Each node must have an ``"id"``
+            field and may have ``"part_id"`` and ``"walkable_cells_2x"``.
+        edges: Structural part graph edges.  Only ``kind == "door"`` edges
+            participate in traversal connectivity.
+
+    Returns:
+        Sorted list of sorted member-ID lists, one per cluster.
     """
 
-    cell_to_parts: dict[tuple[int, int], set[int]] = {}
-    for node in nodes:
-        for cell in node.get("walkable_cells_2x", []):
-            key = (cell[0], cell[1])
-            cell_to_parts.setdefault(key, set()).add(node["id"])
+    parts_with_walkable: set[int] = {node["id"] for node in nodes if node.get("walkable_cells_2x")}
+    if not parts_with_walkable:
+        return []
 
-    parent: dict[int, int] = {node["id"]: node["id"] for node in nodes}
+    parent: dict[int, int] = {node_id: node_id for node_id in parts_with_walkable}
 
     def find(x: int) -> int:
         while parent[x] != x:
@@ -47,21 +70,40 @@ def _build_traversable_clusters(nodes: list[dict]) -> list[list[int]]:
     def union(x: int, y: int) -> None:
         parent[find(x)] = find(y)
 
-    for (cx, cy), part_ids in cell_to_parts.items():
-        # Merge parts that share the same walkable cell
+    # Rule 1: door edges connect any two walkable parts regardless of type.
+    for edge in edges:
+        if edge.get("kind") != "door":
+            continue
+        src = edge.get("source")
+        tgt = edge.get("target")
+        if src in parts_with_walkable and tgt in parts_with_walkable:
+            union(src, tgt)
+
+    # Rule 2: corridor-like parts merge when their walkable cells are adjacent.
+    corridor_nodes = [
+        node for node in nodes
+        if node["id"] in parts_with_walkable and _is_corridor_like(node.get("part_id", ""))
+    ]
+    cell_to_corridor_parts: dict[tuple[int, int], set[int]] = {}
+    for node in corridor_nodes:
+        for cell in node.get("walkable_cells_2x", []):
+            key = (cell[0], cell[1])
+            cell_to_corridor_parts.setdefault(key, set()).add(node["id"])
+
+    for (cx, cy), part_ids in cell_to_corridor_parts.items():
+        # Merge corridor parts that share the same walkable cell.
         part_ids_list = sorted(part_ids)
         for i in range(1, len(part_ids_list)):
             union(part_ids_list[0], part_ids_list[i])
-        # Merge parts whose walkable cells are adjacent
+        # Merge corridor parts whose walkable cells are adjacent.
         for dx, dy in ((2, 0), (-2, 0), (0, 2), (0, -2)):
-            neighbor_parts = cell_to_parts.get((cx + dx, cy + dy))
+            neighbor_parts = cell_to_corridor_parts.get((cx + dx, cy + dy))
             if neighbor_parts:
                 for pid_a in part_ids:
                     for pid_b in neighbor_parts:
                         if pid_a != pid_b:
                             union(pid_a, pid_b)
 
-    parts_with_walkable = {node["id"] for node in nodes if node.get("walkable_cells_2x")}
     clusters: dict[int, list[int]] = {}
     for node_id in parts_with_walkable:
         root = find(node_id)
@@ -82,7 +124,9 @@ def _enrich_graph(graph_data: dict) -> dict:
     Existing keys in ``graph_data`` are never removed or overwritten.
     """
 
-    structural_nodes = graph_data["graphs"]["A_structural_part_graph"]["nodes"]
+    structural_graph = graph_data["graphs"]["A_structural_part_graph"]
+    structural_nodes = structural_graph["nodes"]
+    structural_edges = structural_graph.get("edges", [])
     ship_info = graph_data.get("ship", {})
 
     # Global ship-info node — one per file, carries top-level ship metadata
@@ -102,8 +146,9 @@ def _enrich_graph(graph_data: dict) -> dict:
         for node in structural_nodes
     ]
 
-    # Traversable cluster super-nodes — derived from walkable_cells_2x on structural nodes
-    clusters = _build_traversable_clusters(structural_nodes)
+    # Traversable cluster super-nodes — connectivity determined by door edges
+    # and corridor-like adjacency (see _build_traversable_clusters).
+    clusters = _build_traversable_clusters(structural_nodes, structural_edges)
     cluster_nodes: list[dict] = []
     cluster_cross_edges: list[dict] = []
     for cluster_index, member_ids in enumerate(clusters):
