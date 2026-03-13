@@ -691,7 +691,8 @@ def generate_all(
     manifest["unknown_part_ids"] = dict(manifest["unknown_part_ids"].most_common())
     manifest["door_stats"] = dict(manifest["door_stats"])
 
-    write_output_version(output_dir, "schema_version", _GRAPH_SCHEMA_VERSION)
+    if limit is None:
+        write_output_version(output_dir, "schema_version", _GRAPH_SCHEMA_VERSION)
 
     with (output_dir / "manifest.json").open("wb") as file_handle:
         file_handle.write(

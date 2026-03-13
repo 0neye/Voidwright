@@ -277,7 +277,7 @@ class StructuralExpansionBackend(ExpansionBackend):
         """
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        files = sorted(p for p in input_dir.glob("*.json") if p.name != "manifest.json")
+        files = sorted(p for p in input_dir.glob("*.json") if p.name != "manifest.json" and not p.name.startswith("."))
 
         if not files:
             print(f"[graph-expansion:structural] No graph JSON files found in {input_dir}")
