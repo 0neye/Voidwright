@@ -316,11 +316,12 @@ def test_pipeline_roundtrip_replays_doors_from_graph(tmp_path: Path) -> None:
     assert _sorted_doors(generated_payload["doors"]) == _sorted_doors(normalized_ship["Doors"])
     assert graph_payload["validation"]["normalized_door_count"] == len(normalized_ship["Doors"])
 
-    cell_graph_summary = graph_payload["graphs"]["C_cell_graph"]["summary"]
-    assert cell_graph_summary["door_records"] == 1
-    assert cell_graph_summary["valid_door_edges"] == 1
-    assert cell_graph_summary["blocked_door_records"] == 0
-    assert cell_graph_summary["dangling_door_records"] == 0
+    struct_summary = graph_payload["graphs"]["A_structural_part_graph"]["summary"]
+    assert struct_summary["door_records"] == 1
+    assert struct_summary["door_edges"] == 1
+    assert struct_summary["dangling_door_records"] == 0
+    assert struct_summary["internal_door_records"] == 0
+    assert struct_summary["non_structural_door_records"] == 0
 
     export_result = export_ship_png(generated_payload, exported_path, validate=True)
     reparsed_payload = parse_ship_png(exported_path)

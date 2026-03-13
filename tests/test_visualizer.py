@@ -14,6 +14,7 @@ import generator.cli
 import main
 from common.cosmoteer_install import (
     find_cosmoteer_install_root,
+    iter_steam_install_paths,
     iter_steam_library_paths,
     parse_steam_libraryfolders_vdf,
     resolve_terran_part_icons_root,
