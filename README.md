@@ -59,6 +59,7 @@ The repository now includes a root entry point at `main.py` that delegates to:
 - `preprocessing`
 - `training`
 - `generator`
+- `graph-expansion`
 
 You can use it to discover commands, inspect help, and run an interactive REPL:
 
@@ -69,7 +70,7 @@ python main.py help training build markov
 python main.py repl
 ```
 
-All existing package-level CLIs (`python -m preprocessing.cli`, `python -m training.cli`, and `python -m generator.cli`) remain supported.
+All existing package-level CLIs (`python -m preprocessing.cli`, `python -m training.cli`, `python -m generator.cli`, and `python -m graph_expansion.cli`) remain supported.
 
 ## Main workflow
 
@@ -125,6 +126,18 @@ Each individual preprocessing stage also accepts:
 
 - `--workers <n>`
 - `--executor {auto,thread,process}`
+
+### 2.5. Optional: graph expansion
+
+Enrich the graph JSON with virtual nodes and cross-edges before training:
+
+```bash
+python main.py graph-expansion expand structural \
+  --input-dir generated_ship_graphs_canonical \
+  --output-dir expanded_ship_graphs
+```
+
+This is also available as a single-pass option on the pipeline command via `--expansion-output-dir`. Graph expansion is optional and not consumed by training or generation by default.
 
 ### 3. Train a model
 
@@ -211,6 +224,7 @@ purpose, so it can be used as a local cache without polluting the repo.
 
 - `common/` - shared helper modules plus shared Cosmoteer geometry and PNG parse/encode support
 - `preprocessing/` - extraction, canonicalization, graph generation, and local pipeline orchestration
+- `graph_expansion/` - backend-agnostic graph enrichment; the `structural` backend adds a global ship-info virtual node and traversable-cluster super-nodes with cross-edges to preprocessing graph JSON
 - `training/` - backend router and training adapters
 - `generator/` - backend router and generation adapters
 - `markov/` - shared Markov model, sampling, and backend input helpers; `markov/symmetry.py` is a backward-compat shim over `ship_layout/symmetry.py`
