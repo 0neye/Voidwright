@@ -42,7 +42,19 @@ Pipeline concurrency defaults are hardware-agnostic. Stage-specific overrides ar
 - `--extract-workers` / `--extract-executor`
 - `--canonicalize-workers` / `--canonicalize-executor`
 - `--graph-workers` / `--graph-executor`
+- `--expansion-workers` / `--expansion-executor`
 - `auto` falls back to threads when process pools are unavailable in the current runner
+
+Pass `--expansion-output-dir` to run graph expansion immediately after the graphs stage:
+
+```bash
+python main.py preprocessing pipeline downloaded_ships \
+  --output-dir generated_ship_graphs_canonical \
+  --write-extracted-dir extracted_ship_data \
+  --write-canonical-dir extracted_ship_data_canonical \
+  --expansion-output-dir expanded_ship_graphs \
+  --verbose
+```
 
 **Preprocessing stages individually:**
 ```bash
@@ -52,12 +64,20 @@ python main.py preprocessing graphs --input-dir extracted_ship_data_canonical --
 python main.py preprocessing door-rules --input-dir extracted_ship_data_canonical
 ```
 
+**Expand graph JSON with virtual nodes and cross-edges:**
+```bash
+python main.py graph-expansion expand structural \
+  --input-dir generated_ship_graphs_canonical \
+  --output-dir expanded_ship_graphs
+```
+
 The package-level CLIs remain supported:
 
 ```bash
 python -m preprocessing.cli ...
 python -m training.cli ...
 python -m generator.cli ...
+python -m graph_expansion.cli ...
 ```
 
 The `extract`, `canonicalize`, and `graphs` stages also accept:
@@ -106,6 +126,7 @@ python scripts/download_ship_images.py --output-dir downloaded_ships --verbose
 The codebase is split into purpose-specific packages:
 
 - **`preprocessing/`** - four-stage pipeline (extract -> canonicalize -> graphs -> door-rules). Each stage is its own submodule with a `main(argv)` and `build_parser()`. `pipeline.py` orchestrates all stages.
+- **`graph_expansion/`** - backend-agnostic graph enrichment. `router.py` resolves backend names; each backend under `graph_expansion/backends/<name>/` registers its own CLI parser via `register_expand_parser` / `run_expand`. The `structural` backend adds a global ship-info virtual node and traversable-cluster super-nodes (with cross-edges) to preprocessing graph JSON.
 - **`training/`** - backend-agnostic router. `router.py` resolves backend names; each backend under `training/backends/<name>/` registers its own CLI parser via `register_build_parser` / `register_validate_parser`.
 - **`generator/`** - backend-agnostic generation router. `generator/backends/markov/backend.py` wires CLI options; `generator/backends/markov/export.py` handles `.ship.png` encoding and roundtrip validation.
 - **`markov/`** - shared Markov internals used by both training and generation: `model.py`, `generation.py`, `inputs.py`, and related helpers. `symmetry.py` is a backward-compat shim; mirror computation lives in `ship_layout/symmetry.py`.
@@ -116,12 +137,14 @@ The codebase is split into purpose-specific packages:
 ### Key data flow
 
 ```text
-.ship.png -> parser -> raw JSON -> centered 2x extracted JSON -> canonical JSON -> graph JSON -> Markov model -> generated JSON -> encoder -> .ship.png
+.ship.png -> parser -> raw JSON -> centered 2x extracted JSON -> canonical JSON -> graph JSON -> (optional) expanded graph JSON -> Markov model -> generated JSON -> encoder -> .ship.png
 ```
 
 ### Adding a new backend
 
 Register it in `training/router.py` and `generator/router.py` alongside the Markov backend. Implement `register_build_parser` / `run_build` (training) and `register_generate_parser` / `run_generate` (generator) following `MarkovTrainingBackend` / `MarkovGeneratorBackend` as templates.
+
+To add a new graph expansion backend, register it in `graph_expansion/router.py` and implement `register_expand_parser` / `run_expand` following `StructuralExpansionBackend` as a template.
 
 ## Commit messages
 
@@ -167,3 +190,5 @@ After making a major change or refactor and running appropriate tests, please up
 - **Build-time validation requires canonical corpus input.** In `training/backends/markov/backend.py`, `--validation-output` only executes when `--input-dir` is provided; graph-only builds skip validation.
 - **Part requirements merge by max, not sum.** `markov/inputs.py` merges duplicate requirement entries by per-part maximum required count.
 - **Python module exports should be declared near the top.** New Python modules should define `__all__` near the top of the file (after imports) instead of at the bottom.
+- **Graph expansion is optional and separate from training.** `graph_expansion/` enriches graph JSON with virtual nodes and cross-edges but is not consumed by training or generation by default. Run it via `graph-expansion expand structural` or by passing `--expansion-output-dir` to the pipeline command.
+- **Graph expansion cluster ordering is deterministic.** `graph_expansion/backends/structural/backend.py` normalizes each cluster's member list with `sorted()` before sorting the cluster list, so `traversable_cluster_N` indices are stable across runs.
