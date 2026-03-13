@@ -456,6 +456,22 @@ def test_expand_dir_in_place_when_output_equals_input(tmp_path: Path) -> None:
     assert "expansion" in enriched
 
 
+def test_expand_dir_in_place_second_run_skips_all(tmp_path: Path) -> None:
+    """A second in-place run with the same version should skip all files.
+
+    Before the fix, _needs_regen compared a file's mtime to itself, which
+    always returned False — correct by accident.  After the fix the early-
+    return is explicit and intentional, so this test guards the semantics.
+    """
+    write_graph_json(tmp_path / "ship.json", [make_node(0, part_id=_GENERIC_ID)])
+    backend = StructuralExpansionBackend()
+    first = backend.expand_dir(input_dir=tmp_path, output_dir=tmp_path, workers=1, executor="thread")
+    assert first["files_expanded"] == 1
+
+    second = backend.expand_dir(input_dir=tmp_path, output_dir=tmp_path, workers=1, executor="thread")
+    assert second["files_expanded"] == 0
+
+
 def test_expand_dir_skips_bad_files_and_continues(tmp_path: Path) -> None:
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"

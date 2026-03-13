@@ -502,6 +502,34 @@ def process_ship(ship_path: Path) -> dict:
     }
 
 
+def _read_existing_graph_summary(output_path: Path) -> dict | None:
+    """Read a compact summary from an already-generated graph JSON file.
+
+    Returns the same shape as the dict returned by _generate_single_graph, or
+    None if the file cannot be read or is structurally incomplete.
+    """
+    try:
+        with output_path.open(encoding="utf-8") as fh:
+            graph_data = json.load(fh)
+        struct_summary = graph_data["graphs"]["A_structural_part_graph"]["summary"]
+        validation = graph_data["validation"]
+        return {
+            "output_name": output_path.name,
+            "unknown_part_ids": validation["unknown_part_ids"],
+            "door_stats": {
+                "door_records": struct_summary["door_records"],
+                "door_edges": struct_summary["door_edges"],
+                "dangling_door_records": struct_summary["dangling_door_records"],
+                "internal_door_records": struct_summary["internal_door_records"],
+                "non_structural_door_records": struct_summary["non_structural_door_records"],
+                "occupied_cells": validation["occupied_cells"],
+                "traversable_cells": validation["traversable_cells"],
+            },
+        }
+    except Exception:
+        return None
+
+
 def _generate_single_graph(source_json_path: str, output_dir: str) -> dict:
     """Process and write graph artifacts for one ship JSON file.
 
@@ -563,13 +591,13 @@ def generate_all(
     if limit is not None:
         files = files[:limit]
 
-    files_to_process = inputs_needing_regeneration(
+    files_to_process, skipped_files = inputs_needing_regeneration(
         files,
         output_dir,
         current_version=_GRAPH_SCHEMA_VERSION,
         version_key="schema_version",
     )
-    ships_skipped = len(files) - len(files_to_process)
+    ships_skipped = len(skipped_files)
     if ships_skipped:
         print(f"Skipping {ships_skipped} up-to-date graph file(s) in {output_dir}", flush=True)
 
@@ -638,6 +666,13 @@ def generate_all(
         )
         if pruned_count:
             print(f"Pruned {pruned_count} stale graph file(s) from {output_dir}", flush=True)
+
+    # Collect summaries from skipped (up-to-date) output files so the manifest
+    # reflects the full corpus, not just the incremental delta.
+    for skipped_path in skipped_files:
+        summary = _read_existing_graph_summary(output_dir / skipped_path.name)
+        if summary is not None:
+            graph_results.append(summary)
 
     # Reduce the worker summaries in filename order so manifest counters and
     # sample-output lists remain stable no matter which worker finished first.

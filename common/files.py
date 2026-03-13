@@ -106,17 +106,17 @@ def inputs_needing_regeneration(
     *,
     current_version: int,
     version_key: str,
-) -> list[Path]:
-    """Return input files whose outputs need to be generated or regenerated.
+) -> tuple[list[Path], list[Path]]:
+    """Return ``(to_process, skipped)`` for the given input files.
 
     Reads the version stored in *output_dir*'s :data:`_VERSION_SENTINEL` file
     and compares it against *current_version*:
 
-    - **Version mismatch or no sentinel**: all *input_files* are returned so
-      the caller regenerates every output (e.g. after a schema bump).
-    - **Version matches**: only input files whose corresponding output file is
-      absent or older than the input are returned, enabling fast incremental
-      reruns while still catching edited inputs.
+    - **Version mismatch or no sentinel**: all *input_files* are returned as
+      *to_process* so the caller regenerates every output (e.g. after a schema
+      bump).  *skipped* is empty.
+    - **Version matches**: files whose corresponding output is absent or older
+      than the input go into *to_process*; the rest go into *skipped*.
 
     Call :func:`write_output_version` after successfully writing all outputs
     to persist the current version for the next run.
@@ -128,31 +128,44 @@ def inputs_needing_regeneration(
         version_key: Key used to store and retrieve the version in the sentinel.
 
     Returns:
-        Subset of *input_files* that require (re)generation.
+        A tuple ``(to_process, skipped)`` where *to_process* are files that
+        need (re)generation and *skipped* are already up-to-date files.
     """
 
     stored_version: int | None = None
     sentinel = output_dir / _VERSION_SENTINEL
-    if sentinel.exists():
-        try:
-            data = orjson.loads(sentinel.read_text(encoding="utf-8"))
-            val = data.get(version_key)
-            if val is not None:
-                stored_version = int(val)
-        except Exception:
-            pass
+    try:
+        data = orjson.loads(sentinel.read_text(encoding="utf-8"))
+        val = data.get(version_key)
+        if val is not None:
+            stored_version = int(val)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
 
     if stored_version != current_version:
-        return list(input_files)
+        return list(input_files), []
 
-    # Version matches — only process files whose outputs are absent or stale.
+    # Version matches — split files into those needing regen and those that don't.
     def _needs_regen(f: Path) -> bool:
         out = output_dir / f.name
-        if not out.exists():
+        if f == out:
+            # In-place mode: input and output are the same file, so mtime
+            # comparison is meaningless.  Version match above is the only
+            # staleness signal; the file is considered up-to-date.
+            return False
+        try:
+            out_stat = out.stat()
+        except FileNotFoundError:
             return True
-        return f.stat().st_mtime > out.stat().st_mtime
+        return f.stat().st_mtime > out_stat.st_mtime
 
-    return [f for f in input_files if _needs_regen(f)]
+    to_process: list[Path] = []
+    skipped: list[Path] = []
+    for f in input_files:
+        (to_process if _needs_regen(f) else skipped).append(f)
+    return to_process, skipped
 
 
 def write_output_version(output_dir: Path, version_key: str, version: int) -> None:
@@ -169,11 +182,12 @@ def write_output_version(output_dir: Path, version_key: str, version: int) -> No
 
     sentinel = output_dir / _VERSION_SENTINEL
     data: dict = {}
-    if sentinel.exists():
-        try:
-            data = orjson.loads(sentinel.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    try:
+        data = orjson.loads(sentinel.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
     data[version_key] = version
     sentinel.write_text(
         orjson.dumps(data, option=orjson.OPT_INDENT_2).decode() + "\n",
