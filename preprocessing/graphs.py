@@ -10,13 +10,14 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import orjson
 
-from common.files import inputs_needing_regeneration, prune_stale_json_outputs, write_output_version
+from common.files import inputs_needing_regeneration, iter_json_files, prune_stale_json_outputs, write_output_version
 from common.geometry import PartMeta, infer_meta, load_vanilla_part_geometry, normalize_part_id
 from ship_layout.connectivity import shared_attachment_sides
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
 from .layout_helpers import door_adjacent_cells
 
 _GRAPH_SCHEMA_VERSION = 5
+_GRAPH_SCHEMA_VERSION_KEY = "graph_schema_version"
 
 __all__ = [
     "normalize_parts",
@@ -510,7 +511,7 @@ def _read_existing_graph_summary(output_path: Path) -> dict | None:
     """
     try:
         with output_path.open(encoding="utf-8") as fh:
-            graph_data = json.load(fh)
+            graph_data = orjson.loads(fh.read())
         struct_summary = graph_data["graphs"]["A_structural_part_graph"]["summary"]
         validation = graph_data["validation"]
         return {
@@ -587,7 +588,7 @@ def generate_all(
     """
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    files = sorted(path for path in input_dir.glob("*.json") if path.name != "manifest.json")
+    files = [f for f in iter_json_files(input_dir) if f.name != "manifest.json"]
     if limit is not None:
         files = files[:limit]
 
@@ -595,7 +596,7 @@ def generate_all(
         files,
         output_dir,
         current_version=_GRAPH_SCHEMA_VERSION,
-        version_key="schema_version",
+        version_key=_GRAPH_SCHEMA_VERSION_KEY,
     )
     ships_skipped = len(skipped_files)
     if ships_skipped:
@@ -657,6 +658,10 @@ def generate_all(
             submit_work=submit_graph_work,
         )
 
+    # Number of files that needed generation but failed (no output written).
+    # Captured here before skipped-file summaries are appended to graph_results.
+    files_failed = len(files_to_process) - len(graph_results)
+
     # Prune stale outputs left over from previous runs, but only when processing
     # the full input set.  A limited run is a non-destructive validation subset,
     # so its truncated keep-list must never be used to delete unrelated outputs.
@@ -691,8 +696,12 @@ def generate_all(
     manifest["unknown_part_ids"] = dict(manifest["unknown_part_ids"].most_common())
     manifest["door_stats"] = dict(manifest["door_stats"])
 
-    if limit is None:
-        write_output_version(output_dir, "schema_version", _GRAPH_SCHEMA_VERSION)
+    # Only persist the version sentinel when every file that needed
+    # (re)generation succeeded.  If any file failed its old output may still
+    # be present on disk; writing the sentinel here would tell the next run to
+    # skip that file via mtime comparison, permanently hiding the stale artifact.
+    if limit is None and files_failed == 0:
+        write_output_version(output_dir, _GRAPH_SCHEMA_VERSION_KEY, _GRAPH_SCHEMA_VERSION)
 
     with (output_dir / "manifest.json").open("wb") as file_handle:
         file_handle.write(

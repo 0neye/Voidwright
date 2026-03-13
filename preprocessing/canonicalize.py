@@ -13,7 +13,7 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 
 import orjson
 
-from common.files import iter_json_files
+from common.files import iter_json_files, prune_stale_json_outputs, read_output_version, write_output_version
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
 from .relative_coords import canonicalize_for_translation_invariant_hash
 
@@ -30,6 +30,8 @@ __all__ = [
 ]
 
 MSG_SUFFIX_RE = re.compile(r"__msg\d+(?=(\.ship)?\.json$)")
+_CANONICAL_SCHEMA_VERSION = 1
+_CANONICAL_SCHEMA_VERSION_KEY = "canonical_schema_version"
 
 
 @dataclass
@@ -123,7 +125,9 @@ def _write_canonical_output(
     output_json_path: str,
     representative_json_path: str,
     expected_content_hash: str,
-) -> str:
+    *,
+    force_write: bool = False,
+) -> tuple[str, bool]:
     """Write one canonical JSON output file.
 
     Args:
@@ -132,28 +136,35 @@ def _write_canonical_output(
         expected_content_hash: Content hash that should match the normalized bytes
 
     Returns:
-        The written output path as a string for progress reporting
+        A tuple of ``(written_output_path, did_write)`` for progress reporting
     """
 
     output_path = Path(output_json_path)
     representative_path = Path(representative_json_path)
     representative_text = representative_path.read_text(encoding="utf-8")
-    normalized_text, _normalized_hash = canonicalize_json_text(
-        representative_text,
-        translation_invariant=False,
-    )
-    _, recomputed_hash = canonicalize_json_text(
-        representative_text,
-        translation_invariant=True,
-    )
+    data = orjson.loads(representative_text)
+    normalized_text = orjson.dumps(data, option=orjson.OPT_SORT_KEYS).decode()
+    ti_text = orjson.dumps(
+        canonicalize_for_translation_invariant_hash(data),
+        option=orjson.OPT_SORT_KEYS,
+    ).decode()
+    recomputed_hash = hashlib.sha256(ti_text.encode("utf-8")).hexdigest()
     if recomputed_hash != expected_content_hash:
         raise RuntimeError(
             "Representative file hash mismatch for "
             f"{representative_path}: expected {expected_content_hash}, got {recomputed_hash}"
         )
 
-    output_path.write_text(normalized_text + "\n", encoding="utf-8")
-    return str(output_path)
+    normalized_bytes = normalized_text + "\n"
+    if not force_write:
+        try:
+            if output_path.read_text(encoding="utf-8") == normalized_bytes:
+                return str(output_path), False
+        except FileNotFoundError:
+            pass
+
+    output_path.write_text(normalized_bytes, encoding="utf-8")
+    return str(output_path), True
 
 
 def choose_preferred_member(members: List[SourceFile]) -> Tuple[SourceFile, str]:
@@ -269,6 +280,7 @@ def run_canonicalize(
     output_dir: str | Path = "extracted_ship_data_canonical",
     report_json: str | Path = "out/ship_canonicalization_report.json",
     report_md: str | Path | None = None,
+    limit: int | None = None,
     workers: int | None = None,
     executor: str = "auto",
 ) -> dict:
@@ -279,6 +291,7 @@ def run_canonicalize(
         output_dir: Directory where canonical JSON outputs will be written
         report_json: Machine-readable report destination
         report_md: Optional human-readable report destination
+        limit: Optional subset size for validation runs
         workers: Optional worker-count override for parallel scan and write tasks
         executor: Executor mode override for the scan phase: `auto`, `thread`, or `process`
 
@@ -291,7 +304,17 @@ def run_canonicalize(
     report_json_path = Path(report_json)
     report_md_path = Path(report_md) if report_md else None
 
-    files = list(iter_json_files(input_path))
+    output_path.mkdir(parents=True, exist_ok=True)
+    report_json_path.parent.mkdir(parents=True, exist_ok=True)
+
+    all_files = list(iter_json_files(input_path))
+    files = all_files[:limit] if limit is not None else all_files
+
+    full_recompute = (
+        limit is None
+        and read_output_version(output_path, _CANONICAL_SCHEMA_VERSION_KEY) != _CANONICAL_SCHEMA_VERSION
+    )
+
     sources: List[SourceFile] = []
     parse_failures: List[dict] = []
     scan_worker_count = resolve_worker_count(
@@ -345,13 +368,13 @@ def run_canonicalize(
         sorted(grouped_sources.items(), key=lambda item: item[0])
     )
 
-    output_path.mkdir(parents=True, exist_ok=True)
-    report_json_path.parent.mkdir(parents=True, exist_ok=True)
-
     manifest = {
         "input_dir": str(input_path),
         "output_dir": str(output_path),
-        "total_input_json_files": len(files),
+        "schema_version": _CANONICAL_SCHEMA_VERSION,
+        "full_recompute": full_recompute,
+        "total_input_json_files": len(all_files),
+        "considered_input_json_files": len(files),
         "parsed_input_json_files": len(sources),
         "parse_failures": parse_failures,
         "unique_content_groups": len(resolved_groups),
@@ -368,6 +391,11 @@ def run_canonicalize(
         "duplicate_group_size_histogram": dict(
             sorted(Counter(len(group.members) for group in resolved_groups).items())
         ),
+        "canonical_outputs_written": 0,
+        "canonical_outputs_unchanged": 0,
+        "canonical_outputs_failed": 0,
+        "canonical_outputs_pruned": 0,
+        "ships_skipped": 0,
     }
 
     write_jobs: List[Tuple[str, str, str]] = []
@@ -392,6 +420,14 @@ def run_canonicalize(
                 ],
             }
         )
+    expected_output_names = {group.canonical_name for group in resolved_groups}
+    if limit is None:
+        pruned_count = prune_stale_json_outputs(output_path, expected_output_names)
+        manifest["canonical_outputs_pruned"] = pruned_count
+        if pruned_count:
+            print(f"Pruned {pruned_count} stale canonical file(s) from {output_path}", flush=True)
+
+    ships_failed = 0
 
     # File writes are I/O-bound; always use a thread pool regardless of the
     # user's --executor selection to avoid process-pool spawn overhead.
@@ -409,16 +445,38 @@ def run_canonicalize(
                     output_json_path,
                     representative_json_path,
                     expected_content_hash,
+                    force_write=full_recompute,
                 ): output_json_path
                 for output_json_path, representative_json_path, expected_content_hash in write_jobs
             }
             for index, future in enumerate(as_completed(future_to_output), start=1):
-                future.result()
+                try:
+                    _output_path_text, did_write = future.result()
+                    if did_write:
+                        manifest["canonical_outputs_written"] += 1
+                    else:
+                        manifest["canonical_outputs_unchanged"] += 1
+                except Exception as exc:
+                    ships_failed += 1
+                    failed_output = future_to_output[future]
+                    print(
+                        f"Warning: failed to write canonical output {failed_output}: {exc}",
+                        flush=True,
+                    )
                 if index % 1000 == 0:
                     print(
                         f"Wrote {index}/{len(write_jobs)} canonical files with {write_worker_count} worker(s)...",
                         flush=True,
                     )
+    manifest["canonical_outputs_failed"] = ships_failed
+    manifest["ships_skipped"] = manifest["canonical_outputs_unchanged"]
+
+    if limit is None and ships_failed == 0:
+        write_output_version(
+            output_path,
+            _CANONICAL_SCHEMA_VERSION_KEY,
+            _CANONICAL_SCHEMA_VERSION,
+        )
 
     report_json_path.write_text(
         orjson.dumps(manifest, option=orjson.OPT_INDENT_2 | orjson.OPT_NON_STR_KEYS).decode() + "\n",
@@ -434,9 +492,13 @@ def run_canonicalize(
             f"- Input directory: `{input_path}`",
             f"- Canonical output directory: `{output_path}`",
             f"- Total input JSON files: **{manifest['total_input_json_files']}**",
+            f"- Considered input JSON files: **{manifest['considered_input_json_files']}**",
             f"- Parsed input JSON files: **{manifest['parsed_input_json_files']}**",
             f"- Unique-content canonical JSON files: **{manifest['unique_content_groups']}**",
             f"- Duplicates merged: **{manifest['duplicates_merged']}**",
+            f"- Canonical outputs written this run: **{manifest['canonical_outputs_written']}**",
+            f"- Canonical outputs skipped as unchanged: **{manifest['canonical_outputs_unchanged']}**",
+            f"- Canonical outputs pruned as stale: **{manifest['canonical_outputs_pruned']}**",
             (
                 "- Canonical names that came from stripping `__msg<digits>`: "
                 f"**{manifest['canonical_names_from_stripping_msg_suffix']}**"
@@ -520,6 +582,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional path for a human-readable markdown report",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional limit for partial validation runs",
+    )
     add_concurrency_arguments(
         parser,
         help_prefix="ship canonicalization",
@@ -537,6 +605,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir=args.output_dir,
         report_json=args.report_json,
         report_md=args.report_md,
+        limit=args.limit,
         workers=args.workers,
         executor=args.executor,
     )

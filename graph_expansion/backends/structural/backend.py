@@ -346,7 +346,15 @@ class StructuralExpansionBackend(ExpansionBackend):
                 f"[graph-expansion:structural] Pruned {pruned_count} stale file(s) from {output_dir}",
                 flush=True,
             )
-        write_output_version(output_dir, "expansion_version", _EXPANSION_VERSION)
+
+        # Only persist the version sentinel when every file that needed
+        # (re)generation succeeded.  If any file failed its old output may
+        # still be present on disk; writing the sentinel here would tell the
+        # next run to skip that file via mtime comparison, permanently hiding
+        # the stale artifact.
+        files_failed = len(files_to_expand) - len(results)
+        if files_failed == 0:
+            write_output_version(output_dir, "expansion_version", _EXPANSION_VERSION)
 
         files_expanded = len(results)
 

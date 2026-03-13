@@ -32,8 +32,8 @@ python main.py repl
 ```bash
 python main.py preprocessing pipeline downloaded_ships \
   --output-dir generated_ship_graphs_canonical \
-  --write-extracted-dir extracted_ship_data \
-  --write-canonical-dir extracted_ship_data_canonical \
+  --extracted-dir extracted_ship_data \
+  --canonical-dir extracted_ship_data_canonical \
   --verbose
 ```
 
@@ -50,8 +50,8 @@ Pass `--expansion-output-dir` to run graph expansion immediately after the graph
 ```bash
 python main.py preprocessing pipeline downloaded_ships \
   --output-dir generated_ship_graphs_canonical \
-  --write-extracted-dir extracted_ship_data \
-  --write-canonical-dir extracted_ship_data_canonical \
+  --extracted-dir extracted_ship_data \
+  --canonical-dir extracted_ship_data_canonical \
   --expansion-output-dir expanded_ship_graphs \
   --verbose
 ```
@@ -84,6 +84,7 @@ The `extract`, `canonicalize`, and `graphs` stages also accept:
 
 - `--workers <n>`
 - `--executor {auto,thread,process}`
+- `--limit <n>` (non-destructive subset runs; skips pruning and version-sentinel writes)
 
 **Train a Markov model** (preferred - from graph corpus):
 ```bash
@@ -180,7 +181,9 @@ After making a major change or refactor and running appropriate tests, please up
 - **`--seed-png` input is normalized through preprocessing coordinates.** Parsed PNG payloads with world `Parts[*].Location` values are rewritten through `preprocessing.relative_coords.apply_relative_coords_transform` so seed loading sees the same centered `Location2x` / `coord_transform.center_2x` frame as extracted corpus files.
 - **Token format:** `(part_id, rotation, anchor_part_id, anchor_rotation, dx, dy)`. Root tokens use `anchor_part_id = "__ROOT__"`. END token is `"__END__"`.
 - **Pipeline extract failures are partially tolerated.** `preprocessing/pipeline.py` treats extract exit code `2` as partial success and still runs canonicalize/graphs for successfully extracted files.
-- **Persistent pipeline sync is manifest-scoped.** `preprocessing/pipeline.py` only updates/prunes files listed in `.pipeline-managed-*.txt` manifests and intentionally leaves unrelated files in persistent stage output directories.
+- **Pipeline stage outputs are persistent by default.** `preprocessing/pipeline.py` writes extraction/canonicalization/graph artifacts directly to persistent stage directories (no temp-dir sync step).
+- **Each preprocessing stage has its own schema-version sentinel key.** Stage outputs use `.pipeline-version.json` with stage-specific keys (`extract_schema_version`, `canonical_schema_version`, `graph_schema_version`) to decide incremental vs full regeneration.
+- **`--limit` is non-destructive at every preprocessing stage.** Limited runs do not prune stale outputs and do not update schema-version sentinels.
 - **Canonical collision naming is hash-ordered.** In `preprocessing/canonicalize.py`, if multiple contents want the same canonical filename, the lexicographically smallest SHA-256 keeps the base name and the rest get `__dedup-<12hex>`.
 - **Parser/encoder location math is save-rect aware.** `common/cosmoteer/parser.py` normalizes `Part.Location` to footprint-origin coordinates and `common/cosmoteer/encoder.py` denormalizes back through `common/save_rect.py` for roundtrip fidelity.
 - **No-arg root CLI is interactive.** `main.py` defaults to REPL when no entrypoint is passed; no-argument runs are not non-interactive help output.
