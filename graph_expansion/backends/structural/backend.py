@@ -189,6 +189,25 @@ def _enrich_graph(graph_data: dict) -> dict:
     return enriched
 
 
+def _read_existing_expansion_summary(output_path: Path) -> dict | None:
+    """Read a compact summary from an already-expanded graph JSON file.
+
+    Returns the same shape as the dict returned by _expand_single_graph, or
+    None if the file cannot be read or is structurally incomplete.
+    """
+    try:
+        graph_data = json.loads(output_path.read_text(encoding="utf-8"))
+        summary = graph_data["graphs"][_EXPANSION_GRAPH_NAME]["summary"]
+        return {
+            "output_name": output_path.name,
+            "traversable_clusters": summary["traversable_clusters"],
+            "global_member_edges": summary["global_member_edges"],
+            "super_member_edges": summary["super_member_edges"],
+        }
+    except Exception:
+        return None
+
+
 def _expand_single_graph(source_path_str: str, output_dir_str: str) -> dict:
     """Enrich one graph JSON file and write it to the output directory."""
 
@@ -270,7 +289,9 @@ class StructuralExpansionBackend(ExpansionBackend):
             current_version=_EXPANSION_VERSION,
             version_key="expansion_version",
         )
-        files_skipped = len(files) - len(files_to_expand)
+        expand_set = set(files_to_expand)
+        skipped_files = [f for f in files if f not in expand_set]
+        files_skipped = len(skipped_files)
         if files_skipped:
             print(
                 f"[graph-expansion:structural] Skipping {files_skipped} up-to-date file(s) in {output_dir}",
@@ -328,6 +349,13 @@ class StructuralExpansionBackend(ExpansionBackend):
                 flush=True,
             )
         write_output_version(output_dir, "expansion_version", _EXPANSION_VERSION)
+
+        # Collect summaries from skipped (up-to-date) output files so the
+        # printed totals reflect the full corpus, not just the incremental delta.
+        for skipped_path in skipped_files:
+            summary = _read_existing_expansion_summary(output_dir / skipped_path.name)
+            if summary is not None:
+                results.append(summary)
 
         total_clusters = sum(r["traversable_clusters"] for r in results)
         print(
