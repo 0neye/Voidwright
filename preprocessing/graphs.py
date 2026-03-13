@@ -20,7 +20,7 @@ __all__ = [
     "part_cells",
     "part_walkable_cells",
     "structural_edges",
-    "cell_graph",
+    "structural_door_edges",
     "process_ship",
     "generate_all",
     "build_parser",
@@ -59,6 +59,17 @@ def _legacy_to_local_2x(location: Sequence[int], center_2x: Sequence[int] | None
     if center_2x is None:
         return None
     return [int(location[0]) * 2 - int(center_2x[0]), int(location[1]) * 2 - int(center_2x[1])]
+
+
+def _sorted_local_2x_cells(cells: Set[Coord], center_2x: Sequence[int] | None) -> List[list[int]]:
+    """Return deterministic centered `2x` coordinates for a set of world cells."""
+
+    local_cells = []
+    for cell_x, cell_y in sorted(cells):
+        local_2x = _legacy_to_local_2x((cell_x, cell_y), center_2x)
+        if local_2x is not None:
+            local_cells.append(local_2x)
+    return local_cells
 
 
 def normalize_parts(parts: object, *, center_2x: Sequence[int] | None = None) -> List[dict]:
@@ -214,108 +225,120 @@ def structural_edges(
     return sorted(adjacency.values(), key=lambda edge: (edge["source"], edge["target"]))
 
 
-def cell_graph(
+def structural_door_edges(
     part_records: List[dict],
-    cell_to_parts: Dict[Coord, Set[int]],
     doors: List[dict],
-    *,
-    center_2x: Sequence[int] | None = None,
-) -> dict:
-    """Build the conservative occupied-cell graph for one ship."""
+    cell_to_parts: Dict[Coord, Set[int]],
+    geometry_cache: Dict[str, object],
+) -> Tuple[List[dict], dict]:
+    """Build door edges between distinct parts for the structural part graph.
 
-    nodes = []
-    traversable_cells: Set[Coord] = set()
-    part_by_index = {record["index"]: record for record in part_records}
+    Each door that connects occupied cells of two distinct parts becomes an
+    edge with ``kind = "door"``. Doors where both occupied cells belong to the
+    same part are counted as internal and skipped. Doors whose occupied cells
+    cannot be resolved to known ship cells are counted as dangling and skipped.
 
-    for (cell_x, cell_y), owners in sorted(cell_to_parts.items()):
-        owner_records = [part_by_index[index] for index in sorted(owners)]
-        traversable = any((cell_x, cell_y) in record["walkable_cells"] for record in owner_records)
-        if traversable:
-            traversable_cells.add((cell_x, cell_y))
-        nodes.append(
-            {
-                "id": f"{cell_x},{cell_y}",
-                "x": cell_x,
-                "y": cell_y,
-                "center_2x": _legacy_to_local_2x([cell_x, cell_y], center_2x),
-                "occupied": True,
-                "traversable": traversable,
-                "part_indices": [record["index"] for record in owner_records],
-            }
-        )
+    Each edge carries ``source_cell_2x`` and ``target_cell_2x``: the centered
+    local 2x coordinates of the occupied cells on the source and target parts
+    respectively. These are derived from ``door["Cell2x"]`` when present, and
+    are ``None`` otherwise. Consumers can use these to validate or constrain
+    which cells on each part a door may legally attach to.
 
-    edges: Dict[Tuple[str, str, str], dict] = {}
+    Args:
+        part_records: Normalized part-placement records indexed by graph node id.
+        doors: Normalized door records from :func:`normalize_doors`.
+        cell_to_parts: Mapping from grid cell coordinates to part index sets.
+        geometry_cache: Shared vanilla geometry cache used for attachment checks.
 
-    # Add intra-part traversal edges for traversable parts only.
-    for record in part_records:
-        if not record["walkable_cells"]:
-            continue
-        cells = record["walkable_cells"]
-        for cell_x, cell_y in cells:
-            for delta_x, delta_y in ((1, 0), (0, 1)):
-                neighbor = (cell_x + delta_x, cell_y + delta_y)
-                if neighbor not in cells:
-                    continue
-                source = f"{cell_x},{cell_y}"
-                target = f"{neighbor[0]},{neighbor[1]}"
-                if source > target:
-                    source, target = target, source
-                edges[(source, target, "intra_part")] = {
-                    "source": source,
-                    "target": target,
-                    "kind": "intra_part",
-                    "traversable": True,
-                    "part_index": record["index"],
-                }
+    Returns:
+        A ``(edges, stats)`` pair. *edges* is a sorted list of door-edge dicts.
+        *stats* has ``door_records``, ``door_edges``, ``dangling_door_records``,
+        ``internal_door_records``, and ``non_structural_door_records`` counts.
+    """
 
-    valid_door_count = 0
-    dangling_door_count = 0
-    blocked_door_count = 0
+    # In 2x space, DOOR_CELL_DELTAS {0: (0,1), 1: (1,0)} double to these.
+    _DOOR_DELTA_2X: Dict[int, Tuple[int, int]] = {0: (0, 2), 1: (2, 0)}
+
+    edges: List[dict] = []
+    dangling = 0
+    internal = 0
+    non_structural = 0
+
     for door_index, door in enumerate(doors):
         cell_x, cell_y = map(int, door["Cell"])
         orientation = int(door.get("Orientation", 0))
-        adjacent_cells = door_adjacent_cells((cell_x, cell_y), orientation)
-        if adjacent_cells is None:
-            dangling_door_count += 1
+        adjacent = door_adjacent_cells((cell_x, cell_y), orientation)
+        if adjacent is None:
+            dangling += 1
             continue
-        source_coord, target_coord = adjacent_cells
+        source_coord, target_coord = adjacent
         if source_coord not in cell_to_parts or target_coord not in cell_to_parts:
-            dangling_door_count += 1
+            dangling += 1
             continue
 
-        # Door edges are only traversable when both occupied endpoint cells are
-        # themselves crew-walkable. This keeps partially blocked vanilla parts
-        # from leaking blocked cells back into the reachable graph.
-        if source_coord not in traversable_cells or target_coord not in traversable_cells:
-            blocked_door_count += 1
-            continue
+        # Compute 2x coordinates for both adjacent cells.
+        # door["Cell2x"] is the stored (right/bottom) cell == target_coord in 2x.
+        # The other (previous/left/top) cell is offset by the 2x delta.
+        raw_cell_2x = _coerce_coord_pair(door.get("Cell2x"))
+        if raw_cell_2x is not None:
+            dx, dy = _DOOR_DELTA_2X.get(orientation, (0, 0))
+            stored_cell_2x: list[int] | None = raw_cell_2x
+            prev_cell_2x: list[int] | None = [raw_cell_2x[0] - dx, raw_cell_2x[1] - dy]
+        else:
+            stored_cell_2x = None
+            prev_cell_2x = None
 
-        valid_door_count += 1
-        source = f"{source_coord[0]},{source_coord[1]}"
-        target = f"{target_coord[0]},{target_coord[1]}"
-        if source > target:
-            source, target = target, source
-        edges[(source, target, f"door:{door_index}")] = {
-            "source": source,
-            "target": target,
-            "kind": "door",
-            "traversable": True,
-            "door_index": door_index,
-            "orientation": orientation,
+        # source_coord = previous/left/top cell; target_coord = stored/right/bottom cell.
+        # cell_2x for source_coord = prev_cell_2x; for target_coord = stored_cell_2x.
+        coord_to_2x = {source_coord: prev_cell_2x, target_coord: stored_cell_2x}
+
+        cross_pairs = {
+            (min(a, b), max(a, b))
+            for a in cell_to_parts[source_coord]
+            for b in cell_to_parts[target_coord]
+            if a != b
         }
+        if not cross_pairs:
+            internal += 1
+            continue
 
-    return {
-        "nodes": nodes,
-        "edges": sorted(edges.values(), key=lambda edge: (edge["source"], edge["target"], edge["kind"])),
-        "summary": {
-            "occupied_cells": len(nodes),
-            "traversable_cells": len(traversable_cells),
+        # For each cross-pair, determine which cell (2x) belongs to which endpoint.
+        # source_parts owns source_coord; target_parts owns target_coord.
+        source_parts = cell_to_parts[source_coord]
+        for part_a, part_b in sorted(cross_pairs):
+            source_part = _part_from_record(part_records[part_a])
+            target_part = _part_from_record(part_records[part_b])
+            if not shared_attachment_sides(source_part, target_part, geometry_cache):
+                non_structural += 1
+                continue
+
+            # part_a < part_b by construction. Determine cell ownership.
+            if part_a in source_parts:
+                cell_2x_a, cell_2x_b = coord_to_2x[source_coord], coord_to_2x[target_coord]
+            else:
+                cell_2x_a, cell_2x_b = coord_to_2x[target_coord], coord_to_2x[source_coord]
+            edges.append(
+                {
+                    "source": part_a,
+                    "target": part_b,
+                    "kind": "door",
+                    "door_index": door_index,
+                    "orientation": orientation,
+                    "source_cell_2x": cell_2x_a,
+                    "target_cell_2x": cell_2x_b,
+                }
+            )
+
+    return (
+        sorted(edges, key=lambda e: (e["source"], e["target"], e["door_index"])),
+        {
             "door_records": len(doors),
-            "valid_door_edges": valid_door_count,
-            "dangling_door_records": dangling_door_count,
-            "blocked_door_records": blocked_door_count,
+            "door_edges": len(edges),
+            "dangling_door_records": dangling,
+            "internal_door_records": internal,
+            "non_structural_door_records": non_structural,
         },
-    }
+    )
 
 
 def process_ship(ship_path: Path) -> dict:
@@ -372,13 +395,26 @@ def process_ship(ship_path: Path) -> dict:
                 "height": record["height"],
             },
             "traversable": record["traversable"],
+            "walkable_cells_2x": _sorted_local_2x_cells(record["walkable_cells"], center_2x),
             "meta_note": record["meta_note"],
         }
         for record in part_records
     ]
 
-    structure_edges = structural_edges(part_records, cell_to_parts, load_vanilla_part_geometry())
-    cells = cell_graph(part_records, cell_to_parts, doors, center_2x=center_2x)
+    geometry_cache = load_vanilla_part_geometry()
+    touch_edges = structural_edges(part_records, cell_to_parts, geometry_cache)
+    door_edges_list, door_stats = structural_door_edges(
+        part_records,
+        doors,
+        dict(cell_to_parts),
+        geometry_cache,
+    )
+    all_edges = sorted(
+        touch_edges + door_edges_list,
+        key=lambda e: (e["source"], e["target"], e["kind"]),
+    )
+
+    traversable_cell_count = len({cell for record in part_records for cell in record["walkable_cells"]})
 
     return {
         "ship": {
@@ -388,7 +424,7 @@ def process_ship(ship_path: Path) -> dict:
             "version": data.get("Version"),
             "flight_direction": data.get("FlightDirection"),
         },
-        "schema_version": 4,
+        "schema_version": 5,
         "coord_transform": {
             "version": int(coord_transform.get("version", 1)) if isinstance(coord_transform, dict) else 1,
             "frame": (
@@ -423,7 +459,12 @@ def process_ship(ship_path: Path) -> dict:
             ),
             "door_model": (
                 "Door.Cell names the right or bottom occupied cell of the doorway span. "
-                "Orientation 0 joins (x,y-1)<->(x,y); orientation 1 joins (x-1,y)<->(x,y)."
+                "Orientation 0 joins (x,y-1)<->(x,y); orientation 1 joins (x-1,y)<->(x,y). "
+                "Doors appear as edges with kind='door' in A_structural_part_graph, linking the "
+                "two distinct parts whose occupied cells the door connects, but only when those "
+                "parts also share an attachable structural wall. Doors whose cells cannot be "
+                "resolved to known ship cells are counted as dangling and omitted. Doors "
+                "connecting two cells of the same part are counted as internal and omitted."
             ),
             "traversability_model": (
                 "Vanilla part traversability requires positive crew_speed_factor, while "
@@ -434,18 +475,24 @@ def process_ship(ship_path: Path) -> dict:
         "graphs": {
             "A_structural_part_graph": {
                 "nodes": structure_nodes,
-                "edges": structure_edges,
+                "edges": all_edges,
                 "summary": {
                     "parts": len(structure_nodes),
-                    "touching_edges": len(structure_edges),
+                    "touching_edges": len(touch_edges),
+                    "door_edges": door_stats["door_edges"],
+                    "door_records": door_stats["door_records"],
+                    "dangling_door_records": door_stats["dangling_door_records"],
+                    "internal_door_records": door_stats["internal_door_records"],
+                    "non_structural_door_records": door_stats["non_structural_door_records"],
                 },
             },
-            "C_cell_graph": cells,
         },
         "validation": {
             "normalized_part_count": len(parts),
             "normalized_door_count": len(doors),
             "raw_part_count": len(raw_parts) if isinstance(raw_parts, list) else 0,
+            "occupied_cells": len(cell_to_parts),
+            "traversable_cells": traversable_cell_count,
             "unknown_part_ids": dict(sorted(unknown_part_ids.items())),
         },
     }
@@ -471,17 +518,19 @@ def _generate_single_graph(source_json_path: str, output_dir: str) -> dict:
         json.dump(graph_data, file_handle, separators=(",", ":"))
         file_handle.write("\n")
 
-    cell_summary = graph_data["graphs"]["C_cell_graph"]["summary"]
+    struct_summary = graph_data["graphs"]["A_structural_part_graph"]["summary"]
+    validation = graph_data["validation"]
     return {
         "output_name": output_file_path.name,
-        "unknown_part_ids": graph_data["validation"]["unknown_part_ids"],
+        "unknown_part_ids": validation["unknown_part_ids"],
         "door_stats": {
-            "door_records": cell_summary["door_records"],
-            "valid_door_edges": cell_summary["valid_door_edges"],
-            "dangling_door_records": cell_summary["dangling_door_records"],
-            "blocked_door_records": cell_summary["blocked_door_records"],
-            "occupied_cells": cell_summary["occupied_cells"],
-            "traversable_cells": cell_summary["traversable_cells"],
+            "door_records": struct_summary["door_records"],
+            "door_edges": struct_summary["door_edges"],
+            "dangling_door_records": struct_summary["dangling_door_records"],
+            "internal_door_records": struct_summary["internal_door_records"],
+            "non_structural_door_records": struct_summary["non_structural_door_records"],
+            "occupied_cells": validation["occupied_cells"],
+            "traversable_cells": validation["traversable_cells"],
         },
     }
 
@@ -514,7 +563,7 @@ def generate_all(
     manifest = {
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
-        "schema_version": 4,
+        "schema_version": 5,
         "geometry_source": "game-file canonical (load_vanilla_part_geometry)",
         "coord_frame": "centered 2x local coordinates with global replay metadata",
         "ships_processed": 0,

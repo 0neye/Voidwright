@@ -100,8 +100,10 @@ def test_validate_candidate_connectivity_accepts_adjacent_parts(geometry_cache):
     anchor = {"part_id": "cosmoteer.armor", "rotation": 0, "x": -1, "y": 0}
     candidate = {"part_id": "cosmoteer.armor", "rotation": 0, "x": 0, "y": 0}
     result = validator.validate_candidate(candidate, anchor, set())
-    # Connectivity passes; any further rejection is bounds/overlap, not connectivity
-    assert result.rejection != "connectivity"
+    # This test specifically targets connectivity; note the assertion tests that
+    # connectivity was not the rejection reason rather than full acceptance.
+    # The placement is within bounds and non-overlapping, so acceptance is expected.
+    assert result.accepted, f"Expected accepted but got rejection: {result.rejection}"
 
 
 # ---------------------------------------------------------------------------
@@ -130,10 +132,10 @@ def test_validate_candidate_mirror_mode_self_mirroring_companion_is_none(geometr
     anchor = {"part_id": "cosmoteer.armor_2x1", "rotation": 0, "x": -1, "y": 0}
     candidate = {"part_id": "cosmoteer.armor_2x1", "rotation": 0, "x": -1, "y": 1}
     result = validator.validate_candidate(candidate, anchor, set())
-    if result.accepted:
-        # Self-mirroring: companion should be None
-        assert result.mirror_companion is None
-        assert result.companion_cells is None
+    assert result.accepted, f"Expected accepted but got rejection: {result.rejection}"
+    # Self-mirroring: both cells straddle the axis so no separate companion is needed
+    assert result.mirror_companion is None
+    assert result.companion_cells is None
 
 
 # ---------------------------------------------------------------------------

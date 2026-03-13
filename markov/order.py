@@ -85,6 +85,8 @@ def order_ship_parts_from_graph(
     part_count = len(parts)
     adjacency: Dict[int, List[int]] = defaultdict(list)
     for edge in edges:
+        if edge.get("kind") != "touching":
+            continue
         source_idx = node_id_to_idx.get(edge["source"])
         target_idx = node_id_to_idx.get(edge["target"])
         if source_idx is not None and target_idx is not None:

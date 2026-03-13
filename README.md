@@ -43,7 +43,16 @@ Markov backend implementation notes now live in `docs/markov-generator.md` and
 3. Add your Discord bot token to `.env` only if you plan to use the standalone Discord download script
 
 ```bash
+python3 -m venv .venv
+. .venv/bin/activate
 pip install -e .[dev]
+```
+
+If you need the Discord download script too, install the extra inside the same
+virtual environment:
+
+```bash
+pip install -e .[scripts]
 ```
 
 ```env

@@ -139,6 +139,6 @@ def test_run_repl_supports_listing_help_and_quit() -> None:
     rendered_output = output_stream.getvalue()
 
     assert exit_code == 0
-    assert "Ship generator REPL" in rendered_output
+    assert "Voidwright REPL" in rendered_output
     assert "training build alpha" in rendered_output
     assert error_stream.getvalue() == ""
