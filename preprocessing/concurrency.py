@@ -25,6 +25,7 @@ _AUTO_STAGE_EXECUTORS: dict[str, Literal["thread", "process"]] = {
     "canonicalize": "process",
     "canonicalize_write": "thread",
     "graphs": "process",
+    "graph_expansion": "process",
 }
 
 
