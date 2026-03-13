@@ -24,6 +24,7 @@ extracted_ship_data_canonical/
 extracted_ship_data_validation/
 generated_ship_graphs/
 generated_ship_graphs_canonical/
+expanded_ship_graphs/
 models/
 out/
 assets/local/
