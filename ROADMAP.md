@@ -8,7 +8,16 @@
 
 
 ## Preprocessing:
-...
+
+Status: Completed
+
+All five stages are implemented with hardware-agnostic parallelism (`--workers`, `--executor {auto,thread,process}`):
+
+1. ~~Extract~~ — `.ship.png` → raw JSON
+2. ~~Canonicalize~~ — SHA-256 deduplication, hash-ordered collision naming
+3. ~~Graphs~~ — structural part graphs with connectivity and door-rule analysis
+4. ~~Door-rules~~ — analysis stage (generator does not synthesize doors)
+5. ~~Pipeline~~ — end-to-end orchestration with manifest-based sync and partial-failure tolerance
 
 ### Relative coords transform:
 Goal:
@@ -28,10 +37,31 @@ Additional information should be added to the nodes of the graph as well, such a
 
 Potentially we should add more edge types as well to connect related parts together.
 
+### Graph expansion — structural backend:
+
+Status: Completed
+
+Adds a global `ship_info` virtual node and traversable-cluster super-nodes (with cross-edges) to preprocessing graph JSON. Supports parallelism and deterministic output. See `graph_expansion/backends/structural/`.
+
+Remaining enrichment (weapon modules, exterior-facing parts, ion-core groupings, per-node distance metrics) is not yet implemented.
+
+### Graph expansion performance:
+
+The current `graph_expansion` structural backend processes ships sequentially and may be slow on large corpora. Profile and investigate parallelism, algorithmic improvements, or batching to bring throughput in line with the preprocessing pipeline stages.
+
+
+## Markov Generator:
+
+Status: Completed
+
+Fully functional Markov backend with seeded generation (JSON and PNG), mirror-symmetry mode, allowlist/requirements filtering, per-sample error tolerance, and MP4 visualization. See `generator/backends/markov/`.
+
 
 ## Heterogeneous Graph Transformer:
 
 This is the model that will use the more heavily processed graph data. We should perform pre-training masked prediction on the ship corpus. And then run tests to see if the resulting embeddings are meaningful.
+
+The `graph_expansion` structural backend provides the virtual-node / super-node structure that this model will consume — but no training infrastructure exists yet.
 
 Architecture: GraphGPS-ish hybrid, sparse/local attention
 
@@ -47,21 +77,29 @@ Batch size: 1, then use gradient accumulation
 
 Precision: AMP on
 
-Graph design: be selective with shortcut edges, don’t create a fake dense graph
+Graph design: be selective with shortcut edges, don't create a fake dense graph
 
 
 ## Verification Layer:
 
+### PlacementValidator:
+
+Status: Completed
+
+`ship_layout/validator.py` owns `PlacementValidator` and covers geometry, connectivity, overlap, bounds, allowlist, mirror mode, companion collapse, and seed validation. All generator backends should use this API.
+
+### Remaining checks (not yet implemented):
+
 1.
-We need to expand the part verification system to check the actual non-rectangular part geometry for applicable parts. These include all wedge/triangle parts, as well as any parts with a physical rect field. Those with a physical
+Expand verification to check actual non-rectangular part geometry for wedge/triangle parts and parts with a physical rect field — dead-zone and exclusion-zone overlap is not yet enforced during generation.
 
 2.
-dead zone/exclusion zone overlap
+Crew traversal access validation beyond cluster membership (fine-grained pathfinding to verify a placed part is actually reachable).
 
 3.
-Before implementing a generator, we should implement a robust verification system for part candidates. We should expand this beyond the simple connection/collision checks to include things like crew traversal access, weapon firing arc restrictions, and shield bubble interference.
+Weapon firing arc restrictions and shield bubble interference checks.
 
 
 ## Generator:
 
-Beyond the simple Markov generator, we should build a new generator to mesh well with the encoder from the heterogeneous graph transformer. This generator may include some form of auto regressive generation with verification checks. Maybe also a hierarchical generation step where supernodes are predited first, and then an auto-regressive generator fills in the supernode area.
+Beyond the simple Markov generator, we should build a new generator to mesh well with the encoder from the heterogeneous graph transformer. This generator may include some form of auto regressive generation with verification checks. Maybe also a hierarchical generation step where supernodes are predicted first, and then an auto-regressive generator fills in the supernode area.

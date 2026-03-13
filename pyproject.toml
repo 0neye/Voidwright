@@ -31,9 +31,10 @@ voidwright = "main:main"
 voidwright-preprocessing = "preprocessing.cli:main"
 voidwright-training = "training.cli:main"
 voidwright-generate = "generator.cli:main"
+voidwright-graph-expansion = "graph_expansion.cli:main"
 
 [tool.pytest.ini_options]
-addopts = "--cov=common --cov=generator --cov=markov --cov=preprocessing --cov=training --cov=main --cov-report=term-missing"
+addopts = "--cov=common --cov=generator --cov=graph_expansion --cov=markov --cov=preprocessing --cov=training --cov=main --cov-report=term-missing"
 norecursedirs = [
   "tmp*",
   "review_tmp",
@@ -45,6 +46,7 @@ relative_files = true
 source = [
   "common",
   "generator",
+  "graph_expansion",
   "markov",
   "preprocessing",
   "training",
@@ -78,6 +80,8 @@ include = [
   "common.*",
   "generator",
   "generator.*",
+  "graph_expansion",
+  "graph_expansion.*",
   "markov",
   "markov.*",
   "preprocessing",

@@ -98,6 +98,25 @@ def build_parser() -> argparse.ArgumentParser:
         executor_flag="--graph-executor",
         help_prefix="pipeline graph generation",
     )
+    parser.add_argument(
+        "--expansion-output-dir",
+        default=None,
+        help=(
+            "Optional directory to write enriched graph JSON. "
+            "When omitted, graph expansion is skipped."
+        ),
+    )
+    parser.add_argument(
+        "--expansion-backend",
+        default="structural",
+        help="Graph expansion backend to use (default: structural)",
+    )
+    add_concurrency_arguments(
+        parser,
+        worker_flag="--expansion-workers",
+        executor_flag="--expansion-executor",
+        help_prefix="pipeline graph expansion",
+    )
     return parser
 
 
@@ -182,6 +201,10 @@ def run_pipeline(
     canonicalize_executor: str = "auto",
     graph_workers: int | None = None,
     graph_executor: str = "auto",
+    expansion_output_dir: str | Path | None = None,
+    expansion_backend: str = "structural",
+    expansion_workers: int | None = None,
+    expansion_executor: str = "auto",
 ) -> dict:
     """Run the local ship preprocessing pipeline.
 
@@ -201,6 +224,10 @@ def run_pipeline(
         canonicalize_executor: Canonicalization executor mode override
         graph_workers: Optional graph-generation worker-count override
         graph_executor: Graph-generation executor mode override
+        expansion_output_dir: Optional directory for enriched graph JSON. When None, expansion is skipped.
+        expansion_backend: Graph expansion backend name (default: ``"structural"``)
+        expansion_workers: Optional graph-expansion worker-count override
+        expansion_executor: Graph-expansion executor mode override
 
     Returns:
         Summary payload describing the produced artifacts
@@ -272,6 +299,19 @@ def run_pipeline(
                 manifest_name=_CANONICAL_SYNC_MANIFEST,
             )
 
+        expansion_result = None
+        if expansion_output_dir is not None:
+            from graph_expansion.router import get_expansion_backend
+
+            expansion_output_path = Path(expansion_output_dir)
+            backend = get_expansion_backend(expansion_backend)
+            expansion_result = backend.expand_dir(
+                input_dir=final_graph_output_dir,
+                output_dir=expansion_output_path,
+                workers=expansion_workers,
+                executor=expansion_executor,
+            )
+
         return {
             "inputs": [str(Path(input_path)) for input_path in input_paths],
             "final_graph_output_dir": str(final_graph_output_dir),
@@ -283,6 +323,7 @@ def run_pipeline(
             "opt_out_filter": opt_out_filter,
             "canonicalization": canonicalize_manifest,
             "graphs": graph_manifest,
+            "graph_expansion": expansion_result,
         }
 
 
@@ -307,6 +348,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         canonicalize_executor=args.canonicalize_executor,
         graph_workers=args.graph_workers,
         graph_executor=args.graph_executor,
+        expansion_output_dir=args.expansion_output_dir,
+        expansion_backend=args.expansion_backend,
+        expansion_workers=args.expansion_workers,
+        expansion_executor=args.expansion_executor,
     )
     print(payload["graphs"]["ships_processed"])
     return 0
