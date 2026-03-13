@@ -115,7 +115,8 @@ def inputs_needing_regeneration(
     - **Version mismatch or no sentinel**: all *input_files* are returned so
       the caller regenerates every output (e.g. after a schema bump).
     - **Version matches**: only input files whose corresponding output file is
-      absent are returned, enabling fast incremental reruns.
+      absent or older than the input are returned, enabling fast incremental
+      reruns while still catching edited inputs.
 
     Call :func:`write_output_version` after successfully writing all outputs
     to persist the current version for the next run.
@@ -144,8 +145,14 @@ def inputs_needing_regeneration(
     if stored_version != current_version:
         return list(input_files)
 
-    # Version matches — only process files whose outputs are absent.
-    return [f for f in input_files if not (output_dir / f.name).exists()]
+    # Version matches — only process files whose outputs are absent or stale.
+    def _needs_regen(f: Path) -> bool:
+        out = output_dir / f.name
+        if not out.exists():
+            return True
+        return f.stat().st_mtime > out.stat().st_mtime
+
+    return [f for f in input_files if _needs_regen(f)]
 
 
 def write_output_version(output_dir: Path, version_key: str, version: int) -> None:
