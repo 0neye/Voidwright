@@ -67,7 +67,8 @@ def _build_traversable_clusters(nodes: list[dict]) -> list[list[int]]:
         root = find(node_id)
         clusters.setdefault(root, []).append(node_id)
 
-    return [sorted(member_ids) for member_ids in sorted(clusters.values())]
+    sorted_clusters = [sorted(member_ids) for member_ids in clusters.values()]
+    return sorted(sorted_clusters)
 
 
 def _enrich_graph(graph_data: dict) -> dict:
