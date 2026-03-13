@@ -91,8 +91,8 @@ Run the full preprocessing pipeline from local ship images to canonical graph JS
 ```bash
 python main.py preprocessing pipeline downloaded_ships \
   --output-dir generated_ship_graphs_canonical \
-  --write-extracted-dir extracted_ship_data \
-  --write-canonical-dir extracted_ship_data_canonical \
+  --extracted-dir extracted_ship_data \
+  --canonical-dir extracted_ship_data_canonical \
   --verbose
 ```
 
@@ -126,6 +126,7 @@ Each individual preprocessing stage also accepts:
 
 - `--workers <n>`
 - `--executor {auto,thread,process}`
+- `--limit <n>` (non-destructive subset runs; no pruning or schema-sentinel update)
 
 ### 2.5. Optional: graph expansion
 

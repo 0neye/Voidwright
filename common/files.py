@@ -13,6 +13,7 @@ __all__ = [
     "iter_json_files",
     "prune_stale_json_outputs",
     "inputs_needing_regeneration",
+    "read_output_version",
     "write_output_version",
 ]
 
@@ -65,7 +66,11 @@ def iter_ship_png_files(input_paths: Sequence[Path]) -> Iterator[Path]:
 def iter_json_files(input_dir: Path) -> Iterable[Path]:
     """Return all JSON files under *input_dir* in deterministic order."""
 
-    return sorted(path for path in input_dir.rglob("*.json") if path.is_file())
+    return sorted(
+        path
+        for path in input_dir.rglob("*.json")
+        if path.is_file() and not path.name.startswith(".")
+    )
 
 
 def prune_stale_json_outputs(
@@ -132,17 +137,7 @@ def inputs_needing_regeneration(
         need (re)generation and *skipped* are already up-to-date files.
     """
 
-    stored_version: int | None = None
-    sentinel = output_dir / _VERSION_SENTINEL
-    try:
-        data = json.loads(sentinel.read_text(encoding="utf-8"))
-        val = data.get(version_key)
-        if val is not None:
-            stored_version = int(val)
-    except Exception:
-        pass
-
-    if stored_version != current_version:
+    if read_output_version(output_dir, version_key) != current_version:
         return list(input_files), []
 
     # Version matches — split files into those needing regen and those that don't.
@@ -164,6 +159,24 @@ def inputs_needing_regeneration(
     for f in input_files:
         (to_process if _needs_regen(f) else skipped).append(f)
     return to_process, skipped
+
+
+def read_output_version(output_dir: Path, version_key: str) -> int | None:
+    """Read the stored version value for *version_key* from *output_dir*'s sentinel.
+
+    Returns the stored integer version, or ``None`` when the sentinel is absent
+    or the key is not present.
+    """
+
+    sentinel = output_dir / _VERSION_SENTINEL
+    try:
+        data = json.loads(sentinel.read_text(encoding="utf-8"))
+        val = data.get(version_key)
+        if val is not None:
+            return int(val)
+    except Exception:
+        pass
+    return None
 
 
 def write_output_version(output_dir: Path, version_key: str, version: int) -> None:

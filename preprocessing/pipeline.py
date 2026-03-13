@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import shutil
 from pathlib import Path
-import tempfile
 from typing import Sequence
 
 from common.ship_filters import (
@@ -20,9 +18,6 @@ from .extract import run_extract
 from .graphs import generate_all
 
 __all__ = ["build_parser", "run_pipeline", "main"]
-
-_EXTRACTED_SYNC_MANIFEST = ".pipeline-managed-extracted.txt"
-_CANONICAL_SYNC_MANIFEST = ".pipeline-managed-canonical.txt"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,30 +40,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to write the final graph JSON corpus",
     )
     parser.add_argument(
-        "--write-extracted-dir",
-        default=None,
-        help="Optional directory to persist extracted JSON artifacts",
+        "--extracted-dir",
+        default="extracted_ship_data",
+        help="Directory to write extracted JSON artifacts",
     )
     parser.add_argument(
-        "--write-canonical-dir",
-        default=None,
-        help="Optional directory to persist canonical deduplicated JSON artifacts",
+        "--canonical-dir",
+        default="extracted_ship_data_canonical",
+        help="Directory to write canonical deduplicated JSON artifacts",
     )
     parser.add_argument(
         "--report-json",
         default="out/ship_canonicalization_report.json",
-        help="Canonicalization report path when canonical outputs are persisted",
+        help="Canonicalization report JSON path",
     )
     parser.add_argument(
         "--report-md",
         default=None,
-        help="Optional canonicalization markdown report path when canonical outputs are persisted",
+        help="Optional canonicalization markdown report path",
     )
     parser.add_argument(
         "--limit",
         type=int,
         default=None,
-        help="Optional limit for graph generation during partial runs",
+        help="Optional limit for partial validation runs at each stage",
     )
     parser.add_argument(
         "--verbose",
@@ -120,76 +115,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _read_managed_relative_paths(manifest_path: Path) -> set[str]:
-    """Load the set of stage-managed relative file paths from a manifest."""
-
-    if not manifest_path.exists():
-        return set()
-    return {
-        line.strip()
-        for line in manifest_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    }
-
-
-def _remove_file_and_empty_parents(path: Path, *, stop_dir: Path) -> None:
-    """Remove one file and any newly empty parent directories below *stop_dir*."""
-
-    if path.exists():
-        path.unlink()
-
-    current = path.parent
-    while current != stop_dir and current.exists():
-        try:
-            current.rmdir()
-        except OSError:
-            break
-        current = current.parent
-
-
-def _sync_stage_outputs(
-    source_dir: Path,
-    destination_dir: Path,
-    *,
-    manifest_name: str,
-) -> None:
-    """Persist one stage's current outputs without deleting unrelated files.
-
-    The pipeline itself always works from isolated temp directories so later
-    stages only see the current run's artifacts. When a persistent directory is
-    requested, we sync just the stage-managed files into it and use a small
-    manifest to prune stale managed outputs from previous runs.
-    """
-
-    destination_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = destination_dir / manifest_name
-    previous_relative_paths = _read_managed_relative_paths(manifest_path)
-    current_relative_paths = {
-        str(path.relative_to(source_dir))
-        for path in sorted(source_dir.rglob("*"))
-        if path.is_file()
-    }
-
-    for relative_path in sorted(previous_relative_paths - current_relative_paths):
-        _remove_file_and_empty_parents(destination_dir / relative_path, stop_dir=destination_dir)
-
-    for relative_path in sorted(current_relative_paths):
-        source_path = source_dir / relative_path
-        destination_path = destination_dir / relative_path
-        destination_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, destination_path)
-
-    manifest_contents = "\n".join(sorted(current_relative_paths))
-    if manifest_contents:
-        manifest_contents += "\n"
-    manifest_path.write_text(manifest_contents, encoding="utf-8")
-
-
 def run_pipeline(
     input_paths: Sequence[str | Path],
     output_dir: str | Path = "generated_ship_graphs_canonical",
-    write_extracted_dir: str | Path | None = None,
-    write_canonical_dir: str | Path | None = None,
+    extracted_dir: str | Path = "extracted_ship_data",
+    canonical_dir: str | Path = "extracted_ship_data_canonical",
     report_json: str | Path = "out/ship_canonicalization_report.json",
     report_md: str | Path | None = None,
     limit: int | None = None,
@@ -211,11 +141,11 @@ def run_pipeline(
     Args:
         input_paths: Local `.ship.png` files or directories to preprocess
         output_dir: Final graph JSON output directory
-        write_extracted_dir: Optional persistent extracted JSON directory
-        write_canonical_dir: Optional persistent canonical JSON directory
-        report_json: Canonicalization JSON report path when persisting outputs
-        report_md: Optional canonicalization markdown report path when persisting outputs
-        limit: Optional limit for the graph-generation stage
+        extracted_dir: Persistent extracted JSON output directory
+        canonical_dir: Persistent canonical JSON output directory
+        report_json: Canonicalization JSON report path
+        report_md: Optional canonicalization markdown report path
+        limit: Optional validation subset size for each stage
         verbose: When True, enable verbose extraction logging
         opt_out_csv: CSV containing exact author names to filter before extraction
         extract_workers: Optional extraction worker-count override
@@ -234,8 +164,8 @@ def run_pipeline(
     """
 
     final_graph_output_dir = Path(output_dir)
-    persistent_extracted_dir = Path(write_extracted_dir) if write_extracted_dir else None
-    persistent_canonical_dir = Path(write_canonical_dir) if write_canonical_dir else None
+    extracted_output_dir = Path(extracted_dir)
+    canonical_output_dir = Path(canonical_dir)
     report_json_path = Path(report_json)
     report_md_path = Path(report_md) if report_md else None
     resolved_input_paths = [Path(input_path) for input_path in input_paths]
@@ -252,79 +182,64 @@ def run_pipeline(
     )
     filtered_input_paths = [path for path in resolved_input_paths if path.exists()]
 
-    with tempfile.TemporaryDirectory(prefix="ship_preprocess_") as temp_dir:
-        temp_root = Path(temp_dir)
-        extracted_dir = temp_root / "extracted"
-        canonical_dir = temp_root / "canonical"
-        extracted_dir.mkdir(parents=True, exist_ok=True)
-        canonical_dir.mkdir(parents=True, exist_ok=True)
+    extract_manifest = run_extract(
+        input_paths=filtered_input_paths,
+        output_dir=extracted_output_dir,
+        limit=limit,
+        verbose=verbose,
+        workers=extract_workers,
+        executor=extract_executor,
+    )
+    extract_exit_code = int(extract_manifest.get("exit_code", 0 if extract_manifest.get("files_failed", 0) == 0 else 2))
+    if extract_exit_code not in (0, 2):
+        raise RuntimeError(f"Extraction failed with exit code {extract_exit_code}")
 
-        extract_exit_code = run_extract(
-            input_paths=filtered_input_paths,
-            output_dir=extracted_dir,
-            verbose=verbose,
-            workers=extract_workers,
-            executor=extract_executor,
+    # Always canonicalize before graph generation so the final graph output has
+    # already gone through deduplication and preprocessing normalization.
+    canonicalize_manifest = run_canonicalize(
+        input_dir=extracted_output_dir,
+        output_dir=canonical_output_dir,
+        report_json=report_json_path,
+        report_md=report_md_path,
+        limit=limit,
+        workers=canonicalize_workers,
+        executor=canonicalize_executor,
+    )
+    graph_manifest = generate_all(
+        canonical_output_dir,
+        final_graph_output_dir,
+        limit=limit,
+        workers=graph_workers,
+        executor=graph_executor,
+    )
+
+    expansion_result = None
+    if expansion_output_dir is not None:
+        from graph_expansion.router import get_expansion_backend
+
+        expansion_output_path = Path(expansion_output_dir)
+        backend = get_expansion_backend(expansion_backend)
+        expansion_result = backend.expand_dir(
+            input_dir=final_graph_output_dir,
+            output_dir=expansion_output_path,
+            workers=expansion_workers,
+            executor=expansion_executor,
         )
-        if extract_exit_code not in (0, 2):
-            raise RuntimeError(f"Extraction failed with exit code {extract_exit_code}")
-        if persistent_extracted_dir is not None:
-            _sync_stage_outputs(
-                extracted_dir,
-                persistent_extracted_dir,
-                manifest_name=_EXTRACTED_SYNC_MANIFEST,
-            )
 
-        # Always canonicalize before graph generation so the final graph output has
-        # already gone through deduplication and preprocessing normalization.
-        canonicalize_manifest = run_canonicalize(
-            input_dir=extracted_dir,
-            output_dir=canonical_dir,
-            report_json=report_json_path,
-            report_md=report_md_path,
-            workers=canonicalize_workers,
-            executor=canonicalize_executor,
-        )
-        graph_manifest = generate_all(
-            canonical_dir,
-            final_graph_output_dir,
-            limit=limit,
-            workers=graph_workers,
-            executor=graph_executor,
-        )
-        if persistent_canonical_dir is not None:
-            _sync_stage_outputs(
-                canonical_dir,
-                persistent_canonical_dir,
-                manifest_name=_CANONICAL_SYNC_MANIFEST,
-            )
-
-        expansion_result = None
-        if expansion_output_dir is not None:
-            from graph_expansion.router import get_expansion_backend
-
-            expansion_output_path = Path(expansion_output_dir)
-            backend = get_expansion_backend(expansion_backend)
-            expansion_result = backend.expand_dir(
-                input_dir=final_graph_output_dir,
-                output_dir=expansion_output_path,
-                workers=expansion_workers,
-                executor=expansion_executor,
-            )
-
-        return {
-            "inputs": [str(Path(input_path)) for input_path in input_paths],
-            "final_graph_output_dir": str(final_graph_output_dir),
-            "extracted_output_dir": str(persistent_extracted_dir) if persistent_extracted_dir else None,
-            "canonical_output_dir": str(persistent_canonical_dir) if persistent_canonical_dir else None,
-            "canonicalization_report_json": str(report_json_path),
-            "canonicalization_report_md": str(report_md_path) if report_md_path else None,
-            "extract_exit_code": extract_exit_code,
-            "opt_out_filter": opt_out_filter,
-            "canonicalization": canonicalize_manifest,
-            "graphs": graph_manifest,
-            "graph_expansion": expansion_result,
-        }
+    return {
+        "inputs": [str(Path(input_path)) for input_path in input_paths],
+        "final_graph_output_dir": str(final_graph_output_dir),
+        "extracted_output_dir": str(extracted_output_dir),
+        "canonical_output_dir": str(canonical_output_dir),
+        "canonicalization_report_json": str(report_json_path),
+        "canonicalization_report_md": str(report_md_path) if report_md_path else None,
+        "extract_exit_code": extract_exit_code,
+        "extraction": extract_manifest,
+        "opt_out_filter": opt_out_filter,
+        "canonicalization": canonicalize_manifest,
+        "graphs": graph_manifest,
+        "graph_expansion": expansion_result,
+    }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -335,8 +250,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     payload = run_pipeline(
         input_paths=args.inputs,
         output_dir=args.output_dir,
-        write_extracted_dir=args.write_extracted_dir,
-        write_canonical_dir=args.write_canonical_dir,
+        extracted_dir=args.extracted_dir,
+        canonical_dir=args.canonical_dir,
         report_json=args.report_json,
         report_md=args.report_md,
         limit=args.limit,

@@ -229,8 +229,8 @@ def test_pipeline_roundtrip_replays_all_vanilla_parts_from_graph(tmp_path: Path)
     pipeline_payload = run_pipeline(
         input_paths=[source_path],
         output_dir=graph_dir,
-        write_extracted_dir=extracted_dir,
-        write_canonical_dir=canonical_dir,
+        extracted_dir=extracted_dir,
+        canonical_dir=canonical_dir,
         extract_workers=1,
         extract_executor="thread",
         canonicalize_workers=1,
@@ -294,8 +294,8 @@ def test_pipeline_roundtrip_replays_doors_from_graph(tmp_path: Path) -> None:
     pipeline_payload = run_pipeline(
         input_paths=[source_path],
         output_dir=graph_dir,
-        write_extracted_dir=extracted_dir,
-        write_canonical_dir=canonical_dir,
+        extracted_dir=extracted_dir,
+        canonical_dir=canonical_dir,
         extract_workers=1,
         extract_executor="thread",
         canonicalize_workers=1,
