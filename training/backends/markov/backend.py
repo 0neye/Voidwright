@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
+
+import orjson
 
 from markov.inputs import load_allowlist
 from markov.model import (
@@ -131,7 +132,11 @@ class MarkovTrainingBackend(TrainingBackend):
                 validation_payload = validate_relative_placement_assumptions(args.input_dir)
                 args.validation_output.parent.mkdir(parents=True, exist_ok=True)
                 args.validation_output.write_text(
-                    json.dumps(validation_payload, indent=2) + "\n",
+                    orjson.dumps(
+                        validation_payload,
+                        option=orjson.OPT_INDENT_2,
+                    ).decode()
+                    + "\n",
                     encoding="utf-8",
                 )
                 print(f"[training:markov] validation written to {args.validation_output}")
@@ -145,6 +150,13 @@ class MarkovTrainingBackend(TrainingBackend):
             sample_limit=args.sample_limit,
         )
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(validation_payload, indent=2) + "\n", encoding="utf-8")
+        args.output.write_text(
+            orjson.dumps(
+                validation_payload,
+                option=orjson.OPT_INDENT_2,
+            ).decode()
+            + "\n",
+            encoding="utf-8",
+        )
         print(f"[training:markov] validation written to {args.output}")
         return 0

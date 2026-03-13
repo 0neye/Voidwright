@@ -5,12 +5,13 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
-import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 import re
 from typing import Dict, Iterable, List, Sequence, Tuple
+
+import orjson
 
 from common.files import iter_json_files
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
@@ -66,15 +67,13 @@ def canonicalize_json_text(
             translation-invariant centered `2x` placement metadata
     """
 
-    data = json.loads(text)
+    data = orjson.loads(text)
     if translation_invariant:
         data = canonicalize_for_translation_invariant_hash(data)
-    normalized_text = json.dumps(
+    normalized_text = orjson.dumps(
         data,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+        option=orjson.OPT_SORT_KEYS,
+    ).decode()
     content_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
     return normalized_text, content_hash
 
@@ -421,7 +420,10 @@ def run_canonicalize(
                         flush=True,
                     )
 
-    report_json_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    report_json_path.write_text(
+        orjson.dumps(manifest, option=orjson.OPT_INDENT_2 | orjson.OPT_NON_STR_KEYS).decode() + "\n",
+        encoding="utf-8",
+    )
 
     if report_md_path is not None:
         # Keep the markdown report available as an explicit opt-in artifact while
@@ -550,7 +552,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "filename_collision_count",
         )
     }
-    print(json.dumps(summary, indent=2))
+    print(orjson.dumps(summary, option=orjson.OPT_INDENT_2).decode())
     return 0
 
 

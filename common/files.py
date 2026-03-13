@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import orjson
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
@@ -134,7 +134,7 @@ def inputs_needing_regeneration(
     sentinel = output_dir / _VERSION_SENTINEL
     if sentinel.exists():
         try:
-            data = json.loads(sentinel.read_text(encoding="utf-8"))
+            data = orjson.loads(sentinel.read_text(encoding="utf-8"))
             val = data.get(version_key)
             if val is not None:
                 stored_version = int(val)
@@ -164,8 +164,11 @@ def write_output_version(output_dir: Path, version_key: str, version: int) -> No
     data: dict = {}
     if sentinel.exists():
         try:
-            data = json.loads(sentinel.read_text(encoding="utf-8"))
+            data = orjson.loads(sentinel.read_text(encoding="utf-8"))
         except Exception:
             pass
     data[version_key] = version
-    sentinel.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    sentinel.write_text(
+        orjson.dumps(data, option=orjson.OPT_INDENT_2).decode() + "\n",
+        encoding="utf-8",
+    )

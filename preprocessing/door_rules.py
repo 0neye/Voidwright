@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import json
+import orjson
 from pathlib import Path
 from typing import Sequence
 
@@ -70,7 +70,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         min_pair_observations=args.min_pair_observations,
         min_pair_ratio=args.min_pair_ratio,
     )
-    print(json.dumps(payload["validation"], indent=2))
+    print(orjson.dumps(payload["validation"], option=orjson.OPT_INDENT_2).decode())
     return 0
 
 

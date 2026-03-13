@@ -8,6 +8,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+import orjson
+
 from common.geometry import is_vanilla_part_id, iter_ship_files, load_vanilla_part_geometry
 
 from .corpus import iter_vanilla_parts_from_graph, iter_vanilla_parts_from_ship
@@ -100,8 +102,8 @@ def build_payload_from_corpus(input_dir: Path, config: TrainingConfig) -> dict:
 
     for ship_path in iter_ship_files(input_dir):
         stats.ships_seen += 1
-        with ship_path.open(encoding="utf-8") as file_handle:
-            ship_data = json.load(file_handle)
+        with ship_path.open("rb") as file_handle:
+            ship_data = orjson.loads(file_handle.read())
 
         all_parts = [part for part in ship_data.get("Parts", []) if isinstance(part, dict)]
         for part in all_parts:
@@ -170,8 +172,8 @@ def build_payload_from_graph_corpus(graph_dir: Path, config: TrainingConfig) -> 
     for graph_path in graph_files:
         stats.ships_seen += 1
         try:
-            with graph_path.open(encoding="utf-8") as file_handle:
-                graph_data = json.load(file_handle)
+            with graph_path.open("rb") as file_handle:
+                graph_data = orjson.loads(file_handle.read())
         except (json.JSONDecodeError, OSError):
             continue
 

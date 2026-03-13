@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import json
+import orjson
 from pathlib import Path
 
 from markov.inputs import (
@@ -186,7 +186,10 @@ class MarkovGeneratorBackend(GeneratorBackend):
 
             if args.json_output_dir is not None:
                 json_output_path = args.json_output_dir / f"sample-{sample_index:03d}.json"
-                json_output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+                json_output_path.write_text(
+                    orjson.dumps(payload, option=orjson.OPT_INDENT_2).decode() + "\n",
+                    encoding="utf-8",
+                )
 
             png_output_path = args.output_dir / f"sample-{sample_index:03d}.ship.png"
             export_result = export_ship_png(

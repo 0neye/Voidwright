@@ -8,7 +8,7 @@ layering inversions.
 
 from __future__ import annotations
 
-import json
+import orjson
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -252,7 +252,7 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
     """
 
     with VANILLA_PARTS_PATH.open(encoding="utf-8") as file_handle:
-        payload = json.load(file_handle)
+        payload = orjson.loads(file_handle.read())
 
     result: Dict[str, VanillaPartGeometry] = {}
 

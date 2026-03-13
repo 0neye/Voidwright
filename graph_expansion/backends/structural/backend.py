@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import json
+import orjson
 from concurrent.futures import as_completed
 from pathlib import Path
 from typing import Sequence
@@ -194,10 +194,10 @@ def _expand_single_graph(source_path_str: str, output_dir_str: str) -> dict:
 
     source_path = Path(source_path_str)
     output_dir = Path(output_dir_str)
-    graph_data = json.loads(source_path.read_text(encoding="utf-8"))
+    graph_data = orjson.loads(source_path.read_text(encoding="utf-8"))
     enriched = _enrich_graph(graph_data)
     output_path = output_dir / source_path.name
-    output_path.write_text(json.dumps(enriched, separators=(",", ":")) + "\n", encoding="utf-8")
+    output_path.write_text(orjson.dumps(enriched).decode() + "\n", encoding="utf-8")
     summary = enriched["graphs"][_EXPANSION_GRAPH_NAME]["summary"]
     return {
         "output_name": output_path.name,

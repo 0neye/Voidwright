@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Optional
+
+import orjson
 
 from common.cosmoteer import parse_ship_png
 from preprocessing.relative_coords import apply_relative_coords_transform
@@ -116,7 +117,7 @@ def load_allowlist(
         file_text = allowlist_file_path.read_text(encoding="utf-8")
         stripped_file_text = file_text.strip()
         if stripped_file_text.startswith("["):
-            allowed_part_ids.update(json.loads(stripped_file_text))
+            allowed_part_ids.update(orjson.loads(stripped_file_text))
         else:
             for raw_line in file_text.splitlines():
                 line = raw_line.strip()
@@ -153,7 +154,7 @@ def load_requirements(
     if requirements_file_path is not None:
         file_text = requirements_file_path.read_text(encoding="utf-8").strip()
         if file_text.startswith("{"):
-            parsed_requirements = json.loads(file_text)
+            parsed_requirements = orjson.loads(file_text)
             for part_id, count in parsed_requirements.items():
                 normalized_part_id = part_id.strip()
                 part_requirements[normalized_part_id] = max(
@@ -180,7 +181,7 @@ def load_requirements(
 def load_seed_parts_from_json(seed_json_path: Path) -> list[dict]:
     """Load seed parts from generated JSON or extracted Cosmoteer ship JSON."""
 
-    data = json.loads(seed_json_path.read_text(encoding="utf-8"))
+    data = orjson.loads(seed_json_path.read_text(encoding="utf-8"))
     if "parts" in data and isinstance(data["parts"], list):
         raw_parts = data["parts"]
         if raw_parts and isinstance(raw_parts[0], dict) and "part_id" in raw_parts[0]:
