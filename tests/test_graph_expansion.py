@@ -1,0 +1,547 @@
+"""Tests for the graph_expansion package."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from graph_expansion.backends.structural.backend import (
+    StructuralExpansionBackend,
+    _build_traversable_clusters,
+    _enrich_graph,
+    _is_corridor_like,
+)
+from graph_expansion.cli import build_parser
+from graph_expansion.cli import main as graph_expansion_main
+from graph_expansion.router import get_expansion_backend, get_expansion_backends
+
+__all__: list[str] = []
+
+_CORRIDOR_ID = "cosmoteer.corridor"
+_WALKWAY_ID = "mod.moving_walkway_1x1"
+_GENERIC_ID = "cosmoteer.reactor_small"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def make_node(
+    node_id: int,
+    walkable_cells: list[list[int]] | None = None,
+    part_id: str = "",
+) -> dict:
+    """Build a minimal structural node dict."""
+    node: dict = {"id": node_id, "part_id": part_id}
+    if walkable_cells is not None:
+        node["walkable_cells_2x"] = walkable_cells
+    return node
+
+
+def make_door_edge(source: int, target: int) -> dict:
+    """Build a door edge between two part node IDs."""
+    return {"source": source, "target": target, "kind": "door"}
+
+
+def make_touching_edge(source: int, target: int) -> dict:
+    """Build a structural touching edge (not a door)."""
+    return {"source": source, "target": target, "kind": "touching"}
+
+
+def make_graph_data(
+    nodes: list[dict],
+    ship: dict | None = None,
+    edges: list[dict] | None = None,
+) -> dict:
+    """Build a minimal graph JSON payload matching the preprocessing output schema."""
+    data: dict = {
+        "graphs": {
+            "A_structural_part_graph": {
+                "nodes": nodes,
+                "edges": edges if edges is not None else [],
+            }
+        }
+    }
+    if ship is not None:
+        data["ship"] = ship
+    return data
+
+
+def write_graph_json(
+    path: Path,
+    nodes: list[dict],
+    edges: list[dict] | None = None,
+) -> None:
+    """Write a minimal graph JSON file."""
+    path.write_text(json.dumps(make_graph_data(nodes, edges=edges)) + "\n", encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# _is_corridor_like
+# ---------------------------------------------------------------------------
+
+
+def test_is_corridor_like_matches_corridor() -> None:
+    assert _is_corridor_like("cosmoteer.corridor") is True
+
+
+def test_is_corridor_like_matches_walkway() -> None:
+    assert _is_corridor_like("mod.moving_walkway_1x1") is True
+
+
+def test_is_corridor_like_rejects_generic_part() -> None:
+    assert _is_corridor_like("cosmoteer.reactor_small") is False
+
+
+def test_is_corridor_like_rejects_empty_string() -> None:
+    assert _is_corridor_like("") is False
+
+
+def test_is_corridor_like_is_case_insensitive() -> None:
+    assert _is_corridor_like("cosmoteer.CORRIDOR") is True
+
+
+# ---------------------------------------------------------------------------
+# _build_traversable_clusters — baseline / empty cases
+# ---------------------------------------------------------------------------
+
+
+def test_clusters_empty_nodes() -> None:
+    assert _build_traversable_clusters([], []) == []
+
+
+def test_clusters_no_walkable_cells() -> None:
+    nodes = [make_node(0, part_id=_GENERIC_ID), make_node(1, part_id=_GENERIC_ID)]
+    assert _build_traversable_clusters(nodes, []) == []
+
+
+def test_clusters_single_walkable_part() -> None:
+    assert _build_traversable_clusters([make_node(0, [[0, 0]], _GENERIC_ID)], []) == [[0]]
+
+
+# ---------------------------------------------------------------------------
+# _build_traversable_clusters — door-based connectivity
+# ---------------------------------------------------------------------------
+
+
+def test_clusters_door_edge_merges_any_two_walkable_parts() -> None:
+    nodes = [
+        make_node(0, [[0, 0]], _GENERIC_ID),
+        make_node(1, [[100, 100]], _GENERIC_ID),
+    ]
+    edges = [make_door_edge(0, 1)]
+    assert _build_traversable_clusters(nodes, edges) == [[0, 1]]
+
+
+def test_clusters_touching_edge_does_not_merge() -> None:
+    # Only door edges create traversal connectivity; structural touching edges do not.
+    nodes = [
+        make_node(0, [[0, 0]], _GENERIC_ID),
+        make_node(1, [[2, 0]], _GENERIC_ID),
+    ]
+    edges = [make_touching_edge(0, 1)]
+    assert _build_traversable_clusters(nodes, edges) == [[0], [1]]
+
+
+def test_clusters_door_edge_ignored_when_source_has_no_walkable_cells() -> None:
+    # Node 1 has no walkable cells so the door cannot form a cluster.
+    nodes = [make_node(0, [[0, 0]], _GENERIC_ID), make_node(1, part_id=_GENERIC_ID)]
+    edges = [make_door_edge(0, 1)]
+    assert _build_traversable_clusters(nodes, edges) == [[0]]
+
+
+def test_clusters_multiple_door_edges_chain_parts_together() -> None:
+    # 0 --door--> 1 --door--> 2; all three should be in one cluster.
+    nodes = [
+        make_node(0, [[0, 0]], _GENERIC_ID),
+        make_node(1, [[50, 50]], _GENERIC_ID),
+        make_node(2, [[100, 100]], _GENERIC_ID),
+    ]
+    edges = [make_door_edge(0, 1), make_door_edge(1, 2)]
+    assert _build_traversable_clusters(nodes, edges) == [[0, 1, 2]]
+
+
+# ---------------------------------------------------------------------------
+# _build_traversable_clusters — corridor-like adjacency
+# ---------------------------------------------------------------------------
+
+
+def test_clusters_two_corridors_adjacent_in_x_merge() -> None:
+    nodes = [
+        make_node(0, [[0, 0]], _CORRIDOR_ID),
+        make_node(1, [[2, 0]], _CORRIDOR_ID),
+    ]
+    assert _build_traversable_clusters(nodes, []) == [[0, 1]]
+
+
+def test_clusters_two_corridors_adjacent_in_y_merge() -> None:
+    nodes = [
+        make_node(0, [[0, 0]], _CORRIDOR_ID),
+        make_node(1, [[0, 2]], _CORRIDOR_ID),
+    ]
+    assert _build_traversable_clusters(nodes, []) == [[0, 1]]
+
+
+def test_clusters_two_walkway_parts_adjacent_merge() -> None:
+    nodes = [
+        make_node(0, [[0, 0]], _WALKWAY_ID),
+        make_node(1, [[2, 0]], _WALKWAY_ID),
+    ]
+    assert _build_traversable_clusters(nodes, []) == [[0, 1]]
+
+
+def test_clusters_corridor_and_walkway_adjacent_merge() -> None:
+    nodes = [
+        make_node(0, [[0, 0]], _CORRIDOR_ID),
+        make_node(1, [[2, 0]], _WALKWAY_ID),
+    ]
+    assert _build_traversable_clusters(nodes, []) == [[0, 1]]
+
+
+def test_clusters_two_non_corridor_adjacent_no_door_stay_separate() -> None:
+    # Generic parts touching each other without a door are NOT merged.
+    nodes = [
+        make_node(0, [[0, 0]], _GENERIC_ID),
+        make_node(1, [[2, 0]], _GENERIC_ID),
+    ]
+    assert _build_traversable_clusters(nodes, []) == [[0], [1]]
+
+
+def test_clusters_corridor_adjacent_to_non_corridor_no_door_stay_separate() -> None:
+    # One corridor part and one generic part adjacent with no door → separate.
+    nodes = [
+        make_node(0, [[0, 0]], _CORRIDOR_ID),
+        make_node(1, [[2, 0]], _GENERIC_ID),
+    ]
+    assert _build_traversable_clusters(nodes, []) == [[0], [1]]
+
+
+def test_clusters_two_corridors_sharing_same_cell_merge() -> None:
+    nodes = [
+        make_node(0, [[4, 4]], _CORRIDOR_ID),
+        make_node(1, [[4, 4]], _CORRIDOR_ID),
+    ]
+    assert _build_traversable_clusters(nodes, []) == [[0, 1]]
+
+
+def test_clusters_corridor_diagonal_cells_not_adjacent() -> None:
+    # Cells differing by 2 in both axes are diagonal and should not merge.
+    nodes = [
+        make_node(0, [[0, 0]], _CORRIDOR_ID),
+        make_node(1, [[2, 2]], _CORRIDOR_ID),
+    ]
+    assert _build_traversable_clusters(nodes, []) == [[0], [1]]
+
+
+def test_clusters_three_parts_two_corridors_connected_one_generic_isolated() -> None:
+    nodes = [
+        make_node(0, [[0, 0]], _CORRIDOR_ID),
+        make_node(1, [[2, 0]], _CORRIDOR_ID),   # adjacent corridor → merges with 0
+        make_node(2, [[4, 0]], _GENERIC_ID),    # generic, no door → isolated
+    ]
+    assert _build_traversable_clusters(nodes, []) == [[0, 1], [2]]
+
+
+def test_clusters_generic_parts_merged_via_door_despite_no_adjacency() -> None:
+    # Non-corridor parts far apart but joined by a door still cluster together.
+    nodes = [
+        make_node(0, [[0, 0]], _GENERIC_ID),
+        make_node(1, [[200, 200]], _GENERIC_ID),
+    ]
+    assert _build_traversable_clusters(nodes, [make_door_edge(0, 1)]) == [[0, 1]]
+
+
+# ---------------------------------------------------------------------------
+# _build_traversable_clusters — ordering / determinism
+# ---------------------------------------------------------------------------
+
+
+def test_clusters_member_ids_sorted_within_cluster() -> None:
+    nodes = [
+        make_node(5, [[0, 0]], _CORRIDOR_ID),
+        make_node(2, [[0, 0]], _CORRIDOR_ID),
+        make_node(9, [[0, 0]], _CORRIDOR_ID),
+    ]
+    assert _build_traversable_clusters(nodes, []) == [[2, 5, 9]]
+
+
+def test_clusters_outer_list_sorted_by_first_member() -> None:
+    nodes = [make_node(3, [[10, 0]], _GENERIC_ID), make_node(1, [[0, 0]], _GENERIC_ID)]
+    assert _build_traversable_clusters(nodes, []) == [[1], [3]]
+
+
+def test_clusters_ordering_deterministic_regardless_of_input_order() -> None:
+    nodes = [make_node(i, [[i * 100, 0]], _GENERIC_ID) for i in range(5)]
+    assert _build_traversable_clusters(nodes, []) == _build_traversable_clusters(
+        list(reversed(nodes)), []
+    )
+
+
+def test_clusters_part_without_walkable_cells_excluded() -> None:
+    nodes = [make_node(0, [[0, 0]], _CORRIDOR_ID), make_node(1, part_id=_CORRIDOR_ID)]
+    result = _build_traversable_clusters(nodes, [])
+    assert result == [[0]]
+    assert 1 not in [m for cluster in result for m in cluster]
+
+
+# ---------------------------------------------------------------------------
+# _enrich_graph
+# ---------------------------------------------------------------------------
+
+
+def test_enrich_graph_adds_expansion_graph() -> None:
+    result = _enrich_graph(make_graph_data([make_node(0, [[0, 0]], _GENERIC_ID)]))
+    assert "X_expansion_structural" in result["graphs"]
+
+
+def test_enrich_graph_preserves_existing_graph_and_extra_keys() -> None:
+    graph_data = make_graph_data([make_node(0, part_id=_GENERIC_ID)])
+    graph_data["custom_key"] = "hello"
+    result = _enrich_graph(graph_data)
+    assert result["custom_key"] == "hello"
+    assert "A_structural_part_graph" in result["graphs"]
+
+
+def test_enrich_graph_adds_global_ship_node() -> None:
+    result = _enrich_graph(make_graph_data([make_node(0, part_id=_GENERIC_ID)]))
+    exp_nodes = result["graphs"]["X_expansion_structural"]["nodes"]
+    global_nodes = [n for n in exp_nodes if n["kind"] == "global_ship_info"]
+    assert len(global_nodes) == 1
+    assert global_nodes[0]["id"] == "global_ship"
+
+
+def test_enrich_graph_global_ship_node_carries_ship_metadata() -> None:
+    ship = {"Name": "TestShip", "crew": 3}
+    result = _enrich_graph(make_graph_data([make_node(0, part_id=_GENERIC_ID)], ship=ship))
+    exp_nodes = result["graphs"]["X_expansion_structural"]["nodes"]
+    global_node = next(n for n in exp_nodes if n["id"] == "global_ship")
+    assert global_node["ship"] == ship
+
+
+def test_enrich_graph_global_member_edges_connect_to_all_parts() -> None:
+    result = _enrich_graph(
+        make_graph_data([make_node(0, part_id=_GENERIC_ID), make_node(1, part_id=_GENERIC_ID)])
+    )
+    cross_edges = result["graphs"]["X_expansion_structural"]["cross_edges"]
+    global_edges = [e for e in cross_edges if e["kind"] == "global_member"]
+    assert {e["target"] for e in global_edges} == {0, 1}
+
+
+def test_enrich_graph_cluster_nodes_for_each_isolated_walkable_part() -> None:
+    # Two walkable generic parts with no door → two separate clusters.
+    nodes = [
+        make_node(0, [[0, 0]], _GENERIC_ID),
+        make_node(1, [[100, 100]], _GENERIC_ID),
+    ]
+    result = _enrich_graph(make_graph_data(nodes))
+    exp_nodes = result["graphs"]["X_expansion_structural"]["nodes"]
+    cluster_nodes = [n for n in exp_nodes if n["kind"] == "traversable_cluster"]
+    assert len(cluster_nodes) == 2
+
+
+def test_enrich_graph_door_edge_merges_clusters() -> None:
+    # Two generic parts with a door edge → one cluster.
+    nodes = [make_node(0, [[0, 0]], _GENERIC_ID), make_node(1, [[100, 100]], _GENERIC_ID)]
+    edges = [make_door_edge(0, 1)]
+    result = _enrich_graph(make_graph_data(nodes, edges=edges))
+    exp_nodes = result["graphs"]["X_expansion_structural"]["nodes"]
+    cluster_nodes = [n for n in exp_nodes if n["kind"] == "traversable_cluster"]
+    assert len(cluster_nodes) == 1
+
+
+def test_enrich_graph_corridor_adjacency_merges_clusters() -> None:
+    # Two adjacent corridor parts → one cluster (no door required).
+    nodes = [make_node(0, [[0, 0]], _CORRIDOR_ID), make_node(1, [[2, 0]], _CORRIDOR_ID)]
+    result = _enrich_graph(make_graph_data(nodes))
+    exp_nodes = result["graphs"]["X_expansion_structural"]["nodes"]
+    cluster_nodes = [n for n in exp_nodes if n["kind"] == "traversable_cluster"]
+    assert len(cluster_nodes) == 1
+
+
+def test_enrich_graph_no_cluster_nodes_when_no_walkable_cells() -> None:
+    result = _enrich_graph(
+        make_graph_data([make_node(0, part_id=_GENERIC_ID), make_node(1, part_id=_GENERIC_ID)])
+    )
+    exp_nodes = result["graphs"]["X_expansion_structural"]["nodes"]
+    assert [n for n in exp_nodes if n["kind"] == "traversable_cluster"] == []
+
+
+def test_enrich_graph_super_member_edges_connect_cluster_to_members() -> None:
+    # Two adjacent corridor parts form one cluster; both should appear as super_member targets.
+    nodes = [make_node(0, [[0, 0]], _CORRIDOR_ID), make_node(1, [[2, 0]], _CORRIDOR_ID)]
+    result = _enrich_graph(make_graph_data(nodes))
+    cross_edges = result["graphs"]["X_expansion_structural"]["cross_edges"]
+    super_edges = [e for e in cross_edges if e["kind"] == "super_member"]
+    assert {e["target"] for e in super_edges} == {0, 1}
+    assert len({e["source"] for e in super_edges}) == 1
+
+
+def test_enrich_graph_summary_counts_are_consistent() -> None:
+    # nodes 0 and 1 are isolated walkable parts; node 2 has no walkable cells.
+    nodes = [
+        make_node(0, [[0, 0]], _GENERIC_ID),
+        make_node(1, [[100, 100]], _GENERIC_ID),
+        make_node(2, part_id=_GENERIC_ID),
+    ]
+    result = _enrich_graph(make_graph_data(nodes))
+    summary = result["graphs"]["X_expansion_structural"]["summary"]
+    assert summary["global_ship_nodes"] == 1
+    assert summary["traversable_clusters"] == 2
+    assert summary["global_member_edges"] == 3
+    assert summary["super_member_edges"] == 2
+
+
+def test_enrich_graph_expansion_metadata() -> None:
+    result = _enrich_graph(make_graph_data([make_node(0, part_id=_GENERIC_ID)]))
+    assert result["expansion"]["backend"] == "structural"
+    assert result["expansion"]["version"] == 1
+    assert "X_expansion_structural" in result["expansion"]["graphs_added"]
+
+
+def test_enrich_graph_does_not_mutate_input() -> None:
+    graph_data = make_graph_data([make_node(0, [[0, 0]], _CORRIDOR_ID)])
+    original_top_keys = set(graph_data)
+    original_graph_keys = set(graph_data["graphs"])
+    _enrich_graph(graph_data)
+    assert set(graph_data) == original_top_keys
+    assert set(graph_data["graphs"]) == original_graph_keys
+
+
+# ---------------------------------------------------------------------------
+# StructuralExpansionBackend.expand_dir
+# ---------------------------------------------------------------------------
+
+
+def test_expand_dir_empty_directory(tmp_path: Path) -> None:
+    result = StructuralExpansionBackend().expand_dir(
+        input_dir=tmp_path, output_dir=tmp_path / "out"
+    )
+    assert result["files_expanded"] == 0
+
+
+def test_expand_dir_ignores_manifest_json(tmp_path: Path) -> None:
+    (tmp_path / "manifest.json").write_text('{"ships_processed": 3}', encoding="utf-8")
+    result = StructuralExpansionBackend().expand_dir(
+        input_dir=tmp_path, output_dir=tmp_path / "out"
+    )
+    assert result["files_expanded"] == 0
+
+
+def test_expand_dir_enriches_json_files(tmp_path: Path) -> None:
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    write_graph_json(input_dir / "ship_a.json", [make_node(0, [[0, 0]], _CORRIDOR_ID)])
+    write_graph_json(input_dir / "ship_b.json", [make_node(0, part_id=_GENERIC_ID)])
+
+    result = StructuralExpansionBackend().expand_dir(
+        input_dir=input_dir, output_dir=output_dir, workers=1, executor="thread"
+    )
+
+    assert result["files_expanded"] == 2
+    for name in ("ship_a.json", "ship_b.json"):
+        enriched = json.loads((output_dir / name).read_text(encoding="utf-8"))
+        assert "X_expansion_structural" in enriched["graphs"]
+
+
+def test_expand_dir_in_place_when_output_equals_input(tmp_path: Path) -> None:
+    write_graph_json(tmp_path / "ship.json", [make_node(0, part_id=_GENERIC_ID)])
+    StructuralExpansionBackend().expand_dir(
+        input_dir=tmp_path, output_dir=tmp_path, workers=1, executor="thread"
+    )
+    enriched = json.loads((tmp_path / "ship.json").read_text(encoding="utf-8"))
+    assert "expansion" in enriched
+
+
+def test_expand_dir_skips_bad_files_and_continues(tmp_path: Path) -> None:
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    write_graph_json(input_dir / "good.json", [make_node(0, part_id=_GENERIC_ID)])
+    (input_dir / "bad.json").write_text("{not valid json", encoding="utf-8")
+
+    result = StructuralExpansionBackend().expand_dir(
+        input_dir=input_dir, output_dir=output_dir, workers=1, executor="thread"
+    )
+
+    assert result["files_expanded"] == 1
+    assert (output_dir / "good.json").exists()
+    assert not (output_dir / "bad.json").exists()
+
+
+def test_expand_dir_traversable_clusters_total_is_sum_across_files(tmp_path: Path) -> None:
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    # ship_a: two isolated generic parts with a door → 1 cluster (door merges them)
+    write_graph_json(
+        input_dir / "ship_a.json",
+        nodes=[make_node(0, [[0, 0]], _GENERIC_ID), make_node(1, [[100, 100]], _GENERIC_ID)],
+        edges=[make_door_edge(0, 1)],
+    )
+    # ship_b: one corridor part → 1 cluster
+    write_graph_json(input_dir / "ship_b.json", [make_node(0, [[0, 0]], _CORRIDOR_ID)])
+
+    result = StructuralExpansionBackend().expand_dir(
+        input_dir=input_dir, output_dir=output_dir, workers=1, executor="thread"
+    )
+
+    assert result["traversable_clusters_total"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Router
+# ---------------------------------------------------------------------------
+
+
+def test_get_expansion_backends_includes_structural() -> None:
+    assert "structural" in get_expansion_backends()
+
+
+def test_get_expansion_backend_resolves_structural() -> None:
+    assert get_expansion_backend("structural").name == "structural"
+
+
+def test_get_expansion_backend_raises_for_unknown_name() -> None:
+    with pytest.raises(KeyError, match="Unknown expansion backend"):
+        get_expansion_backend("nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def test_build_parser_succeeds() -> None:
+    assert build_parser() is not None
+
+
+def test_cli_expand_structural_enriches_files(tmp_path: Path) -> None:
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    write_graph_json(input_dir / "ship.json", [make_node(0, [[0, 0]], _CORRIDOR_ID)])
+
+    exit_code = graph_expansion_main([
+        "expand", "structural",
+        "--input-dir", str(input_dir),
+        "--output-dir", str(output_dir),
+        "--workers", "1",
+        "--executor", "thread",
+    ])
+
+    assert exit_code == 0
+    enriched = json.loads((output_dir / "ship.json").read_text(encoding="utf-8"))
+    assert "X_expansion_structural" in enriched["graphs"]
+
+
+def test_cli_expand_structural_empty_dir_exits_zero(tmp_path: Path) -> None:
+    exit_code = graph_expansion_main([
+        "expand", "structural",
+        "--input-dir", str(tmp_path),
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    assert exit_code == 0
