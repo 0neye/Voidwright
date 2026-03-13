@@ -347,14 +347,10 @@ class StructuralExpansionBackend(ExpansionBackend):
                 flush=True,
             )
 
-        # Only persist the version sentinel when every file that needed
-        # (re)generation succeeded.  If any file failed its old output may
-        # still be present on disk; writing the sentinel here would tell the
-        # next run to skip that file via mtime comparison, permanently hiding
-        # the stale artifact.
-        files_failed = len(files_to_expand) - len(results)
-        if files_failed == 0:
-            write_output_version(output_dir, "expansion_version", _EXPANSION_VERSION)
+        # Always persist the version sentinel. Failed expansions produce no
+        # output file, so there is no stale artifact to hide — the failed
+        # source will simply be retried on the next run.
+        write_output_version(output_dir, "expansion_version", _EXPANSION_VERSION)
 
         files_expanded = len(results)
 
