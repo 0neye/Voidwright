@@ -165,7 +165,7 @@ def build_payload_from_graph_corpus(graph_dir: Path, config: TrainingConfig) -> 
     transition_counts: Dict[str, Counter] = defaultdict(Counter)
     part_frequency: Counter = Counter()
 
-    graph_files = sorted(file_path for file_path in graph_dir.glob("*.json") if file_path.name != "manifest.json")
+    graph_files = sorted(file_path for file_path in graph_dir.glob("*.json") if file_path.name != "manifest.json" and not file_path.name.startswith("."))
 
     for graph_path in graph_files:
         stats.ships_seen += 1
