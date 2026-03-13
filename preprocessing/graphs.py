@@ -349,8 +349,7 @@ def structural_door_edges(
 def process_ship(ship_path: Path) -> dict:
     """Generate graph artifacts for one extracted or canonical ship JSON file."""
 
-    with ship_path.open(encoding="utf-8") as file_handle:
-        data = orjson.loads(file_handle.read())
+    data = orjson.loads(ship_path.read_bytes())
 
     coord_transform = data.get("coord_transform", {})
     center_2x = (
@@ -510,8 +509,7 @@ def _read_existing_graph_summary(output_path: Path) -> dict | None:
     None if the file cannot be read or is structurally incomplete.
     """
     try:
-        with output_path.open(encoding="utf-8") as fh:
-            graph_data = orjson.loads(fh.read())
+        graph_data = orjson.loads(output_path.read_bytes())
         struct_summary = graph_data["graphs"]["A_structural_part_graph"]["summary"]
         validation = graph_data["validation"]
         return {

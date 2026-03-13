@@ -170,7 +170,7 @@ def read_output_version(output_dir: Path, version_key: str) -> int | None:
 
     sentinel = output_dir / _VERSION_SENTINEL
     try:
-        data = orjson.loads(sentinel.read_text(encoding="utf-8"))
+        data = orjson.loads(sentinel.read_bytes())
         val = data.get(version_key)
         if val is not None:
             return int(val)
@@ -194,9 +194,7 @@ def write_output_version(output_dir: Path, version_key: str, version: int) -> No
     sentinel = output_dir / _VERSION_SENTINEL
     data: dict = {}
     try:
-        data = orjson.loads(sentinel.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        pass
+        data = orjson.loads(sentinel.read_bytes())
     except Exception:
         pass
     data[version_key] = version

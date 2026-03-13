@@ -181,7 +181,7 @@ def load_requirements(
 def load_seed_parts_from_json(seed_json_path: Path) -> list[dict]:
     """Load seed parts from generated JSON or extracted Cosmoteer ship JSON."""
 
-    data = orjson.loads(seed_json_path.read_text(encoding="utf-8"))
+    data = orjson.loads(seed_json_path.read_bytes())
     if "parts" in data and isinstance(data["parts"], list):
         raw_parts = data["parts"]
         if raw_parts and isinstance(raw_parts[0], dict) and "part_id" in raw_parts[0]:

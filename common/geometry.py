@@ -251,8 +251,7 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
         Mapping of part ID to per-rotation geometry metadata
     """
 
-    with VANILLA_PARTS_PATH.open(encoding="utf-8") as file_handle:
-        payload = orjson.loads(file_handle.read())
+    payload = orjson.loads(VANILLA_PARTS_PATH.read_bytes())
 
     result: Dict[str, VanillaPartGeometry] = {}
 
