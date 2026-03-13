@@ -629,12 +629,15 @@ def generate_all(
             submit_work=submit_graph_work,
         )
 
-    # Prune stale outputs left over from previous runs.
-    pruned_count = prune_stale_json_outputs(
-        output_dir, (f.name for f in files), exclude=["manifest.json"]
-    )
-    if pruned_count:
-        print(f"Pruned {pruned_count} stale graph file(s) from {output_dir}", flush=True)
+    # Prune stale outputs left over from previous runs, but only when processing
+    # the full input set.  A limited run is a non-destructive validation subset,
+    # so its truncated keep-list must never be used to delete unrelated outputs.
+    if limit is None:
+        pruned_count = prune_stale_json_outputs(
+            output_dir, (f.name for f in files), exclude=["manifest.json"]
+        )
+        if pruned_count:
+            print(f"Pruned {pruned_count} stale graph file(s) from {output_dir}", flush=True)
 
     # Reduce the worker summaries in filename order so manifest counters and
     # sample-output lists remain stable no matter which worker finished first.
@@ -673,12 +676,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--input-dir",
-        default="extracted_ship_data",
+        default="extracted_ship_data_canonical",
         help="Directory with extracted *.json ship files",
     )
     parser.add_argument(
         "--output-dir",
-        default="generated_ship_graphs",
+        default="generated_ship_graphs_canonical",
         help="Directory to write per-ship graph JSON files",
     )
     parser.add_argument(

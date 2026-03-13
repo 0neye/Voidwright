@@ -222,17 +222,14 @@ class StructuralExpansionBackend(ExpansionBackend):
         parser.add_argument(
             "--input-dir",
             type=Path,
-            required=True,
+            default=Path("generated_ship_graphs_canonical"),
             help="Directory containing preprocessing graph JSON artifacts",
         )
         parser.add_argument(
             "--output-dir",
             type=Path,
-            default=None,
-            help=(
-                "Directory to write enriched graph JSON. "
-                "Defaults to --input-dir for in-place enrichment."
-            ),
+            default=Path("expanded_ship_graphs"),
+            help="Directory to write enriched graph JSON",
         )
         add_concurrency_arguments(
             parser,
@@ -320,7 +317,11 @@ class StructuralExpansionBackend(ExpansionBackend):
             )
 
         # Prune stale outputs and record the current expansion version.
-        pruned_count = prune_stale_json_outputs(output_dir, (f.name for f in files))
+        # Exclude manifest.json so in-place expansion (output_dir == input_dir)
+        # does not delete the preprocessing manifest written by the graphs stage.
+        pruned_count = prune_stale_json_outputs(
+            output_dir, (f.name for f in files), exclude=["manifest.json"]
+        )
         if pruned_count:
             print(
                 f"[graph-expansion:structural] Pruned {pruned_count} stale file(s) from {output_dir}",
@@ -345,7 +346,7 @@ class StructuralExpansionBackend(ExpansionBackend):
         """Run structural graph expansion from CLI args."""
 
         input_dir = Path(args.input_dir)
-        output_dir = Path(args.output_dir) if args.output_dir is not None else input_dir
+        output_dir = Path(args.output_dir)
         self.expand_dir(
             input_dir=input_dir,
             output_dir=output_dir,
