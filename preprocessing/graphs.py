@@ -694,11 +694,10 @@ def generate_all(
     manifest["unknown_part_ids"] = dict(manifest["unknown_part_ids"].most_common())
     manifest["door_stats"] = dict(manifest["door_stats"])
 
-    # Only persist the version sentinel when every file that needed
-    # (re)generation succeeded.  If any file failed its old output may still
-    # be present on disk; writing the sentinel here would tell the next run to
-    # skip that file via mtime comparison, permanently hiding the stale artifact.
-    if limit is None and files_failed == 0:
+    # Always persist the version sentinel on full runs. Failed graph generation
+    # produces no output file, so there is no stale artifact to hide — the
+    # failed source will simply be retried on the next full run.
+    if limit is None:
         write_output_version(output_dir, _GRAPH_SCHEMA_VERSION_KEY, _GRAPH_SCHEMA_VERSION)
 
     with (output_dir / "manifest.json").open("wb") as file_handle:

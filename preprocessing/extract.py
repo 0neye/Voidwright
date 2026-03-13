@@ -300,17 +300,14 @@ def run_extract(
                 output_path,
             )
 
-        # Only persist the version sentinel when every file that needed
-        # (re)generation succeeded. If any file failed its old output may still
-        # be present on disk; writing the sentinel here would tell the next run
-        # to skip that file via the version check, permanently hiding the stale
-        # artifact.
-        if files_failed == 0:
-            write_output_version(
-                output_path,
-                _EXTRACT_SCHEMA_VERSION_KEY,
-                _EXTRACT_SCHEMA_VERSION,
-            )
+        # Always persist the version sentinel on full runs. Failed extractions
+        # produce no output file, so there is no stale artifact to hide — the
+        # failed source will simply be retried on the next full run.
+        write_output_version(
+            output_path,
+            _EXTRACT_SCHEMA_VERSION_KEY,
+            _EXTRACT_SCHEMA_VERSION,
+        )
 
     logging.info(
         "Done. Parsed successfully: %d | Failed: %d | Skipped (up-to-date): %d",
