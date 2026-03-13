@@ -350,6 +350,8 @@ class StructuralExpansionBackend(ExpansionBackend):
             )
         write_output_version(output_dir, "expansion_version", _EXPANSION_VERSION)
 
+        files_expanded = len(results)
+
         # Collect summaries from skipped (up-to-date) output files so the
         # printed totals reflect the full corpus, not just the incremental delta.
         for skipped_path in skipped_files:
@@ -359,12 +361,12 @@ class StructuralExpansionBackend(ExpansionBackend):
 
         total_clusters = sum(r["traversable_clusters"] for r in results)
         print(
-            f"[graph-expansion:structural] expanded {len(results)} files, "
+            f"[graph-expansion:structural] expanded {files_expanded} files, "
             f"skipped {files_skipped}, "
             f"{total_clusters} traversable clusters total -> {output_dir}"
         )
         return {
-            "files_expanded": len(results),
+            "files_expanded": files_expanded,
             "files_skipped": files_skipped,
             "traversable_clusters_total": total_clusters,
             "output_dir": str(output_dir),

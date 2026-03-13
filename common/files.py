@@ -150,6 +150,12 @@ def inputs_needing_regeneration(
         out = output_dir / f.name
         if not out.exists():
             return True
+        if f == out:
+            # In-place mode: input and output are the same file, so the mtime
+            # comparison is always False and meaningless.  The version check
+            # above is the only staleness signal available; if it passed, the
+            # file is considered up-to-date.
+            return False
         return f.stat().st_mtime > out.stat().st_mtime
 
     return [f for f in input_files if _needs_regen(f)]
