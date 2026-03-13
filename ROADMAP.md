@@ -29,6 +29,11 @@ Additional information should be added to the nodes of the graph as well, such a
 Potentially we should add more edge types as well to connect related parts together.
 
 
+### Graph expansion performance:
+
+The current `graph_expansion` structural backend processes ships sequentially and may be slow on large corpora. Profile and investigate parallelism, algorithmic improvements, or batching to bring throughput in line with the preprocessing pipeline stages.
+
+
 ## Heterogeneous Graph Transformer:
 
 This is the model that will use the more heavily processed graph data. We should perform pre-training masked prediction on the ship corpus. And then run tests to see if the resulting embeddings are meaningful.
