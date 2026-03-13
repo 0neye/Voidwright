@@ -698,8 +698,7 @@ def infer_rules_from_corpus(input_dir: Path, output_path: Path, thresholds: Thre
 
     for ship_path in iter_ship_files(input_dir):
         stats["ships_processed"] += 1
-        with ship_path.open() as fh:
-            data = orjson.loads(fh.read())
+        data = orjson.loads(ship_path.read_bytes())
 
         parts = data.get("Parts", [])
         all_part_ids = [normalize_part_id(part) for part in parts if isinstance(part, dict)]
@@ -809,8 +808,7 @@ def infer_rules_from_corpus(input_dir: Path, output_path: Path, thresholds: Thre
 def validate_corpus_against_rules(input_dir: Path, rules: DoorPlacementRules) -> dict:
     stats: Counter = Counter()
     for ship_path in iter_ship_files(input_dir):
-        with ship_path.open() as fh:
-            data = orjson.loads(fh.read())
+        data = orjson.loads(ship_path.read_bytes())
         parts = data.get("Parts", [])
         summary = rules.validate_doors(parts, data.get("Doors", []))
         stats["ships_total"] += 1

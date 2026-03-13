@@ -474,7 +474,7 @@ def export_batch(
     results = []
     for json_path in sorted(sample_dir.glob("*.json")):
         try:
-            generated_json = orjson.loads(json_path.read_text())
+            generated_json = orjson.loads(json_path.read_bytes())
         except Exception as exc:
             results.append({"source": str(json_path), "error": str(exc)})
             continue

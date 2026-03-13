@@ -29,7 +29,7 @@ from .relative_coords import apply_relative_coords_transform
 
 __all__ = ["build_parser", "run_extract", "main"]
 
-_EXTRACT_SCHEMA_VERSION = 1
+_EXTRACT_SCHEMA_VERSION = 2
 _EXTRACT_SCHEMA_VERSION_KEY = "extract_schema_version"
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections import Counter, defaultdict
 from dataclasses import asdict
 from pathlib import Path
@@ -174,7 +173,7 @@ def build_payload_from_graph_corpus(graph_dir: Path, config: TrainingConfig) -> 
         try:
             with graph_path.open("rb") as file_handle:
                 graph_data = orjson.loads(file_handle.read())
-        except (json.JSONDecodeError, OSError):
+        except (orjson.JSONDecodeError, OSError):
             continue
 
         all_nodes = graph_data.get("graphs", {}).get("A_structural_part_graph", {}).get("nodes", [])
