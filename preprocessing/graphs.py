@@ -9,11 +9,13 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
-from common.files import prune_stale_json_outputs
+from common.files import inputs_needing_regeneration, prune_stale_json_outputs, write_output_version
 from common.geometry import PartMeta, infer_meta, load_vanilla_part_geometry, normalize_part_id
 from ship_layout.connectivity import shared_attachment_sides
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
 from .layout_helpers import door_adjacent_cells
+
+_GRAPH_SCHEMA_VERSION = 5
 
 __all__ = [
     "normalize_parts",
@@ -425,7 +427,7 @@ def process_ship(ship_path: Path) -> dict:
             "version": data.get("Version"),
             "flight_direction": data.get("FlightDirection"),
         },
-        "schema_version": 5,
+        "schema_version": _GRAPH_SCHEMA_VERSION,
         "coord_transform": {
             "version": int(coord_transform.get("version", 1)) if isinstance(coord_transform, dict) else 1,
             "frame": (
@@ -561,13 +563,24 @@ def generate_all(
     if limit is not None:
         files = files[:limit]
 
+    files_to_process = inputs_needing_regeneration(
+        files,
+        output_dir,
+        current_version=_GRAPH_SCHEMA_VERSION,
+        version_key="schema_version",
+    )
+    ships_skipped = len(files) - len(files_to_process)
+    if ships_skipped:
+        print(f"Skipping {ships_skipped} up-to-date graph file(s) in {output_dir}", flush=True)
+
     manifest = {
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
-        "schema_version": 5,
+        "schema_version": _GRAPH_SCHEMA_VERSION,
         "geometry_source": "game-file canonical (load_vanilla_part_geometry)",
         "coord_frame": "centered 2x local coordinates with global replay metadata",
         "ships_processed": 0,
+        "ships_skipped": ships_skipped,
         "ships_with_unknown_part_ids": 0,
         "total_unknown_part_instances": 0,
         "unknown_part_ids": Counter(),
@@ -576,9 +589,9 @@ def generate_all(
     }
 
     graph_results: List[dict] = []
-    if files:
+    if files_to_process:
         worker_count = resolve_worker_count(
-            task_count=len(files),
+            task_count=len(files_to_process),
             stage_name="graphs",
             requested_workers=workers,
             requested_mode=executor,
@@ -591,7 +604,7 @@ def generate_all(
             with executor_factory(max_workers=worker_count) as graph_executor:
                 future_to_path = {
                     graph_executor.submit(_generate_single_graph, str(ship_path), str(output_dir)): ship_path
-                    for ship_path in files
+                    for ship_path in files_to_process
                 }
                 for index, future in enumerate(as_completed(future_to_path), start=1):
                     try:
@@ -604,7 +617,7 @@ def generate_all(
                         )
                     if index % 1000 == 0:
                         print(
-                            f"Generated {index}/{len(files)} graph files with {worker_count} worker(s)...",
+                            f"Generated {index}/{len(files_to_process)} graph files with {worker_count} worker(s)...",
                             flush=True,
                         )
             return results
@@ -639,6 +652,8 @@ def generate_all(
 
     manifest["unknown_part_ids"] = dict(manifest["unknown_part_ids"].most_common())
     manifest["door_stats"] = dict(manifest["door_stats"])
+
+    write_output_version(output_dir, "schema_version", _GRAPH_SCHEMA_VERSION)
 
     with (output_dir / "manifest.json").open("w", encoding="utf-8") as file_handle:
         json.dump(manifest, file_handle, indent=2)

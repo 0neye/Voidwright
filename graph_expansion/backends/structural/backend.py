@@ -8,7 +8,7 @@ from concurrent.futures import as_completed
 from pathlib import Path
 from typing import Sequence
 
-from common.files import prune_stale_json_outputs
+from common.files import inputs_needing_regeneration, prune_stale_json_outputs, write_output_version
 from graph_expansion.base import ExpansionBackend
 from preprocessing.concurrency import (
     add_concurrency_arguments,
@@ -265,60 +265,78 @@ class StructuralExpansionBackend(ExpansionBackend):
 
         if not files:
             print(f"[graph-expansion:structural] No graph JSON files found in {input_dir}")
-            return {"files_expanded": 0, "traversable_clusters_total": 0}
+            return {"files_expanded": 0, "files_skipped": 0, "traversable_clusters_total": 0}
 
-        worker_count = resolve_worker_count(
-            task_count=len(files),
-            stage_name="graph_expansion",
-            requested_workers=workers,
-            requested_mode=executor,
+        files_to_expand = inputs_needing_regeneration(
+            files,
+            output_dir,
+            current_version=_EXPANSION_VERSION,
+            version_key="expansion_version",
         )
+        files_skipped = len(files) - len(files_to_expand)
+        if files_skipped:
+            print(
+                f"[graph-expansion:structural] Skipping {files_skipped} up-to-date file(s) in {output_dir}",
+                flush=True,
+            )
 
-        def submit_expand_work(executor_factory: type) -> list[dict]:
-            results: list[dict] = []
-            with executor_factory(max_workers=worker_count) as pool:
-                future_to_path = {
-                    pool.submit(_expand_single_graph, str(f), str(output_dir)): f
-                    for f in files
-                }
-                for index, future in enumerate(as_completed(future_to_path), start=1):
-                    try:
-                        results.append(future.result())
-                    except Exception as exc:
-                        failed_path = future_to_path[future]
-                        print(
-                            f"Warning: skipping {failed_path.name} — expansion failed: {exc}",
-                            flush=True,
-                        )
-                    if index % 1000 == 0:
-                        print(
-                            f"Expanded {index}/{len(files)} graph files with {worker_count} worker(s)...",
-                            flush=True,
-                        )
-            return results
+        results: list[dict] = []
+        if files_to_expand:
+            worker_count = resolve_worker_count(
+                task_count=len(files_to_expand),
+                stage_name="graph_expansion",
+                requested_workers=workers,
+                requested_mode=executor,
+            )
 
-        results, _ = run_auto_parallel_work(
-            stage_name="graph_expansion",
-            requested_mode=executor,
-            worker_count=worker_count,
-            submit_work=submit_expand_work,
-        )
+            def submit_expand_work(executor_factory: type) -> list[dict]:
+                inner_results: list[dict] = []
+                with executor_factory(max_workers=worker_count) as pool:
+                    future_to_path = {
+                        pool.submit(_expand_single_graph, str(f), str(output_dir)): f
+                        for f in files_to_expand
+                    }
+                    for index, future in enumerate(as_completed(future_to_path), start=1):
+                        try:
+                            inner_results.append(future.result())
+                        except Exception as exc:
+                            failed_path = future_to_path[future]
+                            print(
+                                f"Warning: skipping {failed_path.name} — expansion failed: {exc}",
+                                flush=True,
+                            )
+                        if index % 1000 == 0:
+                            print(
+                                f"Expanded {index}/{len(files_to_expand)} graph files with {worker_count} worker(s)...",
+                                flush=True,
+                            )
+                return inner_results
 
-        # Prune stale outputs left over from previous runs.
+            results, _ = run_auto_parallel_work(
+                stage_name="graph_expansion",
+                requested_mode=executor,
+                worker_count=worker_count,
+                submit_work=submit_expand_work,
+            )
+
+        # Prune stale outputs and record the current expansion version.
         pruned_count = prune_stale_json_outputs(output_dir, (f.name for f in files))
         if pruned_count:
             print(
                 f"[graph-expansion:structural] Pruned {pruned_count} stale file(s) from {output_dir}",
                 flush=True,
             )
+        write_output_version(output_dir, "expansion_version", _EXPANSION_VERSION)
 
         total_clusters = sum(r["traversable_clusters"] for r in results)
         print(
             f"[graph-expansion:structural] expanded {len(results)} files, "
+            f"skipped {files_skipped}, "
             f"{total_clusters} traversable clusters total -> {output_dir}"
         )
         return {
             "files_expanded": len(results),
+            "files_skipped": files_skipped,
             "traversable_clusters_total": total_clusters,
             "output_dir": str(output_dir),
         }
