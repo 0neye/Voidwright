@@ -591,14 +591,12 @@ def generate_all(
     if limit is not None:
         files = files[:limit]
 
-    files_to_process = inputs_needing_regeneration(
+    files_to_process, skipped_files = inputs_needing_regeneration(
         files,
         output_dir,
         current_version=_GRAPH_SCHEMA_VERSION,
         version_key="schema_version",
     )
-    process_set = set(files_to_process)
-    skipped_files = [f for f in files if f not in process_set]
     ships_skipped = len(skipped_files)
     if ships_skipped:
         print(f"Skipping {ships_skipped} up-to-date graph file(s) in {output_dir}", flush=True)

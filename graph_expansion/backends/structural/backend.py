@@ -283,14 +283,12 @@ class StructuralExpansionBackend(ExpansionBackend):
             print(f"[graph-expansion:structural] No graph JSON files found in {input_dir}")
             return {"files_expanded": 0, "files_skipped": 0, "traversable_clusters_total": 0}
 
-        files_to_expand = inputs_needing_regeneration(
+        files_to_expand, skipped_files = inputs_needing_regeneration(
             files,
             output_dir,
             current_version=_EXPANSION_VERSION,
             version_key="expansion_version",
         )
-        expand_set = set(files_to_expand)
-        skipped_files = [f for f in files if f not in expand_set]
         files_skipped = len(skipped_files)
         if files_skipped:
             print(
