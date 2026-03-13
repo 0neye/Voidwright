@@ -10,6 +10,7 @@ __all__ = [
     "output_name_for_ship_png",
     "iter_ship_png_files",
     "iter_json_files",
+    "prune_stale_json_outputs",
 ]
 
 
@@ -57,3 +58,30 @@ def iter_json_files(input_dir: Path) -> Iterable[Path]:
     """Return all JSON files under *input_dir* in deterministic order."""
 
     return sorted(path for path in input_dir.rglob("*.json") if path.is_file())
+
+
+def prune_stale_json_outputs(
+    output_dir: Path,
+    expected_names: Iterable[str],
+    *,
+    exclude: Iterable[str] = (),
+) -> int:
+    """Delete JSON files in *output_dir* that are not in *expected_names*.
+
+    Args:
+        output_dir: Directory to prune.
+        expected_names: Filenames that should be kept.
+        exclude: Additional filenames to keep regardless of *expected_names*
+            (e.g. ``["manifest.json"]``).
+
+    Returns:
+        Number of files deleted.
+    """
+
+    keep = set(expected_names) | set(exclude)
+    pruned = 0
+    for path in sorted(output_dir.glob("*.json")):
+        if path.name not in keep:
+            path.unlink()
+            pruned += 1
+    return pruned

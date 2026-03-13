@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
+from common.files import prune_stale_json_outputs
 from common.geometry import PartMeta, infer_meta, load_vanilla_part_geometry, normalize_part_id
 from ship_layout.connectivity import shared_attachment_sides
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
@@ -614,6 +615,13 @@ def generate_all(
             worker_count=worker_count,
             submit_work=submit_graph_work,
         )
+
+    # Prune stale outputs left over from previous runs.
+    pruned_count = prune_stale_json_outputs(
+        output_dir, (f.name for f in files), exclude=["manifest.json"]
+    )
+    if pruned_count:
+        print(f"Pruned {pruned_count} stale graph file(s) from {output_dir}", flush=True)
 
     # Reduce the worker summaries in filename order so manifest counters and
     # sample-output lists remain stable no matter which worker finished first.

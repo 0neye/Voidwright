@@ -8,6 +8,7 @@ from concurrent.futures import as_completed
 from pathlib import Path
 from typing import Sequence
 
+from common.files import prune_stale_json_outputs
 from graph_expansion.base import ExpansionBackend
 from preprocessing.concurrency import (
     add_concurrency_arguments,
@@ -302,6 +303,14 @@ class StructuralExpansionBackend(ExpansionBackend):
             worker_count=worker_count,
             submit_work=submit_expand_work,
         )
+
+        # Prune stale outputs left over from previous runs.
+        pruned_count = prune_stale_json_outputs(output_dir, (f.name for f in files))
+        if pruned_count:
+            print(
+                f"[graph-expansion:structural] Pruned {pruned_count} stale file(s) from {output_dir}",
+                flush=True,
+            )
 
         total_clusters = sum(r["traversable_clusters"] for r in results)
         print(
