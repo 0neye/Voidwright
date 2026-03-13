@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import orjson
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
@@ -170,7 +170,7 @@ def read_output_version(output_dir: Path, version_key: str) -> int | None:
 
     sentinel = output_dir / _VERSION_SENTINEL
     try:
-        data = json.loads(sentinel.read_text(encoding="utf-8"))
+        data = orjson.loads(sentinel.read_bytes())
         val = data.get(version_key)
         if val is not None:
             return int(val)
@@ -194,8 +194,11 @@ def write_output_version(output_dir: Path, version_key: str, version: int) -> No
     sentinel = output_dir / _VERSION_SENTINEL
     data: dict = {}
     try:
-        data = json.loads(sentinel.read_text(encoding="utf-8"))
+        data = orjson.loads(sentinel.read_bytes())
     except Exception:
         pass
     data[version_key] = version
-    sentinel.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    sentinel.write_text(
+        orjson.dumps(data, option=orjson.OPT_INDENT_2).decode() + "\n",
+        encoding="utf-8",
+    )

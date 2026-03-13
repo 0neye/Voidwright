@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import json
 import logging
 from pathlib import Path
 from typing import Sequence
+
+import orjson
 
 from common.files import (
     inputs_needing_regeneration,
@@ -28,7 +29,7 @@ from .relative_coords import apply_relative_coords_transform
 
 __all__ = ["build_parser", "run_extract", "main"]
 
-_EXTRACT_SCHEMA_VERSION = 1
+_EXTRACT_SCHEMA_VERSION = 2
 _EXTRACT_SCHEMA_VERSION_KEY = "extract_schema_version"
 
 
@@ -89,7 +90,10 @@ def _extract_single(source_image_path: str, output_json_path: str) -> tuple[bool
         ship_data = parse_ship_png(source_path)
         ship_data = apply_relative_coords_transform(ship_data)
         destination_path.write_text(
-            json.dumps(ship_data, indent=2, sort_keys=True, ensure_ascii=True),
+            orjson.dumps(
+                ship_data,
+                option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS,
+            ).decode(),
             encoding="utf-8",
         )
         return True, str(source_path), None

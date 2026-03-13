@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import List, Optional
+
+import orjson
 
 from common.geometry import iter_ship_files, load_vanilla_part_geometry
 
@@ -41,8 +42,8 @@ def validate_relative_placement_assumptions(
     largest_part_count = 0
 
     for ship_path in iter_ship_files(input_dir):
-        with ship_path.open(encoding="utf-8") as file_handle:
-            ship_data = json.load(file_handle)
+        with ship_path.open("rb") as file_handle:
+            ship_data = orjson.loads(file_handle.read())
         vanilla_parts = iter_vanilla_parts_from_ship(ship_data, geometry_cache=geometry_cache)
         if len(vanilla_parts) < 2:
             continue

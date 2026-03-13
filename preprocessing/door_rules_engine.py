@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import orjson
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -243,8 +243,8 @@ class DoorPlacementRules:
 
     @classmethod
     def load(cls, path: str | Path) -> "DoorPlacementRules":
-        with Path(path).open() as fh:
-            return cls(json.load(fh))
+        with Path(path).open("rb") as fh:
+            return cls(orjson.loads(fh.read()))
 
     def _validate_with_overrides(self, observation: Optional[PlacementObservation]) -> Optional[ValidationResult]:
         if observation is None:
@@ -698,8 +698,7 @@ def infer_rules_from_corpus(input_dir: Path, output_path: Path, thresholds: Thre
 
     for ship_path in iter_ship_files(input_dir):
         stats["ships_processed"] += 1
-        with ship_path.open() as fh:
-            data = json.load(fh)
+        data = orjson.loads(ship_path.read_bytes())
 
         parts = data.get("Parts", [])
         all_part_ids = [normalize_part_id(part) for part in parts if isinstance(part, dict)]
@@ -800,17 +799,16 @@ def infer_rules_from_corpus(input_dir: Path, output_path: Path, thresholds: Thre
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w") as fh:
-        json.dump(payload, fh, indent=2)
-        fh.write("\n")
+    with output_path.open("wb") as fh:
+        fh.write(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
+        fh.write(b"\n")
     return payload
 
 
 def validate_corpus_against_rules(input_dir: Path, rules: DoorPlacementRules) -> dict:
     stats: Counter = Counter()
     for ship_path in iter_ship_files(input_dir):
-        with ship_path.open() as fh:
-            data = json.load(fh)
+        data = orjson.loads(ship_path.read_bytes())
         parts = data.get("Parts", [])
         summary = rules.validate_doors(parts, data.get("Doors", []))
         stats["ships_total"] += 1

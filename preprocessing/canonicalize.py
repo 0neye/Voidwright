@@ -5,12 +5,13 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
-import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 import re
 from typing import Dict, Iterable, List, Sequence, Tuple
+
+import orjson
 
 from common.files import iter_json_files, prune_stale_json_outputs, read_output_version, write_output_version
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
@@ -68,15 +69,13 @@ def canonicalize_json_text(
             translation-invariant centered `2x` placement metadata
     """
 
-    data = json.loads(text)
+    data = orjson.loads(text)
     if translation_invariant:
         data = canonicalize_for_translation_invariant_hash(data)
-    normalized_text = json.dumps(
+    normalized_text = orjson.dumps(
         data,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+        option=orjson.OPT_SORT_KEYS,
+    ).decode()
     content_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
     return normalized_text, content_hash
 
@@ -143,14 +142,12 @@ def _write_canonical_output(
     output_path = Path(output_json_path)
     representative_path = Path(representative_json_path)
     representative_text = representative_path.read_text(encoding="utf-8")
-    data = json.loads(representative_text)
-    normalized_text = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    ti_text = json.dumps(
+    data = orjson.loads(representative_text)
+    normalized_text = orjson.dumps(data, option=orjson.OPT_SORT_KEYS).decode()
+    ti_text = orjson.dumps(
         canonicalize_for_translation_invariant_hash(data),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+        option=orjson.OPT_SORT_KEYS,
+    ).decode()
     recomputed_hash = hashlib.sha256(ti_text.encode("utf-8")).hexdigest()
     if recomputed_hash != expected_content_hash:
         raise RuntimeError(
@@ -481,7 +478,10 @@ def run_canonicalize(
             _CANONICAL_SCHEMA_VERSION,
         )
 
-    report_json_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    report_json_path.write_text(
+        orjson.dumps(manifest, option=orjson.OPT_INDENT_2 | orjson.OPT_NON_STR_KEYS).decode() + "\n",
+        encoding="utf-8",
+    )
 
     if report_md_path is not None:
         # Keep the markdown report available as an explicit opt-in artifact while
@@ -621,7 +621,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "filename_collision_count",
         )
     }
-    print(json.dumps(summary, indent=2))
+    print(orjson.dumps(summary, option=orjson.OPT_INDENT_2).decode())
     return 0
 
 

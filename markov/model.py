@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import orjson
 from pathlib import Path
 from typing import Dict, Sequence
 
@@ -72,17 +72,17 @@ class RelativeMarkovModel:
     def load(cls, path: str | Path) -> "RelativeMarkovModel":
         """Load a serialized Markov model from disk"""
 
-        with Path(path).open(encoding="utf-8") as file_handle:
-            return cls(json.load(file_handle))
+        with Path(path).open("rb") as file_handle:
+            return cls(orjson.loads(file_handle.read()))
 
     def save(self, path: str | Path) -> None:
         """Write this Markov model payload to disk"""
 
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as file_handle:
-            json.dump(self.payload, file_handle, separators=(",", ":"), sort_keys=True)
-            file_handle.write("\n")
+        with path.open("wb") as file_handle:
+            file_handle.write(orjson.dumps(self.payload, option=orjson.OPT_SORT_KEYS))
+            file_handle.write(b"\n")
 
     def generate(self, config: GenerationConfig, *, seed_parts=None, event_sink=None) -> dict:
         """Generate a ship layout from this model

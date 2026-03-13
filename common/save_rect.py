@@ -15,6 +15,15 @@ from pathlib import Path
 
 from common.geometry import PART_ID_ALIASES, PartRect, load_vanilla_part_geometry
 
+__all__ = [
+    "KNOWN_SAVE_RECTS",
+    "SaveRect",
+    "known_save_rects",
+    "load_live_save_rects",
+    "origin_to_stored_location",
+    "stored_location_to_origin",
+]
+
 
 _ID_RE = re.compile(r"\bID\s*=\s*([^\s/]+)")
 _SAVE_RECT_RE = re.compile(
@@ -195,11 +204,3 @@ def load_live_save_rects(game_root: str | Path) -> dict[str, SaveRect]:
     return results
 
 
-__all__ = [
-    "KNOWN_SAVE_RECTS",
-    "SaveRect",
-    "known_save_rects",
-    "load_live_save_rects",
-    "origin_to_stored_location",
-    "stored_location_to_origin",
-]

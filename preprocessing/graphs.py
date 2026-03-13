@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import as_completed
-import json
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
+
+import orjson
 
 from common.files import inputs_needing_regeneration, iter_json_files, prune_stale_json_outputs, write_output_version
 from common.geometry import PartMeta, infer_meta, load_vanilla_part_geometry, normalize_part_id
@@ -348,8 +349,7 @@ def structural_door_edges(
 def process_ship(ship_path: Path) -> dict:
     """Generate graph artifacts for one extracted or canonical ship JSON file."""
 
-    with ship_path.open(encoding="utf-8") as file_handle:
-        data = json.load(file_handle)
+    data = orjson.loads(ship_path.read_bytes())
 
     coord_transform = data.get("coord_transform", {})
     center_2x = (
@@ -509,8 +509,7 @@ def _read_existing_graph_summary(output_path: Path) -> dict | None:
     None if the file cannot be read or is structurally incomplete.
     """
     try:
-        with output_path.open(encoding="utf-8") as fh:
-            graph_data = json.load(fh)
+        graph_data = orjson.loads(output_path.read_bytes())
         struct_summary = graph_data["graphs"]["A_structural_part_graph"]["summary"]
         validation = graph_data["validation"]
         return {
@@ -546,9 +545,8 @@ def _generate_single_graph(source_json_path: str, output_dir: str) -> dict:
     graph_data = process_ship(ship_path)
     output_file_path = graph_output_dir / ship_path.name
 
-    with output_file_path.open("w", encoding="utf-8") as file_handle:
-        json.dump(graph_data, file_handle, separators=(",", ":"))
-        file_handle.write("\n")
+    with output_file_path.open("wb") as file_handle:
+        file_handle.write(orjson.dumps(graph_data) + b"\n")
 
     struct_summary = graph_data["graphs"]["A_structural_part_graph"]["summary"]
     validation = graph_data["validation"]
@@ -703,9 +701,10 @@ def generate_all(
     if limit is None and files_failed == 0:
         write_output_version(output_dir, _GRAPH_SCHEMA_VERSION_KEY, _GRAPH_SCHEMA_VERSION)
 
-    with (output_dir / "manifest.json").open("w", encoding="utf-8") as file_handle:
-        json.dump(manifest, file_handle, indent=2)
-        file_handle.write("\n")
+    with (output_dir / "manifest.json").open("wb") as file_handle:
+        file_handle.write(
+            orjson.dumps(manifest, option=orjson.OPT_INDENT_2) + b"\n"
+        )
 
     return manifest
 
@@ -754,7 +753,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         workers=args.workers,
         executor=args.executor,
     )
-    print(json.dumps(manifest, indent=2))
+    print(orjson.dumps(manifest, option=orjson.OPT_INDENT_2).decode())
     return 0
 
 

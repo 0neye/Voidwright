@@ -9,6 +9,11 @@ from typing import Dict, List, Optional
 from ship_layout.validator import PlacementValidator
 from visualizer.events import VisualizationPart
 
+from .symmetry import (
+    is_anchor_eligible_mirror_primary as _is_anchor_eligible_mirror_primary,
+    mirror_part as _mirror_part,
+    primary_root_x as _primary_root_x,
+)
 from .types import Coord, END_TOKEN, GenerationConfig, RelativePlacementToken, ShipPart, _config_as_dict
 
 __all__ = ["WeightedSampler", "generate_ship_layout"]
@@ -195,13 +200,6 @@ def generate_ship_layout(model, config: GenerationConfig, *, seed_parts=None, ev
         part_allowlist=allowlist,
         part_requirements=config.part_requirements,
     )
-
-    if mirror_mode:
-        from .symmetry import (
-            is_anchor_eligible_mirror_primary as _is_anchor_eligible_mirror_primary,
-            mirror_part as _mirror_part,
-            primary_root_x as _primary_root_x,
-        )
 
     part_counts: Dict[str, int] = {}
     seed_stats: Optional[dict] = None
