@@ -657,6 +657,10 @@ def generate_all(
             submit_work=submit_graph_work,
         )
 
+    # Number of files that needed generation but failed (no output written).
+    # Captured here before skipped-file summaries are appended to graph_results.
+    files_failed = len(files_to_process) - len(graph_results)
+
     # Prune stale outputs left over from previous runs, but only when processing
     # the full input set.  A limited run is a non-destructive validation subset,
     # so its truncated keep-list must never be used to delete unrelated outputs.
@@ -691,7 +695,11 @@ def generate_all(
     manifest["unknown_part_ids"] = dict(manifest["unknown_part_ids"].most_common())
     manifest["door_stats"] = dict(manifest["door_stats"])
 
-    if limit is None:
+    # Only persist the version sentinel when every file that needed
+    # (re)generation succeeded.  If any file failed its old output may still
+    # be present on disk; writing the sentinel here would tell the next run to
+    # skip that file via mtime comparison, permanently hiding the stale artifact.
+    if limit is None and files_failed == 0:
         write_output_version(output_dir, "schema_version", _GRAPH_SCHEMA_VERSION)
 
     with (output_dir / "manifest.json").open("w", encoding="utf-8") as file_handle:
