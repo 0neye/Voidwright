@@ -61,6 +61,17 @@ def _legacy_to_local_2x(location: Sequence[int], center_2x: Sequence[int] | None
     return [int(location[0]) * 2 - int(center_2x[0]), int(location[1]) * 2 - int(center_2x[1])]
 
 
+def _sorted_local_2x_cells(cells: Set[Coord], center_2x: Sequence[int] | None) -> List[list[int]]:
+    """Return deterministic centered `2x` coordinates for a set of world cells."""
+
+    local_cells = []
+    for cell_x, cell_y in sorted(cells):
+        local_2x = _legacy_to_local_2x((cell_x, cell_y), center_2x)
+        if local_2x is not None:
+            local_cells.append(local_2x)
+    return local_cells
+
+
 def normalize_parts(parts: object, *, center_2x: Sequence[int] | None = None) -> List[dict]:
     """Filter and normalize centered-`2x` ship `Parts` records."""
 
@@ -384,6 +395,7 @@ def process_ship(ship_path: Path) -> dict:
                 "height": record["height"],
             },
             "traversable": record["traversable"],
+            "walkable_cells_2x": _sorted_local_2x_cells(record["walkable_cells"], center_2x),
             "meta_note": record["meta_note"],
         }
         for record in part_records

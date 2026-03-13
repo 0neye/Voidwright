@@ -7,8 +7,7 @@ It is meant for structural and traversability analysis, not exact gameplay simul
 
 The script produces:
 
-- a structural part graph
-- a cell-level connectivity graph
+- a structural part graph (parts as nodes, touching and door edges)
 - a manifest with aggregate counts and unknown-part reporting
 
 ## Inputs and outputs
@@ -50,34 +49,38 @@ Nodes represent individual part instances and include:
 - rotation
 - footprint dimensions and cell count
 - traversability flag
+- exact centered local 2x walkable cells for that part (`walkable_cells_2x`)
 - metadata note about how geometry was derived
 
-Edges represent physical touching between distinct parts and include:
+Edges are of two kinds:
+
+**Touching edges** (`kind = "touching"`) represent physical hull contact between distinct parts and include:
 
 - `source`
 - `target`
 - `kind = "touching"`
 - `shared_sides`
 
-### Cell graph
+**Door edges** (`kind = "door"`) represent explicit door connections between distinct parts and include:
 
-Stored at `graphs.C_cell_graph`.
+- `source`
+- `target`
+- `kind = "door"`
+- `door_index` (index into the top-level `doors` array)
+- `orientation`
 
-Nodes represent occupied cells and include:
+Doors whose cells cannot be resolved to known ship cells are counted as `dangling_door_records`
+and omitted. Doors where both cells belong to the same part are counted as `internal_door_records`
+and omitted.
 
-- `id = "x,y"`
-- coordinates
-- centered local 2x companion coordinate (`center_2x`)
-- `occupied = true`
-- traversability flag
-- owning part indices
+The summary includes `parts`, `touching_edges`, `door_edges`, `door_records`,
+`dangling_door_records`, `internal_door_records`, and `non_structural_door_records`.
 
-Edges are intentionally conservative and include:
+### Top-level doors array
 
-- `kind = "intra_part"` for orthogonal traversal within the same traversable part
-- `kind = "door"` for explicit connections derived from `Doors[].Cell2x` and `Orientation`
-
-The script does not invent free traversal between neighboring separate parts unless a door record exists.
+Normalized door records are preserved at the top level alongside the graph so callers can
+replay or synthesize doors without reverse-engineering them from graph edges alone. Each record
+includes `Cell2x` and `Orientation`.
 
 ## Assumptions
 
@@ -98,7 +101,8 @@ The script does not invent free traversal between neighboring separate parts unl
 
 - Vanilla parts use game-file geometry when available
 - Unknown or non-vanilla parts fall back to regex and name-hint inference
-- Traversability is conservative and meant for analysis, not exact crew routing
+- Structural nodes also preserve exact per-part walkable cells in `walkable_cells_2x`, so the merged graph can drive traversability analysis without a separate cell graph
+- The boolean `traversable` flag is only a coarse summary; exact walkability should come from `walkable_cells_2x`
 
 ## Historical geometry note
 

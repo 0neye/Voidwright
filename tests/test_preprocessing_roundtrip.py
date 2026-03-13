@@ -250,6 +250,7 @@ def test_pipeline_roundtrip_replays_all_vanilla_parts_from_graph(tmp_path: Path)
     extracted_payload = json.loads(extracted_path.read_text(encoding="utf-8"))
     canonical_payload = json.loads(canonical_path.read_text(encoding="utf-8"))
     graph_payload = json.loads(graph_path.read_text(encoding="utf-8"))
+    graph_nodes = graph_payload["graphs"]["A_structural_part_graph"]["nodes"]
 
     assert _sorted_parts_from_relative_payload(extracted_payload) == _sorted_parts(normalized_ship["Parts"])
     assert _sorted_parts_from_relative_payload(canonical_payload) == _sorted_parts(normalized_ship["Parts"])
@@ -258,6 +259,8 @@ def test_pipeline_roundtrip_replays_all_vanilla_parts_from_graph(tmp_path: Path)
     assert pipeline_payload["canonicalization"]["parsed_input_json_files"] == 1
     assert pipeline_payload["canonicalization"]["unique_content_groups"] == 1
     assert pipeline_payload["graphs"]["ships_processed"] == 1
+    assert all("walkable_cells_2x" in node for node in graph_nodes)
+    assert any(node["walkable_cells_2x"] for node in graph_nodes)
     assert graph_payload["graphs"]["A_structural_part_graph"]["summary"]["parts"] == len(
         normalized_ship["Parts"]
     )
@@ -308,6 +311,7 @@ def test_pipeline_roundtrip_replays_doors_from_graph(tmp_path: Path) -> None:
     extracted_payload = json.loads(extracted_path.read_text(encoding="utf-8"))
     canonical_payload = json.loads(canonical_path.read_text(encoding="utf-8"))
     graph_payload = json.loads(graph_path.read_text(encoding="utf-8"))
+    graph_nodes = graph_payload["graphs"]["A_structural_part_graph"]["nodes"]
     generated_payload = graph_to_generated_parts_payload(graph_payload, name="door-graph-replay")
 
     assert pipeline_payload["graphs"]["ships_processed"] == 1
@@ -322,6 +326,7 @@ def test_pipeline_roundtrip_replays_doors_from_graph(tmp_path: Path) -> None:
     assert struct_summary["dangling_door_records"] == 0
     assert struct_summary["internal_door_records"] == 0
     assert struct_summary["non_structural_door_records"] == 0
+    assert all(node["walkable_cells_2x"] for node in graph_nodes)
 
     export_result = export_ship_png(generated_payload, exported_path, validate=True)
     reparsed_payload = parse_ship_png(exported_path)

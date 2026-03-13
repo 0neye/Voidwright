@@ -162,6 +162,7 @@ def test_process_ship_uses_centered_2x_payloads(tmp_path: Path) -> None:
     assert graph_payload["schema_version"] == 5
     assert "location" not in node
     assert node["location_2x"] == [0, 0]
+    assert node["walkable_cells_2x"] == [[0, 0]]
     assert "Cell" not in door
     assert door["Cell2x"] == [0, 2]
 
