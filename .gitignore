@@ -30,6 +30,8 @@ out/
 assets/local/
 tmp*
 tmp*/
+.tmp*
+.tmp/
 
 # Derived rules / model data / exported ship files
 
