@@ -7,7 +7,10 @@ from typing import Any
 from graph_expansion.context import ExpansionContext
 from graph_expansion.passes.base_indexes import BaseIndexesPass
 from graph_expansion.passes.global_ship_info import GlobalShipInfoPass
+from graph_expansion.passes.hull_perimeter import HullPerimeterPass
+from graph_expansion.passes.spatial_zones import SpatialZonesPass, ZONE_NAMES
 from graph_expansion.passes.traversable_clusters import TraversableClustersPass
+from graph_expansion.passes.weapon_groups import WeaponGroupsPass, WEAPON_TYPE_SUBSTRINGS
 
 __all__: list[str] = []
 
@@ -261,3 +264,431 @@ def test_traversable_clusters_pass_records_annotations_and_emits_exact_clusters(
         "traversable_clusters": 1,
         "super_member_edges": 3,
     }
+
+
+# ---------------------------------------------------------------------------
+# Helpers for passes that require location_2x and footprint
+# ---------------------------------------------------------------------------
+
+
+def make_full_node(
+    node_id: int,
+    location_2x: list[int],
+    *,
+    width: int = 1,
+    height: int = 1,
+    rotation: int = 0,
+    part_id: str = "cosmoteer.reactor_small",
+    walkable_cells: list[list[int]] | None = None,
+) -> dict[str, Any]:
+    """Build a structural node that includes location_2x and footprint metadata."""
+
+    node: dict[str, Any] = {
+        "id": node_id,
+        "part_id": part_id,
+        "location_2x": location_2x,
+        "rotation": rotation,
+        "footprint": {"width": width, "height": height, "cell_count": width * height},
+    }
+    if walkable_cells is not None:
+        node["walkable_cells_2x"] = walkable_cells
+    return node
+
+
+def _run_hull_perimeter(nodes: list[dict[str, Any]]) -> tuple[ExpansionContext, dict[str, Any]]:
+    """Run BaseIndexesPass then HullPerimeterPass and return the context and summary."""
+
+    context = ExpansionContext(
+        make_graph_payload(nodes), expansion_name="structural", expansion_version=3
+    )
+    BaseIndexesPass().run(context)
+    summary = HullPerimeterPass().run(context)
+    return context, summary
+
+
+def _run_spatial_zones(nodes: list[dict[str, Any]]) -> tuple[ExpansionContext, dict[str, Any]]:
+    """Run BaseIndexesPass then SpatialZonesPass and return the context and summary."""
+
+    context = ExpansionContext(
+        make_graph_payload(nodes), expansion_name="structural", expansion_version=3
+    )
+    BaseIndexesPass().run(context)
+    summary = SpatialZonesPass().run(context)
+    return context, summary
+
+
+def _run_weapon_groups(nodes: list[dict[str, Any]]) -> tuple[ExpansionContext, dict[str, Any]]:
+    """Run BaseIndexesPass then WeaponGroupsPass and return the context and summary."""
+
+    context = ExpansionContext(
+        make_graph_payload(nodes), expansion_name="structural", expansion_version=3
+    )
+    BaseIndexesPass().run(context)
+    summary = WeaponGroupsPass().run(context)
+    return context, summary
+
+
+# ---------------------------------------------------------------------------
+# HullPerimeterPass
+# ---------------------------------------------------------------------------
+
+
+def test_hull_perimeter_single_node_is_perimeter() -> None:
+    """A lone part with no occupied neighbors must be classified as perimeter."""
+
+    nodes = [make_full_node(0, [0, 0])]
+    context, summary = _run_hull_perimeter(nodes)
+    assert context.get_annotation("hull_role_by_part_id") == {0: "perimeter"}
+    assert summary == {"hull_perimeter_parts": 1, "interior_parts": 0}
+
+
+def test_hull_perimeter_inner_part_of_3x3_grid_is_interior() -> None:
+    """In a fully packed 3×3 grid of 1×1 parts the center node is interior."""
+
+    # 3×3 grid: parts at 2x positions [0,0],[2,0],[4,0] / [0,2],[2,2],[4,2] / [0,4],[2,4],[4,4]
+    coords = [(col * 2, row * 2) for row in range(3) for col in range(3)]
+    nodes = [make_full_node(i, list(c)) for i, c in enumerate(coords)]
+    # Node 4 is at (2,2) — center of the grid.
+    context, summary = _run_hull_perimeter(nodes)
+    role = context.get_annotation("hull_role_by_part_id")
+
+    assert role[4] == "interior"
+    # All eight surrounding nodes must be perimeter.
+    for nid in range(9):
+        if nid != 4:
+            assert role[nid] == "perimeter", f"expected node {nid} to be perimeter"
+    assert summary["hull_perimeter_parts"] == 8
+    assert summary["interior_parts"] == 1
+
+
+def test_hull_perimeter_emits_both_virtual_nodes() -> None:
+    """HullPerimeterPass must always emit both hull_perimeter and interior virtual nodes."""
+
+    nodes = [make_full_node(0, [0, 0])]
+    context, _ = _run_hull_perimeter(nodes)
+    emitted_ids = {n["id"] for n in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]}
+    assert "hull_perimeter" in emitted_ids
+    assert "interior" in emitted_ids
+
+
+def test_hull_perimeter_virtual_node_kinds() -> None:
+    """hull_perimeter node must have kind 'hull_perimeter'; interior node kind 'hull_interior'."""
+
+    nodes = [make_full_node(0, [0, 0])]
+    context, _ = _run_hull_perimeter(nodes)
+    kind_by_id = {
+        n["id"]: n["kind"]
+        for n in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]
+    }
+    assert kind_by_id["hull_perimeter"] == "hull_perimeter"
+    assert kind_by_id["interior"] == "hull_interior"
+
+
+def test_hull_perimeter_cross_edge_kinds() -> None:
+    """Perimeter members use hull_member edges; interior members use interior_member edges."""
+
+    # 3-part row: node 0 and 2 are perimeter, node 1 is sandwiched in x but exposed in y.
+    # Use a 3-part row: [0,0], [2,0], [4,0] — all perimeter (none sandwiched in both axes).
+    # To get an interior node we need a 3×3 grid. Reuse: center node 4.
+    coords = [(col * 2, row * 2) for row in range(3) for col in range(3)]
+    nodes = [make_full_node(i, list(c)) for i, c in enumerate(coords)]
+    context, _ = _run_hull_perimeter(nodes)
+    cross_edges = context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+
+    perimeter_targets = {e["target"] for e in cross_edges if e["kind"] == "hull_member"}
+    interior_targets = {e["target"] for e in cross_edges if e["kind"] == "interior_member"}
+    assert 4 in interior_targets
+    assert 4 not in perimeter_targets
+    assert perimeter_targets == {0, 1, 2, 3, 5, 6, 7, 8}
+
+
+def test_hull_perimeter_node_missing_location_2x_treated_as_interior() -> None:
+    """Nodes without location_2x or footprint must not crash and default to interior."""
+
+    bare_node: dict[str, Any] = {"id": 0, "part_id": "cosmoteer.armor"}
+    context, summary = _run_hull_perimeter([bare_node])
+    role = context.get_annotation("hull_role_by_part_id")
+    assert role.get(0) == "interior"
+    assert summary["interior_parts"] == 1
+
+
+def test_hull_perimeter_summary_updates_expansion_graph_summary() -> None:
+    """hull_perimeter_parts and interior_parts keys must appear in the graph summary."""
+
+    nodes = [make_full_node(0, [0, 0]), make_full_node(1, [2, 0])]
+    context, _ = _run_hull_perimeter(nodes)
+    graph_summary = context.emitted_graphs[_EXPANSION_GRAPH_NAME]["summary"]
+    assert "hull_perimeter_parts" in graph_summary
+    assert "interior_parts" in graph_summary
+    assert graph_summary["hull_perimeter_parts"] + graph_summary["interior_parts"] == 2
+
+
+def test_hull_perimeter_rotation_swaps_footprint_dimensions() -> None:
+    """A 1×2 part rotated 90° should occupy cells as a 2×1 part."""
+
+    # 1×2 part at [0,0] rotation=0: cells (0,0) and (0,2). Width in x = 1, height in y = 2.
+    # Neighbor to the right of (0,0) is (2,0) — unoccupied → perimeter.
+    node = make_full_node(0, [0, 0], width=1, height=2, rotation=0)
+    context, summary = _run_hull_perimeter([node])
+    assert context.get_annotation("hull_role_by_part_id")[0] == "perimeter"
+
+    # 1×2 part at [0,0] rotation=1: swaps to effective 2×1, cells (0,0) and (2,0).
+    node_r = make_full_node(1, [0, 0], width=1, height=2, rotation=1)
+    context_r, _ = _run_hull_perimeter([node_r])
+    assert context_r.get_annotation("hull_role_by_part_id")[1] == "perimeter"
+
+
+# ---------------------------------------------------------------------------
+# SpatialZonesPass
+# ---------------------------------------------------------------------------
+
+
+def test_spatial_zones_all_eight_directions() -> None:
+    """Each compass direction must produce the correct zone for a 1×1 part."""
+
+    # (location_2x, expected_zone) for a 1×1 part (centroid == location_2x).
+    cases: list[tuple[list[int], str]] = [
+        ([4, 0], "zone_e"),
+        ([4, 4], "zone_ne"),
+        ([0, 4], "zone_n"),
+        ([-4, 4], "zone_nw"),
+        ([-4, 0], "zone_w"),
+        ([-4, -4], "zone_sw"),
+        ([0, -4], "zone_s"),
+        ([4, -4], "zone_se"),
+    ]
+    for node_id, (loc, expected_zone) in enumerate(cases):
+        nodes = [make_full_node(node_id, loc)]
+        context, _ = _run_spatial_zones(nodes)
+        annotation = context.get_annotation("zone_by_part_id")
+        assert annotation[node_id] == expected_zone, (
+            f"location_2x={loc} expected {expected_zone}, got {annotation[node_id]}"
+        )
+
+
+def test_spatial_zones_only_populated_zones_emitted() -> None:
+    """Zone virtual nodes must not be emitted for zones with no members."""
+
+    # Two parts both in zone_e.
+    nodes = [make_full_node(0, [4, 0]), make_full_node(1, [8, 0])]
+    context, summary = _run_spatial_zones(nodes)
+    emitted_ids = {n["id"] for n in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]}
+    assert emitted_ids == {"zone_e"}
+    assert summary["spatial_zone_nodes"] == 1
+    assert summary["zone_member_edges"] == 2
+
+
+def test_spatial_zones_emitted_in_zone_names_order() -> None:
+    """Zone nodes must be emitted in the canonical ZONE_NAMES order."""
+
+    # Populate zone_se and zone_e (out of ZONE_NAMES order).
+    nodes = [make_full_node(0, [4, -4]), make_full_node(1, [4, 0])]
+    context, _ = _run_spatial_zones(nodes)
+    emitted = [
+        n["id"]
+        for n in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]
+    ]
+    # zone_e is index 0, zone_se is index 7 — so zone_e must come first.
+    assert emitted.index("zone_e") < emitted.index("zone_se")
+
+
+def test_spatial_zones_annotation_maps_all_nodes() -> None:
+    """zone_by_part_id must contain an entry for every structural node."""
+
+    nodes = [
+        make_full_node(0, [4, 0]),
+        make_full_node(1, [0, 4]),
+        make_full_node(2, [-4, 0]),
+    ]
+    context, _ = _run_spatial_zones(nodes)
+    annotation = context.get_annotation("zone_by_part_id")
+    assert set(annotation.keys()) == {0, 1, 2}
+    assert annotation[0] == "zone_e"
+    assert annotation[1] == "zone_n"
+    assert annotation[2] == "zone_w"
+
+
+def test_spatial_zones_cross_edges_have_zone_member_kind() -> None:
+    """All cross-edges emitted by SpatialZonesPass must have kind 'zone_member'."""
+
+    nodes = [make_full_node(0, [4, 0]), make_full_node(1, [0, 4])]
+    context, _ = _run_spatial_zones(nodes)
+    cross_edges = context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+    assert all(e["kind"] == "zone_member" for e in cross_edges)
+
+
+def test_spatial_zones_mirror_pair_lands_in_opposite_zones() -> None:
+    """A part at +x and its mirror at -x must be in zone_e and zone_w respectively."""
+
+    # Mirrors across x = -0.5 in 1x == x = -1 in 2x.
+    # Part at location_2x=[4,0] → centroid (4,0) → zone_e.
+    # Mirror part at location_2x=[-6,0] → centroid (-6,0) → zone_w.
+    nodes = [make_full_node(0, [4, 0]), make_full_node(1, [-6, 0])]
+    context, _ = _run_spatial_zones(nodes)
+    annotation = context.get_annotation("zone_by_part_id")
+    assert annotation[0] == "zone_e"
+    assert annotation[1] == "zone_w"
+
+
+def test_spatial_zones_node_missing_location_2x_falls_back_to_zone_e() -> None:
+    """A node without location_2x must not raise and must fall back to zone_e."""
+
+    bare: dict[str, Any] = {"id": 0, "part_id": "cosmoteer.armor"}
+    context, summary = _run_spatial_zones([bare])
+    annotation = context.get_annotation("zone_by_part_id")
+    assert annotation[0] == "zone_e"
+    assert summary["spatial_zone_nodes"] == 1
+
+
+def test_spatial_zones_large_part_centroid_shifted() -> None:
+    """A 3×1 part's centroid is offset from its location_2x by (ew-1, 0)."""
+
+    # 3×1 part at location_2x=[0,0], rotation=0: ew=3, eh=1.
+    # centroid_x = 0 + (3-1) = 2, centroid_y = 0. → zone_e.
+    node = make_full_node(0, [0, 0], width=3, height=1)
+    context, _ = _run_spatial_zones([node])
+    assert context.get_annotation("zone_by_part_id")[0] == "zone_e"
+
+    # Same part rotated 90°: ew=1, eh=3. centroid_x=0, centroid_y=2. → zone_n.
+    node_r = make_full_node(1, [0, 0], width=3, height=1, rotation=1)
+    context_r, _ = _run_spatial_zones([node_r])
+    assert context_r.get_annotation("zone_by_part_id")[1] == "zone_n"
+
+
+# ---------------------------------------------------------------------------
+# WeaponGroupsPass
+# ---------------------------------------------------------------------------
+
+
+def test_weapon_groups_cannon_part_detected() -> None:
+    """A part with 'cannon' in its ID must produce a weapon_group_cannon node."""
+
+    nodes = [make_full_node(0, [0, 0], part_id="cosmoteer.cannon_med")]
+    context, summary = _run_weapon_groups(nodes)
+    emitted_ids = {n["id"] for n in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]}
+    assert "weapon_group_cannon" in emitted_ids
+    assert summary == {"weapon_group_nodes": 1, "weapon_member_edges": 1}
+
+
+def test_weapon_groups_non_weapon_part_emits_nothing() -> None:
+    """A non-weapon part must not produce any weapon_group nodes or edges."""
+
+    nodes = [make_full_node(0, [0, 0], part_id="cosmoteer.reactor_small")]
+    context, summary = _run_weapon_groups(nodes)
+    emitted_ids = {n["id"] for n in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]}
+    assert not any(nid.startswith("weapon_group_") for nid in emitted_ids)
+    assert summary == {"weapon_group_nodes": 0, "weapon_member_edges": 0}
+
+
+def test_weapon_groups_multiple_types_emit_separate_group_nodes() -> None:
+    """Distinct weapon types must produce distinct virtual group nodes."""
+
+    nodes = [
+        make_full_node(0, [0, 0], part_id="cosmoteer.cannon_med"),
+        make_full_node(1, [2, 0], part_id="cosmoteer.railgun_launcher"),
+    ]
+    context, summary = _run_weapon_groups(nodes)
+    emitted_ids = {n["id"] for n in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]}
+    assert "weapon_group_cannon" in emitted_ids
+    assert "weapon_group_railgun" in emitted_ids
+    assert summary["weapon_group_nodes"] == 2
+    assert summary["weapon_member_edges"] == 2
+
+
+def test_weapon_groups_first_match_wins_for_ambiguous_part_id() -> None:
+    """When multiple substrings match, the first one in WEAPON_TYPE_SUBSTRINGS wins."""
+
+    # 'cannon' comes before 'railgun' in the list.
+    # Construct a synthetic part ID that contains both.
+    nodes = [make_full_node(0, [0, 0], part_id="mod.railgun_cannon_hybrid")]
+    context, _ = _run_weapon_groups(nodes)
+    annotation = context.get_annotation("weapon_group_by_part_id")
+    # 'cannon' is earlier in WEAPON_TYPE_SUBSTRINGS than 'railgun'.
+    cannon_idx = WEAPON_TYPE_SUBSTRINGS.index("cannon")
+    railgun_idx = WEAPON_TYPE_SUBSTRINGS.index("railgun")
+    assert cannon_idx < railgun_idx
+    assert annotation[0] == "cannon"
+
+
+def test_weapon_groups_group_nodes_emitted_in_substring_priority_order() -> None:
+    """Weapon group nodes must appear in WEAPON_TYPE_SUBSTRINGS order, not part order."""
+
+    # Add railgun part first, then cannon.
+    nodes = [
+        make_full_node(0, [0, 0], part_id="cosmoteer.railgun_launcher"),
+        make_full_node(1, [2, 0], part_id="cosmoteer.cannon_med"),
+    ]
+    context, _ = _run_weapon_groups(nodes)
+    emitted_ids = [n["id"] for n in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]]
+    cannon_pos = emitted_ids.index("weapon_group_cannon")
+    railgun_pos = emitted_ids.index("weapon_group_railgun")
+    assert cannon_pos < railgun_pos
+
+
+def test_weapon_groups_member_count_field_matches_members() -> None:
+    """The member_count field on a weapon_group node must equal its actual membership."""
+
+    nodes = [
+        make_full_node(0, [0, 0], part_id="cosmoteer.cannon_med"),
+        make_full_node(1, [2, 0], part_id="cosmoteer.cannon_heavy"),
+        make_full_node(2, [4, 0], part_id="cosmoteer.cannon_turret"),
+    ]
+    context, _ = _run_weapon_groups(nodes)
+    cannon_node = next(
+        n for n in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]
+        if n["id"] == "weapon_group_cannon"
+    )
+    assert cannon_node["member_count"] == 3
+
+
+def test_weapon_groups_cross_edges_in_ascending_id_order() -> None:
+    """weapon_member cross-edges must target node IDs in ascending order."""
+
+    # IDs 5 and 3: we expect edges to 3 then 5.
+    nodes = [
+        make_full_node(5, [0, 0], part_id="cosmoteer.cannon_heavy"),
+        make_full_node(3, [2, 0], part_id="cosmoteer.cannon_med"),
+    ]
+    context, _ = _run_weapon_groups(nodes)
+    targets = [
+        e["target"]
+        for e in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+        if e["kind"] == "weapon_member"
+    ]
+    assert targets == sorted(targets)
+
+
+def test_weapon_groups_annotation_maps_node_id_to_type() -> None:
+    """weapon_group_by_part_id must map integer node IDs to their weapon type string."""
+
+    nodes = [
+        make_full_node(7, [0, 0], part_id="cosmoteer.railgun_launcher"),
+        make_full_node(2, [2, 0], part_id="cosmoteer.cannon_med"),
+    ]
+    context, _ = _run_weapon_groups(nodes)
+    annotation = context.get_annotation("weapon_group_by_part_id")
+    assert annotation[7] == "railgun"
+    assert annotation[2] == "cannon"
+
+
+def test_weapon_groups_summary_in_expansion_graph_summary() -> None:
+    """weapon_group_nodes and weapon_member_edges must appear in the graph summary."""
+
+    nodes = [make_full_node(0, [0, 0], part_id="cosmoteer.disruptor")]
+    context, _ = _run_weapon_groups(nodes)
+    graph_summary = context.emitted_graphs[_EXPANSION_GRAPH_NAME]["summary"]
+    assert graph_summary["weapon_group_nodes"] == 1
+    assert graph_summary["weapon_member_edges"] == 1
+
+
+def test_weapon_groups_weapon_node_has_weapon_type_field() -> None:
+    """Each weapon_group virtual node must carry a 'weapon_type' field."""
+
+    nodes = [make_full_node(0, [0, 0], part_id="cosmoteer.missile_launcher_small")]
+    context, _ = _run_weapon_groups(nodes)
+    missile_node = next(
+        n for n in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]
+        if n["id"] == "weapon_group_missile_launcher"
+    )
+    assert missile_node["weapon_type"] == "missile_launcher"
+    assert missile_node["kind"] == "weapon_group"

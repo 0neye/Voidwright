@@ -396,7 +396,7 @@ def test_enrich_graph_summary_counts_are_consistent() -> None:
 def test_enrich_graph_expansion_metadata() -> None:
     result = _enrich_graph(make_graph_data([make_node(0, part_id=_GENERIC_ID)]))
     assert result["expansion"]["backend"] == "structural"
-    assert result["expansion"]["version"] == 2
+    assert result["expansion"]["version"] == 3
     assert "X_expansion_structural" in result["expansion"]["graphs_added"]
     pass_names = [p["name"] for p in result["expansion"]["passes"]]
     assert "base_indexes" in pass_names

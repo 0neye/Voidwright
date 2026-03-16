@@ -127,7 +127,7 @@ python scripts/download_ship_images.py --output-dir downloaded_ships --verbose
 The codebase is split into purpose-specific packages:
 
 - **`preprocessing/`** - four-stage pipeline (extract -> canonicalize -> graphs -> door-rules). Each stage is its own submodule with a `main(argv)` and `build_parser()`. `pipeline.py` orchestrates all stages.
-- **`graph_expansion/`** - structural graph enrichment implemented as a pass-oriented pipeline. `structural.py` orchestrates an ordered list of passes under `graph_expansion/passes/` that add a global ship-info virtual node and traversable-cluster super-nodes (with cross-edges) to preprocessing graph JSON.
+- **`graph_expansion/`** - structural graph enrichment implemented as a pass-oriented pipeline. `structural.py` orchestrates an ordered list of passes under `graph_expansion/passes/` that add virtual nodes and cross-edges to preprocessing graph JSON: a global ship-info node, traversable-cluster super-nodes, hull-perimeter/interior classification nodes, 8-sector spatial zone nodes, and weapon-group nodes.
 - **`training/`** - backend-agnostic router. `router.py` resolves backend names; each backend under `training/backends/<name>/` registers its own CLI parser via `register_build_parser` / `register_validate_parser`.
 - **`generator/`** - backend-agnostic generation router. `generator/backends/markov/backend.py` wires CLI options; `generator/backends/markov/export.py` handles `.ship.png` encoding and roundtrip validation.
 - **`markov/`** - shared Markov internals used by both training and generation: `model.py`, `generation.py`, `inputs.py`, and related helpers. `symmetry.py` is a backward-compat shim; mirror computation lives in `ship_layout/symmetry.py`.
@@ -213,7 +213,7 @@ stateful per-run `ExpansionContext`:
   now orchestrates an ordered list of passes instead of performing all
   enrichment inline
 
-Phase-1 structural passes:
+Structural passes (in pipeline order):
 
 - `BaseIndexesPass` builds common structural graph indexes and stores them in
   `ExpansionContext.caches`
@@ -222,6 +222,15 @@ Phase-1 structural passes:
 - `TraversableClustersPass` computes traversable clusters, stores cluster
   annotations, and emits traversable-cluster super-nodes with `super_member`
   cross-edges
+- `HullPerimeterPass` classifies each part as perimeter or interior using 2x
+  footprint cell neighbor checks; emits `hull_perimeter` / `interior` virtual
+  nodes with `hull_member` / `interior_member` cross-edges
+- `SpatialZonesPass` assigns each part to one of eight compass-direction zones
+  by centroid angle from the 2x origin; emits zone virtual nodes with
+  `zone_member` cross-edges; mirrored parts land in opposing zone pairs
+- `WeaponGroupsPass` detects weapon parts by `part_id` substring matching,
+  groups them by type, and emits `weapon_group_<type>` virtual nodes with
+  `weapon_member` cross-edges
 
 Contributor guidelines for graph expansion:
 

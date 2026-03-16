@@ -24,6 +24,9 @@ from graph_expansion.passes.traversable_clusters import (
     build_traversable_clusters,
     is_corridor_like,
 )
+from graph_expansion.passes.hull_perimeter import HullPerimeterPass
+from graph_expansion.passes.spatial_zones import SpatialZonesPass
+from graph_expansion.passes.weapon_groups import WeaponGroupsPass
 from preprocessing.concurrency import (
     add_concurrency_arguments,
     resolve_worker_count,
@@ -46,12 +49,15 @@ __all__ = [
 ]
 
 EXPANSION_NAME = "structural"
-EXPANSION_VERSION = 2
+EXPANSION_VERSION = 3
 EXPANSION_GRAPH_NAME = "X_expansion_structural"
 DEFAULT_PASSES: tuple[type[ExpansionPass], ...] = (
     BaseIndexesPass,
     GlobalShipInfoPass,
     TraversableClustersPass,
+    HullPerimeterPass,
+    SpatialZonesPass,
+    WeaponGroupsPass,
 )
 
 

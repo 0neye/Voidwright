@@ -70,7 +70,10 @@ graph_expansion/
     ├── base.py
     ├── base_indexes.py
     ├── global_ship_info.py
-    └── traversable_clusters.py
+    ├── hull_perimeter.py
+    ├── spatial_zones.py
+    ├── traversable_clusters.py
+    └── weapon_groups.py
 ```
 
 ### `graph_expansion/structural.py`
@@ -99,7 +102,7 @@ It also provides deterministic finalization of the enriched payload.
 
 Each pass is a small unit of enrichment logic implementing `ExpansionPass` from `passes/base.py`.
 
-Current phase-1 passes:
+Current structural passes:
 
 - `BaseIndexesPass`
   - builds common structural graph lookups once
@@ -114,6 +117,24 @@ Current phase-1 passes:
   - stores transient annotations like `traversable_clusters` and `cluster_by_part_id`
   - emits traversable-cluster super-nodes and `super_member` cross-edges
 
+- `HullPerimeterPass`
+  - classifies each part as `perimeter` (has at least one unoccupied 2x neighbor cell) or `interior`
+  - stores `hull_role_by_part_id` annotation
+  - emits `hull_perimeter` and `interior` virtual nodes with `hull_member` / `interior_member` cross-edges
+
+- `SpatialZonesPass`
+  - computes each part's centroid from `location_2x` and rotation-adjusted footprint dimensions
+  - assigns parts to one of eight compass-direction zones (`zone_e`, `zone_ne`, … `zone_se`) by angle from the 2x origin
+  - stores `zone_by_part_id` annotation
+  - emits one virtual zone node per populated zone with `zone_member` cross-edges
+  - mirrored parts naturally land in opposing zone pairs, enabling downstream models to learn left-right symmetry as a co-occurrence pattern
+
+- `WeaponGroupsPass`
+  - detects weapon parts by matching `part_id` against an ordered substring vocabulary (`cannon`, `railgun`, `missile_launcher`, …)
+  - groups them by weapon type (first match wins)
+  - stores `weapon_group_by_part_id` annotation
+  - emits `weapon_group_<type>` virtual nodes with `weapon_member` cross-edges
+
 ## Expansion flow
 
 At a high level:
@@ -124,6 +145,9 @@ source graph JSON
   -> BaseIndexesPass
   -> GlobalShipInfoPass
   -> TraversableClustersPass
+  -> HullPerimeterPass
+  -> SpatialZonesPass
+  -> WeaponGroupsPass
   -> finalize enriched JSON
 ```
 
@@ -142,11 +166,18 @@ That graph contains:
 - `nodes`
   - one `global_ship_info` node
   - zero or more `traversable_cluster` nodes
+  - one `hull_perimeter` node and one `interior` node
+  - zero or more `spatial_zone` nodes (one per populated compass-direction zone)
+  - zero or more `weapon_group` nodes (one per detected weapon type)
 - `cross_edges`
-  - `global_member` edges from the global node to structural nodes
+  - `global_member` edges from the global node to every structural node
   - `super_member` edges from cluster nodes to their member structural nodes
+  - `hull_member` edges from the `hull_perimeter` node to perimeter parts
+  - `interior_member` edges from the `interior` node to interior parts
+  - `zone_member` edges from each zone node to its member structural nodes
+  - `weapon_member` edges from each weapon-group node to its member structural nodes
 - `summary`
-  - compact counts such as global-node count, cluster count, and edge totals
+  - compact counts for all of the above: cluster count, hull-perimeter/interior counts, spatial-zone and weapon-group node/edge counts
 
 The top-level payload also gets an `expansion` metadata block like:
 
@@ -154,12 +185,15 @@ The top-level payload also gets an `expansion` metadata block like:
 {
   "expansion": {
     "backend": "structural",
-    "version": 2,
+    "version": 3,
     "graphs_added": ["X_expansion_structural"],
     "passes": [
       {"name": "base_indexes", "version": 1},
       {"name": "global_ship_info", "version": 1},
-      {"name": "traversable_clusters", "version": 1}
+      {"name": "traversable_clusters", "version": 1},
+      {"name": "hull_perimeter", "version": 1},
+      {"name": "spatial_zones", "version": 1},
+      {"name": "weapon_groups", "version": 1}
     ]
   }
 }
