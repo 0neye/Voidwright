@@ -18,8 +18,9 @@ __all__ = ["HullPerimeterPass"]
 def _compute_footprint_cells_2x(node: Mapping[str, Any]) -> Set[Tuple[int, int]]:
     """Compute the set of 2x-grid footprint cells occupied by *node*.
 
-    The computation uses the node ``location_2x``, ``rotation``, and
-    ``footprint`` fields as described in the hull-perimeter specification.
+    Uses ``location_2x`` and ``footprint`` width/height from the node.
+    The stored dimensions are already rotation-specific (set by preprocessing),
+    so no rotation-based swap is applied here.
     """
 
     location_2x = node.get("location_2x")
@@ -33,21 +34,14 @@ def _compute_footprint_cells_2x(node: Mapping[str, Any]) -> Set[Tuple[int, int]]
         return set()
 
     lx, ly = int(location_2x[0]), int(location_2x[1])
-    rotation = int(node.get("rotation", 0)) % 4
 
-    width = int(footprint.get("width", 0))
-    height = int(footprint.get("height", 0))
-    if width <= 0 or height <= 0:
+    # footprint.width/height are stored in rotation-specific form by
+    # preprocessing (infer_meta returns rotation-specific RotationGeometry
+    # dimensions), so no swap is needed here.
+    effective_width = int(footprint.get("width", 0))
+    effective_height = int(footprint.get("height", 0))
+    if effective_width <= 0 or effective_height <= 0:
         return set()
-
-    # Determine effective dimensions after rotation; 90-degree rotations swap
-    # width and height in the 2x grid
-    if rotation % 2 == 0:
-        effective_width = width
-        effective_height = height
-    else:
-        effective_width = height
-        effective_height = width
 
     cells: Set[Tuple[int, int]] = set()
     # Enumerate all footprint cells in the centered-2x frame

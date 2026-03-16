@@ -54,20 +54,14 @@ def _compute_zone_for_node(node: Mapping[str, Any]) -> str:
         width = int(footprint.get("width", 1)) or 1
         height = int(footprint.get("height", 1)) or 1
 
-    rotation = int(node.get("rotation", 0)) % 4
-
-    # Rotation-adjusted effective dimensions
-    if rotation % 2 == 0:
-        effective_width = width
-        effective_height = height
-    else:
-        effective_width = height
-        effective_height = width
+    # footprint.width/height are stored in rotation-specific form by
+    # preprocessing (infer_meta returns rotation-specific RotationGeometry
+    # dimensions), so no rotation-based swap is needed here.
 
     # Centroid in 2x coordinates. Coordinates are already relative to the
     # origin at (0, 0) in the structural graph frame.
-    centroid_x = lx + (effective_width - 1)
-    centroid_y = ly + (effective_height - 1)
+    centroid_x = lx + (width - 1)
+    centroid_y = ly + (height - 1)
 
     # Compute angle and map it into one of eight equal sectors.
     dx = centroid_x

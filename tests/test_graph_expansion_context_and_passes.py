@@ -544,8 +544,9 @@ def test_spatial_zones_large_part_centroid_shifted() -> None:
     context, _ = _run_spatial_zones([node])
     assert context.get_annotation("zone_by_part_id")[0] == "zone_e"
 
-    # Same part rotated 90°: ew=1, eh=3. centroid_x=0, centroid_y=2. → zone_n.
-    node_r = make_full_node(1, [0, 0], width=3, height=1, rotation=1)
+    # Same part rotated 90°: preprocessing stores already-rotated dims width=1, height=3.
+    # centroid_x = 0 + (1-1) = 0, centroid_y = 0 + (3-1) = 2. → zone_n.
+    node_r = make_full_node(1, [0, 0], width=1, height=3, rotation=1)
     context_r, _ = _run_spatial_zones([node_r])
     assert context_r.get_annotation("zone_by_part_id")[1] == "zone_n"
 
