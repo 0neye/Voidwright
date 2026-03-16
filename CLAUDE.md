@@ -163,6 +163,9 @@ Co-Authored-By: <model-name>
 
 After making a major change or refactor and running appropriate tests, please update the AGENTS.md and CLAUDE.md as well as any applicable docs, when you deem it appropriate. If unsure, prompt the user.
 
+## Temp files
+
+If you need to write a temporary script or generate a temp output of some kind, the file name should start with either "TEMP" or ".tmp".
 
 ## Important conventions
 
