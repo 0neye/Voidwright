@@ -9,12 +9,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, MutableMapping
 
-from graph_expansion.context import ExpansionContext
+from graph_expansion.context import EXPANSION_GRAPH_NAME, STRUCTURAL_GRAPH_NAME, ExpansionContext
 from graph_expansion.passes.base import ExpansionPass
 
 __all__ = ["GlobalShipInfoPass"]
-
-_EXPANSION_GRAPH_NAME = "X_expansion_structural"
 
 
 class GlobalShipInfoPass(ExpansionPass):
@@ -23,17 +21,18 @@ class GlobalShipInfoPass(ExpansionPass):
     name = "global_ship_info"
     version = 1
     requires = ("base_indexes",)
-    provides: tuple[str, ...] = ()
 
     def run(self, context: ExpansionContext) -> Mapping[str, Any]:
         """Emit the global ship-info node and cross-edges."""
 
         ship_info = context.source.get("ship", {}) or {}
 
-        structural_graph = context.get_source_graph("A_structural_part_graph")
-        structural_nodes = list(structural_graph.get("nodes", []))
+        structural_nodes = context.caches.get("structural_nodes")
+        if structural_nodes is None:
+            structural_graph = context.get_source_graph(STRUCTURAL_GRAPH_NAME)
+            structural_nodes = list(structural_graph.get("nodes", []))
 
-        expansion_graph = context.ensure_emitted_graph(_EXPANSION_GRAPH_NAME)
+        expansion_graph = context.ensure_emitted_graph(EXPANSION_GRAPH_NAME)
         nodes: List[MutableMapping[str, Any]] = expansion_graph["nodes"]
         cross_edges: List[MutableMapping[str, Any]] = expansion_graph["cross_edges"]
 
@@ -45,25 +44,24 @@ class GlobalShipInfoPass(ExpansionPass):
         global_edges: List[Dict[str, Any]] = [
             {
                 "source": "global_ship",
-                "source_graph": _EXPANSION_GRAPH_NAME,
+                "source_graph": EXPANSION_GRAPH_NAME,
                 "target": node["id"],
-                "target_graph": "A_structural_part_graph",
+                "target_graph": STRUCTURAL_GRAPH_NAME,
                 "kind": "global_member",
             }
             for node in structural_nodes
         ]
 
-        nodes.insert(0, global_node)
-        cross_edges[0:0] = global_edges
+        nodes.append(global_node)
+        cross_edges.extend(global_edges)
 
-        summary = expansion_graph.setdefault("summary", {})
-        summary.setdefault("global_ship_nodes", 0)
-        summary.setdefault("global_member_edges", 0)
-        summary["global_ship_nodes"] += 1
-        summary["global_member_edges"] += len(global_edges)
+        context.increment_summary(
+            EXPANSION_GRAPH_NAME,
+            global_ship_nodes=1,
+            global_member_edges=len(global_edges),
+        )
 
         return {
             "global_nodes": 1,
             "global_member_edges": len(global_edges),
         }
-

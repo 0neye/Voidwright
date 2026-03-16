@@ -12,10 +12,11 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Mapping, MutableMapping, Sequence
 
-from graph_expansion.context import ExpansionContext
+from graph_expansion.context import EXPANSION_GRAPH_NAME, STRUCTURAL_GRAPH_NAME, ExpansionContext
 from graph_expansion.passes.base import ExpansionPass
 
 __all__ = ["SpatialZonesPass", "ZONE_NAMES"]
+
 
 ZONE_NAMES: List[str] = [
     "zone_e",
@@ -27,8 +28,6 @@ ZONE_NAMES: List[str] = [
     "zone_s",
     "zone_se",
 ]
-
-_EXPANSION_GRAPH_NAME = "X_expansion_structural"
 
 
 def _compute_zone_for_node(node: Mapping[str, Any]) -> str:
@@ -104,7 +103,7 @@ class SpatialZonesPass(ExpansionPass):
         # available, falling back to a direct graph read otherwise.
         structural_nodes = context.caches.get("structural_nodes")
         if structural_nodes is None:
-            structural_graph = context.get_source_graph("A_structural_part_graph")
+            structural_graph = context.get_source_graph(STRUCTURAL_GRAPH_NAME)
             structural_nodes = list(structural_graph.get("nodes", []))
 
         # Build mapping from part id to zone label and from zone label
@@ -127,7 +126,7 @@ class SpatialZonesPass(ExpansionPass):
         # Materialize zone virtual nodes and cross-edges only for zones
         # that have at least one structural member. Zones are emitted in
         # deterministic order.
-        expansion_graph = context.ensure_emitted_graph(_EXPANSION_GRAPH_NAME)
+        expansion_graph = context.ensure_emitted_graph(EXPANSION_GRAPH_NAME)
         nodes: List[MutableMapping[str, Any]] = expansion_graph["nodes"]
         cross_edges: List[MutableMapping[str, Any]] = expansion_graph["cross_edges"]
 
@@ -135,7 +134,7 @@ class SpatialZonesPass(ExpansionPass):
         zone_member_edges: List[Dict[str, Any]] = []
 
         for zone_name in ZONE_NAMES:
-            member_ids = members_by_zone.get(zone_name)
+            member_ids = members_by_zone[zone_name]
             if not member_ids:
                 continue
 
@@ -153,9 +152,9 @@ class SpatialZonesPass(ExpansionPass):
                 zone_member_edges.append(
                     {
                         "source": zone_name,
-                        "source_graph": _EXPANSION_GRAPH_NAME,
+                        "source_graph": EXPANSION_GRAPH_NAME,
                         "target": member_id,
-                        "target_graph": "A_structural_part_graph",
+                        "target_graph": STRUCTURAL_GRAPH_NAME,
                         "kind": "zone_member",
                     }
                 )
@@ -163,12 +162,11 @@ class SpatialZonesPass(ExpansionPass):
         nodes.extend(zone_nodes)
         cross_edges.extend(zone_member_edges)
 
-        # Update the expansion-graph summary with spatial zone counts.
-        summary = expansion_graph.setdefault("summary", {})
-        summary.setdefault("spatial_zone_nodes", 0)
-        summary.setdefault("zone_member_edges", 0)
-        summary["spatial_zone_nodes"] += len(zone_nodes)
-        summary["zone_member_edges"] += len(zone_member_edges)
+        context.increment_summary(
+            EXPANSION_GRAPH_NAME,
+            spatial_zone_nodes=len(zone_nodes),
+            zone_member_edges=len(zone_member_edges),
+        )
 
         return {
             "spatial_zone_nodes": len(zone_nodes),

@@ -11,7 +11,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, MutableMapping
 
-__all__ = ["ExpansionContext", "PassReport"]
+__all__ = [
+    "EXPANSION_GRAPH_NAME",
+    "ExpansionContext",
+    "PassReport",
+    "STRUCTURAL_GRAPH_NAME",
+]
+
+#: Canonical name of the structural source graph in the preprocessing payload.
+STRUCTURAL_GRAPH_NAME = "A_structural_part_graph"
+#: Canonical name of the emitted structural expansion graph.
+EXPANSION_GRAPH_NAME = "X_expansion_structural"
 
 
 @dataclass(slots=True)
@@ -165,6 +175,17 @@ class ExpansionContext:
             graph.setdefault("cross_edges", [])
             graph.setdefault("summary", {})
         return graph
+
+    def increment_summary(self, graph_name: str, **counts: int) -> None:
+        """Increment named counter(s) in an emitted graph's summary block.
+
+        Creates missing keys at zero before incrementing.  The graph is
+        created via :meth:`ensure_emitted_graph` if it does not yet exist.
+        """
+
+        summary = self.ensure_emitted_graph(graph_name)["summary"]
+        for key, value in counts.items():
+            summary[key] = summary.get(key, 0) + value
 
     # ------------------------------------------------------------------
     # Pass reports

@@ -15,7 +15,7 @@ from typing import Sequence
 import orjson
 
 from common.files import inputs_needing_regeneration, prune_stale_json_outputs, write_output_version
-from graph_expansion.context import ExpansionContext
+from graph_expansion.context import EXPANSION_GRAPH_NAME, ExpansionContext
 from graph_expansion.passes.base_indexes import BaseIndexesPass
 from graph_expansion.passes.base import ExpansionPass
 from graph_expansion.passes.global_ship_info import GlobalShipInfoPass
@@ -50,7 +50,6 @@ __all__ = [
 
 EXPANSION_NAME = "structural"
 EXPANSION_VERSION = 3
-EXPANSION_GRAPH_NAME = "X_expansion_structural"
 DEFAULT_PASSES: tuple[type[ExpansionPass], ...] = (
     BaseIndexesPass,
     GlobalShipInfoPass,

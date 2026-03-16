@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from graph_expansion.context import ExpansionContext
+from graph_expansion.context import EXPANSION_GRAPH_NAME, STRUCTURAL_GRAPH_NAME, ExpansionContext
 from graph_expansion.passes.base_indexes import BaseIndexesPass
 from graph_expansion.passes.global_ship_info import GlobalShipInfoPass
 from graph_expansion.passes.hull_perimeter import HullPerimeterPass
@@ -15,8 +15,8 @@ from graph_expansion.passes.weapon_groups import WeaponGroupsPass, WEAPON_TYPE_S
 __all__: list[str] = []
 
 
-_EXPANSION_GRAPH_NAME = "X_expansion_structural"
-_STRUCTURAL_GRAPH_NAME = "A_structural_part_graph"
+_EXPANSION_GRAPH_NAME = EXPANSION_GRAPH_NAME
+_STRUCTURAL_GRAPH_NAME = STRUCTURAL_GRAPH_NAME
 _CORRIDOR_ID = "cosmoteer.corridor"
 _GENERIC_ID = "cosmoteer.reactor_small"
 
@@ -25,16 +25,12 @@ def make_node(
     node_id: int,
     walkable_cells: list[list[int]] | None = None,
     part_id: str = "",
-    *,
-    is_corridor_like: bool = False,
 ) -> dict[str, Any]:
     """Build a minimal structural node dict."""
 
     node: dict[str, Any] = {"id": node_id, "part_id": part_id}
     if walkable_cells is not None:
         node["walkable_cells_2x"] = walkable_cells
-    if is_corridor_like:
-        node["is_corridor_like"] = True
     return node
 
 
@@ -145,7 +141,7 @@ def test_base_indexes_pass_populates_expected_caches_and_summary() -> None:
     """BaseIndexesPass should cache core structural lookups exactly once."""
 
     nodes = [
-        make_node(0, [[0, 0]], _CORRIDOR_ID, is_corridor_like=True),
+        make_node(0, [[0, 0]], _CORRIDOR_ID),
         make_node(1, part_id=_GENERIC_ID),
         make_node(2, [[10, 10]], _GENERIC_ID),
     ]
@@ -168,7 +164,6 @@ def test_base_indexes_pass_populates_expected_caches_and_summary() -> None:
     assert context.caches["structural_edges"] == edges
     assert context.caches["node_by_id"] == {0: nodes[0], 1: nodes[1], 2: nodes[2]}
     assert context.caches["walkable_part_ids"] == {0, 2}
-    assert context.caches["corridor_like_part_ids"] == {0}
     assert context.caches["door_edges"] == [edges[0]]
     assert context.caches["touching_edges"] == [edges[1]]
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, MutableMapping, Sequence, Set
 
-from graph_expansion.context import ExpansionContext
+from graph_expansion.context import EXPANSION_GRAPH_NAME, STRUCTURAL_GRAPH_NAME, ExpansionContext
 from graph_expansion.passes.base import ExpansionPass
 
 __all__ = [
@@ -23,7 +23,6 @@ __all__ = [
 ]
 
 _CORRIDOR_LIKE_SUBSTRINGS: tuple[str, ...] = ("corridor", "walkway")
-_EXPANSION_GRAPH_NAME = "X_expansion_structural"
 
 
 def is_corridor_like(part_id: str) -> bool:
@@ -129,7 +128,7 @@ class TraversableClustersPass(ExpansionPass):
         structural_nodes = context.caches.get("structural_nodes")
         structural_edges = context.caches.get("structural_edges")
         if structural_nodes is None or structural_edges is None:
-            structural_graph = context.get_source_graph("A_structural_part_graph")
+            structural_graph = context.get_source_graph(STRUCTURAL_GRAPH_NAME)
             structural_nodes = list(structural_graph.get("nodes", []))
             structural_edges = list(structural_graph.get("edges", []))
 
@@ -142,7 +141,7 @@ class TraversableClustersPass(ExpansionPass):
                 cluster_by_part_id[member_id] = cluster_index
         context.set_annotation("cluster_by_part_id", cluster_by_part_id)
 
-        expansion_graph = context.ensure_emitted_graph(_EXPANSION_GRAPH_NAME)
+        expansion_graph = context.ensure_emitted_graph(EXPANSION_GRAPH_NAME)
         nodes: List[MutableMapping[str, Any]] = expansion_graph["nodes"]
         cross_edges: List[MutableMapping[str, Any]] = expansion_graph["cross_edges"]
 
@@ -161,9 +160,9 @@ class TraversableClustersPass(ExpansionPass):
                 cluster_cross_edges.append(
                     {
                         "source": cluster_id,
-                        "source_graph": _EXPANSION_GRAPH_NAME,
+                        "source_graph": EXPANSION_GRAPH_NAME,
                         "target": member_id,
-                        "target_graph": "A_structural_part_graph",
+                        "target_graph": STRUCTURAL_GRAPH_NAME,
                         "kind": "super_member",
                     }
                 )
@@ -171,11 +170,11 @@ class TraversableClustersPass(ExpansionPass):
         nodes.extend(cluster_nodes)
         cross_edges.extend(cluster_cross_edges)
 
-        summary = expansion_graph.setdefault("summary", {})
-        summary.setdefault("traversable_clusters", 0)
-        summary.setdefault("super_member_edges", 0)
-        summary["traversable_clusters"] += len(clusters)
-        summary["super_member_edges"] += len(cluster_cross_edges)
+        context.increment_summary(
+            EXPANSION_GRAPH_NAME,
+            traversable_clusters=len(clusters),
+            super_member_edges=len(cluster_cross_edges),
+        )
 
         return {
             "cluster_count": len(clusters),

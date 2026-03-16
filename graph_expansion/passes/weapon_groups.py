@@ -9,12 +9,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, MutableMapping
 
-from graph_expansion.context import ExpansionContext
+from graph_expansion.context import EXPANSION_GRAPH_NAME, STRUCTURAL_GRAPH_NAME, ExpansionContext
 from graph_expansion.passes.base import ExpansionPass
 
 __all__ = ["WeaponGroupsPass", "WEAPON_TYPE_SUBSTRINGS"]
-
-_EXPANSION_GRAPH_NAME = "X_expansion_structural"
 
 # Ordered list of substrings used to detect weapon types from part IDs.
 WEAPON_TYPE_SUBSTRINGS: List[str] = [
@@ -72,7 +70,7 @@ class WeaponGroupsPass(ExpansionPass):
         # Prefer cached structural nodes produced by earlier passes.
         structural_nodes = context.caches.get("structural_nodes")
         if structural_nodes is None:
-            structural_graph = context.get_source_graph("A_structural_part_graph")
+            structural_graph = context.get_source_graph(STRUCTURAL_GRAPH_NAME)
             structural_nodes = list(structural_graph.get("nodes", []))
 
         # Build mapping from weapon type to sorted list of member node IDs.
@@ -100,7 +98,7 @@ class WeaponGroupsPass(ExpansionPass):
         context.set_annotation("weapon_group_by_part_id", weapon_group_by_part_id)
 
         # Acquire the expansion graph and hooks for nodes and cross-edges.
-        expansion_graph = context.ensure_emitted_graph(_EXPANSION_GRAPH_NAME)
+        expansion_graph = context.ensure_emitted_graph(EXPANSION_GRAPH_NAME)
         nodes: List[MutableMapping[str, Any]] = expansion_graph["nodes"]
         cross_edges: List[MutableMapping[str, Any]] = expansion_graph["cross_edges"]
 
@@ -128,9 +126,9 @@ class WeaponGroupsPass(ExpansionPass):
                 weapon_member_edges.append(
                     {
                         "source": group_id,
-                        "source_graph": _EXPANSION_GRAPH_NAME,
+                        "source_graph": EXPANSION_GRAPH_NAME,
                         "target": member_id,
-                        "target_graph": "A_structural_part_graph",
+                        "target_graph": STRUCTURAL_GRAPH_NAME,
                         "kind": "weapon_member",
                     }
                 )
@@ -139,12 +137,11 @@ class WeaponGroupsPass(ExpansionPass):
         nodes.extend(weapon_group_nodes)
         cross_edges.extend(weapon_member_edges)
 
-        # Update expansion-graph summary counters with weapon-specific fields.
-        summary = expansion_graph.setdefault("summary", {})
-        summary.setdefault("weapon_group_nodes", 0)
-        summary.setdefault("weapon_member_edges", 0)
-        summary["weapon_group_nodes"] += len(weapon_group_nodes)
-        summary["weapon_member_edges"] += len(weapon_member_edges)
+        context.increment_summary(
+            EXPANSION_GRAPH_NAME,
+            weapon_group_nodes=len(weapon_group_nodes),
+            weapon_member_edges=len(weapon_member_edges),
+        )
 
         return {
             "weapon_group_nodes": len(weapon_group_nodes),

@@ -9,12 +9,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, MutableMapping, Sequence, Set, Tuple
 
-from graph_expansion.context import ExpansionContext
+from graph_expansion.context import EXPANSION_GRAPH_NAME, STRUCTURAL_GRAPH_NAME, ExpansionContext
 from graph_expansion.passes.base import ExpansionPass
 
 __all__ = ["HullPerimeterPass"]
-
-_EXPANSION_GRAPH_NAME = "X_expansion_structural"
 
 
 def _compute_footprint_cells_2x(node: Mapping[str, Any]) -> Set[Tuple[int, int]]:
@@ -85,7 +83,7 @@ class HullPerimeterPass(ExpansionPass):
         # necessary for robustness
         structural_nodes = context.caches.get("structural_nodes")
         if structural_nodes is None:
-            structural_graph = context.get_source_graph("A_structural_part_graph")
+            structural_graph = context.get_source_graph(STRUCTURAL_GRAPH_NAME)
             structural_nodes = list(structural_graph.get("nodes", []))
 
         # Build a global set of all occupied cells across every structural part
@@ -138,7 +136,7 @@ class HullPerimeterPass(ExpansionPass):
 
         # Materialize virtual hull-perimeter and interior nodes plus their
         # cross-edges in the structural expansion graph
-        expansion_graph = context.ensure_emitted_graph(_EXPANSION_GRAPH_NAME)
+        expansion_graph = context.ensure_emitted_graph(EXPANSION_GRAPH_NAME)
         nodes: List[MutableMapping[str, Any]] = expansion_graph["nodes"]
         cross_edges: List[MutableMapping[str, Any]] = expansion_graph["cross_edges"]
 
@@ -161,9 +159,9 @@ class HullPerimeterPass(ExpansionPass):
             hull_perimeter_edges.append(
                 {
                     "source": hull_perimeter_node_id,
-                    "source_graph": _EXPANSION_GRAPH_NAME,
+                    "source_graph": EXPANSION_GRAPH_NAME,
                     "target": part_id,
-                    "target_graph": "A_structural_part_graph",
+                    "target_graph": STRUCTURAL_GRAPH_NAME,
                     "kind": "hull_member",
                 }
             )
@@ -173,9 +171,9 @@ class HullPerimeterPass(ExpansionPass):
             interior_edges.append(
                 {
                     "source": interior_node_id,
-                    "source_graph": _EXPANSION_GRAPH_NAME,
+                    "source_graph": EXPANSION_GRAPH_NAME,
                     "target": part_id,
-                    "target_graph": "A_structural_part_graph",
+                    "target_graph": STRUCTURAL_GRAPH_NAME,
                     "kind": "interior_member",
                 }
             )
@@ -184,12 +182,11 @@ class HullPerimeterPass(ExpansionPass):
         cross_edges.extend(hull_perimeter_edges)
         cross_edges.extend(interior_edges)
 
-        # Update the expansion-graph summary with hull-part counts
-        summary = expansion_graph.setdefault("summary", {})
-        summary.setdefault("hull_perimeter_parts", 0)
-        summary.setdefault("interior_parts", 0)
-        summary["hull_perimeter_parts"] += len(perimeter_part_ids)
-        summary["interior_parts"] += len(interior_part_ids)
+        context.increment_summary(
+            EXPANSION_GRAPH_NAME,
+            hull_perimeter_parts=len(perimeter_part_ids),
+            interior_parts=len(interior_part_ids),
+        )
 
         return {
             "hull_perimeter_parts": len(perimeter_part_ids),
