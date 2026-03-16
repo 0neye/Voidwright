@@ -10,6 +10,7 @@ reports and transient implementation notes.
 - `docs/markov-generator.md` - Markov architecture, validation assumptions, generation behavior, and export limits
 - `docs/generation-modes.md` - allowlists, mirror symmetry, part requirements, and seeded generation
 - `docs/door-rules.md` - door-rule inference, validation behavior, curated overrides, and caveats
+- `docs/graph-expansion.md` - graph expansion entrypoints, pass pipeline, artifact shape, and extension guidance
 
 ## Scope
 

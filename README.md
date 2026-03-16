@@ -140,7 +140,7 @@ Each individual preprocessing stage also accepts:
 Enrich the graph JSON with virtual nodes and cross-edges before training:
 
 ```bash
-python main.py graph-expansion expand structural \
+python main.py graph-expansion expand \
   --input-dir generated_ship_graphs_canonical \
   --output-dir expanded_ship_graphs
 ```

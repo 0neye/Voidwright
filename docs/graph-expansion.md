@@ -1,0 +1,280 @@
+# Graph Expansion
+
+This document describes the `graph_expansion/` module: what it consumes, what it emits, how the pass pipeline is structured, and where to extend it.
+
+## Purpose
+
+Graph expansion enriches preprocessing graph JSON artifacts with additional virtual nodes, cross-edges, and compact expansion metadata. It is intentionally separate from preprocessing graph construction and from training/generation.
+
+Today the canonical implementation is a single structural expansion pipeline built from ordered passes.
+
+## Where it fits
+
+The broader data flow is:
+
+```text
+.ship.png
+  -> extract
+  -> canonicalize
+  -> preprocessing graphs
+  -> graph expansion (optional)
+  -> training / downstream analysis
+```
+
+Graph expansion operates on preprocessing graph JSON files, typically from `generated_ship_graphs_canonical/`, and writes enriched JSON files to a separate output directory such as `expanded_ship_graphs/`.
+
+## Entry points
+
+### CLI
+
+Canonical CLI usage:
+
+```bash
+python main.py graph-expansion expand \
+  --input-dir generated_ship_graphs_canonical \
+  --output-dir expanded_ship_graphs
+```
+
+A legacy positional pipeline name is still accepted for compatibility:
+
+```bash
+python main.py graph-expansion expand structural \
+  --input-dir generated_ship_graphs_canonical \
+  --output-dir expanded_ship_graphs
+```
+
+### Pipeline integration
+
+The preprocessing pipeline can invoke graph expansion automatically:
+
+```bash
+python main.py preprocessing pipeline downloaded_ships \
+  --output-dir generated_ship_graphs_canonical \
+  --extracted-dir extracted_ship_data \
+  --canonical-dir extracted_ship_data_canonical \
+  --expansion-output-dir expanded_ship_graphs
+```
+
+## Module layout
+
+The graph expansion package is now organized around passes rather than swappable backends.
+
+```text
+graph_expansion/
+├── __init__.py
+├── cli.py
+├── context.py
+├── structural.py
+└── passes/
+    ├── __init__.py
+    ├── base.py
+    ├── base_indexes.py
+    ├── global_ship_info.py
+    ├── hull_perimeter.py
+    ├── spatial_zones.py
+    ├── traversable_clusters.py
+    └── weapon_groups.py
+```
+
+### `graph_expansion/structural.py`
+
+This is the canonical orchestration module. It owns:
+
+- pipeline constants such as `EXPANSION_NAME`, `EXPANSION_VERSION`, and `EXPANSION_GRAPH_NAME`
+- the canonical ordered pass list in `DEFAULT_PASSES`
+- single-payload expansion via `enrich_graph(...)`
+- directory expansion via `expand_dir(...)`
+- CLI parser wiring via `build_parser(...)` and `run_from_args(...)`
+
+### `graph_expansion/context.py`
+
+`ExpansionContext` is the shared mutable workspace for one expansion run. It owns:
+
+- `source`: the original parsed graph payload
+- `caches`: reusable derived structures built during this run
+- `annotations`: transient derived facts for later passes
+- `emitted_graphs`: virtual nodes / edges / summaries being accumulated
+- `pass_reports`: ordered records of which passes ran
+
+It also provides deterministic finalization of the enriched payload.
+
+### `graph_expansion/passes/`
+
+Each pass is a small unit of enrichment logic implementing `ExpansionPass` from `passes/base.py`.
+
+Current structural passes:
+
+- `BaseIndexesPass`
+  - builds common structural graph lookups once
+  - populates caches like `node_by_id`, `walkable_part_ids`, `door_edges`, and `touching_edges`
+
+- `GlobalShipInfoPass`
+  - emits a single global ship-info node
+  - emits `global_member` cross-edges from that node to every structural node
+
+- `TraversableClustersPass`
+  - computes crew-traversable clusters
+  - stores transient annotations like `traversable_clusters` and `cluster_by_part_id`
+  - emits traversable-cluster super-nodes and `super_member` cross-edges
+
+- `HullPerimeterPass`
+  - classifies each part as `perimeter` (has at least one unoccupied 2x neighbor cell) or `interior`
+  - stores `hull_role_by_part_id` annotation
+  - emits `hull_perimeter` and `interior` virtual nodes with `hull_member` / `interior_member` cross-edges
+
+- `SpatialZonesPass`
+  - computes each part's centroid from `location_2x` and rotation-adjusted footprint dimensions
+  - assigns parts to one of eight compass-direction zones (`zone_e`, `zone_ne`, … `zone_se`) by angle from the 2x origin
+  - stores `zone_by_part_id` annotation
+  - emits one virtual zone node per populated zone with `zone_member` cross-edges
+  - mirrored parts naturally land in opposing zone pairs, enabling downstream models to learn left-right symmetry as a co-occurrence pattern
+
+- `WeaponGroupsPass`
+  - detects weapon parts by matching `part_id` against an ordered substring vocabulary (`cannon`, `railgun`, `missile_launcher`, …)
+  - groups them by weapon type (first match wins)
+  - stores `weapon_group_by_part_id` annotation
+  - emits `weapon_group_<type>` virtual nodes with `weapon_member` cross-edges
+
+## Expansion flow
+
+At a high level:
+
+```text
+source graph JSON
+  -> ExpansionContext
+  -> BaseIndexesPass
+  -> GlobalShipInfoPass
+  -> TraversableClustersPass
+  -> HullPerimeterPass
+  -> SpatialZonesPass
+  -> WeaponGroupsPass
+  -> finalize enriched JSON
+```
+
+The pass order is explicit and deterministic. The current orchestration simply runs the passes in the order listed in `DEFAULT_PASSES`.
+
+## Output shape
+
+The structural pipeline currently adds an expansion graph named:
+
+```text
+X_expansion_structural
+```
+
+That graph contains:
+
+- `nodes`
+  - one `global_ship_info` node
+  - zero or more `traversable_cluster` nodes
+  - one `hull_perimeter` node and one `interior` node
+  - zero or more `spatial_zone` nodes (one per populated compass-direction zone)
+  - zero or more `weapon_group` nodes (one per detected weapon type)
+- `cross_edges`
+  - `global_member` edges from the global node to every structural node
+  - `super_member` edges from cluster nodes to their member structural nodes
+  - `hull_member` edges from the `hull_perimeter` node to perimeter parts
+  - `interior_member` edges from the `interior` node to interior parts
+  - `zone_member` edges from each zone node to its member structural nodes
+  - `weapon_member` edges from each weapon-group node to its member structural nodes
+- `summary`
+  - compact counts for all of the above: cluster count, hull-perimeter/interior counts, spatial-zone and weapon-group node/edge counts
+
+The top-level payload also gets an `expansion` metadata block like:
+
+```json
+{
+  "expansion": {
+    "backend": "structural",
+    "version": 3,
+    "graphs_added": ["X_expansion_structural"],
+    "passes": [
+      {"name": "base_indexes", "version": 1},
+      {"name": "global_ship_info", "version": 1},
+      {"name": "traversable_clusters", "version": 1},
+      {"name": "hull_perimeter", "version": 1},
+      {"name": "spatial_zones", "version": 1},
+      {"name": "weapon_groups", "version": 1}
+    ]
+  }
+}
+```
+
+The external key is still named `backend` for artifact compatibility, even though the internal architecture is now pass-oriented.
+
+## Determinism rules
+
+Deterministic output is a deliberate contract.
+
+Important rules:
+
+- pass order is fixed
+- traversable cluster memberships are sorted
+- cluster list ordering is stable
+- emitted graphs are finalized in deterministic key order
+- pass metadata preserves execution order
+- caches and transient annotations do not leak arbitrary container ordering into the persisted artifact
+
+This matters for corpus comparisons, regression testing, and any future training use of expanded graphs.
+
+## Regeneration behavior
+
+Directory expansion is incremental.
+
+`graph_expansion/structural.py` uses the standard version-sentinel helpers from `common.files`:
+
+- skips outputs that are already current for `expansion_version`
+- prunes stale output JSON files
+- writes the current expansion version sentinel after a successful run
+
+If expansion logic changes in a way that should force regeneration, bump `EXPANSION_VERSION`.
+
+## Extending graph expansion
+
+The intended extension point is a new pass, not a new backend layer.
+
+### Add a new pass
+
+1. Create a new file in `graph_expansion/passes/`
+2. Implement a class derived from `ExpansionPass`
+3. Use `ExpansionContext` caches / annotations / emitted graphs to share state
+4. Add the pass to `DEFAULT_PASSES` in `graph_expansion/structural.py` at the correct position
+5. Add focused tests
+
+### Prefer passes over orchestration growth
+
+Try to keep `graph_expansion/structural.py` small. It should mostly:
+
+- define constants
+- define the canonical pass order
+- run the passes
+- handle file / directory orchestration
+
+New enrichment logic should live in passes, not in the orchestration layer.
+
+## Testing
+
+Focused test coverage currently lives in:
+
+- `tests/test_graph_expansion.py`
+  - end-to-end behavior
+  - cluster rules
+  - artifact shape
+  - CLI and directory expansion behavior
+
+- `tests/test_graph_expansion_context_and_passes.py`
+  - `ExpansionContext` behavior
+  - direct pass behavior
+  - targeted cache / annotation / emitted-output checks
+
+When changing graph expansion, prefer exact behavior assertions over loose smoke tests.
+
+## Current limitations
+
+A few deliberate constraints remain:
+
+- there is no pass plugin registry or dependency solver yet
+- `requires` / `provides` on passes are descriptive metadata, not enforced scheduling rules
+- the persisted expansion metadata still uses the key `backend` for compatibility
+- no specialized graph library such as `rustworkx` is used yet; plain Python structures remain the default
+
+Those are intentional for now. The current goal is a clean, contributor-friendly, deterministic pass pipeline.

@@ -104,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--expansion-backend",
         default="structural",
-        help="Graph expansion backend to use (default: structural)",
+        help="Graph expansion pipeline name to use (default: structural)",
     )
     add_concurrency_arguments(
         parser,
@@ -155,7 +155,7 @@ def run_pipeline(
         graph_workers: Optional graph-generation worker-count override
         graph_executor: Graph-generation executor mode override
         expansion_output_dir: Optional directory for enriched graph JSON. When None, expansion is skipped.
-        expansion_backend: Graph expansion backend name (default: ``"structural"``)
+        expansion_backend: Graph expansion pipeline name (default: ``"structural"``)
         expansion_workers: Optional graph-expansion worker-count override
         expansion_executor: Graph-expansion executor mode override
 
@@ -215,11 +215,14 @@ def run_pipeline(
 
     expansion_result = None
     if expansion_output_dir is not None:
-        from graph_expansion.router import get_expansion_backend
+        from graph_expansion.structural import EXPANSION_NAME, expand_dir as expand_graphs
 
         expansion_output_path = Path(expansion_output_dir)
-        backend = get_expansion_backend(expansion_backend)
-        expansion_result = backend.expand_dir(
+        if expansion_backend != EXPANSION_NAME:
+            raise ValueError(
+                f"Unknown graph expansion pipeline {expansion_backend!r}. Only {EXPANSION_NAME!r} is supported."
+            )
+        expansion_result = expand_graphs(
             input_dir=final_graph_output_dir,
             output_dir=expansion_output_path,
             workers=expansion_workers,

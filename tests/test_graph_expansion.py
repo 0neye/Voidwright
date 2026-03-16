@@ -7,15 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from graph_expansion.backends.structural.backend import (
-    StructuralExpansionBackend,
-    _build_traversable_clusters,
-    _enrich_graph,
-    _is_corridor_like,
-)
 from graph_expansion.cli import build_parser
 from graph_expansion.cli import main as graph_expansion_main
-from graph_expansion.router import get_expansion_backend, get_expansion_backends
+from graph_expansion.structural import (
+    build_traversable_clusters as _build_traversable_clusters,
+    enrich_graph as _enrich_graph,
+    expand_dir,
+    is_corridor_like as _is_corridor_like,
+)
 
 __all__: list[str] = []
 
@@ -397,8 +396,12 @@ def test_enrich_graph_summary_counts_are_consistent() -> None:
 def test_enrich_graph_expansion_metadata() -> None:
     result = _enrich_graph(make_graph_data([make_node(0, part_id=_GENERIC_ID)]))
     assert result["expansion"]["backend"] == "structural"
-    assert result["expansion"]["version"] == 1
+    assert result["expansion"]["version"] == 3
     assert "X_expansion_structural" in result["expansion"]["graphs_added"]
+    pass_names = [p["name"] for p in result["expansion"]["passes"]]
+    assert "base_indexes" in pass_names
+    assert "global_ship_info" in pass_names
+    assert "traversable_clusters" in pass_names
 
 
 def test_enrich_graph_does_not_mutate_input() -> None:
@@ -411,22 +414,18 @@ def test_enrich_graph_does_not_mutate_input() -> None:
 
 
 # ---------------------------------------------------------------------------
-# StructuralExpansionBackend.expand_dir
+# expand_dir
 # ---------------------------------------------------------------------------
 
 
 def test_expand_dir_empty_directory(tmp_path: Path) -> None:
-    result = StructuralExpansionBackend().expand_dir(
-        input_dir=tmp_path, output_dir=tmp_path / "out"
-    )
+    result = expand_dir(input_dir=tmp_path, output_dir=tmp_path / "out")
     assert result["files_expanded"] == 0
 
 
 def test_expand_dir_ignores_manifest_json(tmp_path: Path) -> None:
     (tmp_path / "manifest.json").write_text('{"ships_processed": 3}', encoding="utf-8")
-    result = StructuralExpansionBackend().expand_dir(
-        input_dir=tmp_path, output_dir=tmp_path / "out"
-    )
+    result = expand_dir(input_dir=tmp_path, output_dir=tmp_path / "out")
     assert result["files_expanded"] == 0
 
 
@@ -437,9 +436,7 @@ def test_expand_dir_enriches_json_files(tmp_path: Path) -> None:
     write_graph_json(input_dir / "ship_a.json", [make_node(0, [[0, 0]], _CORRIDOR_ID)])
     write_graph_json(input_dir / "ship_b.json", [make_node(0, part_id=_GENERIC_ID)])
 
-    result = StructuralExpansionBackend().expand_dir(
-        input_dir=input_dir, output_dir=output_dir, workers=1, executor="thread"
-    )
+    result = expand_dir(input_dir=input_dir, output_dir=output_dir, workers=1, executor="thread")
 
     assert result["files_expanded"] == 2
     for name in ("ship_a.json", "ship_b.json"):
@@ -449,9 +446,7 @@ def test_expand_dir_enriches_json_files(tmp_path: Path) -> None:
 
 def test_expand_dir_in_place_when_output_equals_input(tmp_path: Path) -> None:
     write_graph_json(tmp_path / "ship.json", [make_node(0, part_id=_GENERIC_ID)])
-    StructuralExpansionBackend().expand_dir(
-        input_dir=tmp_path, output_dir=tmp_path, workers=1, executor="thread"
-    )
+    expand_dir(input_dir=tmp_path, output_dir=tmp_path, workers=1, executor="thread")
     enriched = json.loads((tmp_path / "ship.json").read_text(encoding="utf-8"))
     assert "expansion" in enriched
 
@@ -460,15 +455,15 @@ def test_expand_dir_in_place_second_run_skips_all(tmp_path: Path) -> None:
     """A second in-place run with the same version should skip all files.
 
     Before the fix, _needs_regen compared a file's mtime to itself, which
-    always returned False — correct by accident.  After the fix the early-
+    always returned False — correct by accident. After the fix the early-
     return is explicit and intentional, so this test guards the semantics.
     """
+
     write_graph_json(tmp_path / "ship.json", [make_node(0, part_id=_GENERIC_ID)])
-    backend = StructuralExpansionBackend()
-    first = backend.expand_dir(input_dir=tmp_path, output_dir=tmp_path, workers=1, executor="thread")
+    first = expand_dir(input_dir=tmp_path, output_dir=tmp_path, workers=1, executor="thread")
     assert first["files_expanded"] == 1
 
-    second = backend.expand_dir(input_dir=tmp_path, output_dir=tmp_path, workers=1, executor="thread")
+    second = expand_dir(input_dir=tmp_path, output_dir=tmp_path, workers=1, executor="thread")
     assert second["files_expanded"] == 0
 
 
@@ -479,9 +474,7 @@ def test_expand_dir_skips_bad_files_and_continues(tmp_path: Path) -> None:
     write_graph_json(input_dir / "good.json", [make_node(0, part_id=_GENERIC_ID)])
     (input_dir / "bad.json").write_text("{not valid json", encoding="utf-8")
 
-    result = StructuralExpansionBackend().expand_dir(
-        input_dir=input_dir, output_dir=output_dir, workers=1, executor="thread"
-    )
+    result = expand_dir(input_dir=input_dir, output_dir=output_dir, workers=1, executor="thread")
 
     assert result["files_expanded"] == 1
     assert (output_dir / "good.json").exists()
@@ -501,29 +494,9 @@ def test_expand_dir_traversable_clusters_total_is_sum_across_files(tmp_path: Pat
     # ship_b: one corridor part → 1 cluster
     write_graph_json(input_dir / "ship_b.json", [make_node(0, [[0, 0]], _CORRIDOR_ID)])
 
-    result = StructuralExpansionBackend().expand_dir(
-        input_dir=input_dir, output_dir=output_dir, workers=1, executor="thread"
-    )
+    result = expand_dir(input_dir=input_dir, output_dir=output_dir, workers=1, executor="thread")
 
     assert result["traversable_clusters_total"] == 2
-
-
-# ---------------------------------------------------------------------------
-# Router
-# ---------------------------------------------------------------------------
-
-
-def test_get_expansion_backends_includes_structural() -> None:
-    assert "structural" in get_expansion_backends()
-
-
-def test_get_expansion_backend_resolves_structural() -> None:
-    assert get_expansion_backend("structural").name == "structural"
-
-
-def test_get_expansion_backend_raises_for_unknown_name() -> None:
-    with pytest.raises(KeyError, match="Unknown expansion backend"):
-        get_expansion_backend("nonexistent")
 
 
 # ---------------------------------------------------------------------------
@@ -561,3 +534,12 @@ def test_cli_expand_structural_empty_dir_exits_zero(tmp_path: Path) -> None:
         "--output-dir", str(tmp_path / "out"),
     ])
     assert exit_code == 0
+
+
+def test_cli_expand_rejects_unknown_legacy_pipeline_name(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="2"):
+        graph_expansion_main([
+            "expand", "nonexistent",
+            "--input-dir", str(tmp_path),
+            "--output-dir", str(tmp_path / "out"),
+        ])
