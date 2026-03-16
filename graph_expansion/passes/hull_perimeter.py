@@ -90,7 +90,9 @@ class HullPerimeterPass(ExpansionPass):
         occupied_cells: Set[Tuple[int, int]] = set()
         node_cells_by_id: Dict[int, Set[Tuple[int, int]]] = {}
         for node in structural_nodes:
-            node_id = int(node.get("id"))
+            node_id = node.get("id")
+            if not isinstance(node_id, int):
+                continue
             node_cells = _compute_footprint_cells_2x(node)
             node_cells_by_id[node_id] = node_cells
             occupied_cells.update(node_cells)
@@ -104,7 +106,9 @@ class HullPerimeterPass(ExpansionPass):
         neighbor_offsets: Tuple[Tuple[int, int], ...] = ((2, 0), (-2, 0), (0, 2), (0, -2))
 
         for node in structural_nodes:
-            node_id = int(node.get("id"))
+            node_id = node.get("id")
+            if not isinstance(node_id, int):
+                continue
             node_cells = node_cells_by_id.get(node_id, set())
 
             # Default nodes without any footprint cells to interior so that the
