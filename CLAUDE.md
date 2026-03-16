@@ -14,8 +14,16 @@ Generates Cosmoteer `.ship.png` files from a learned model. The main workflow is
 
 ## Commands
 
+**Python environment:**
+
+Always activate the project venv before running any Python commands:
+```bash
+source .venv/bin/activate
+```
+
 **Install dependencies:**
 ```bash
+source .venv/bin/activate
 pip install -e .[dev]
 # For the Discord download script only:
 pip install -e .[scripts]
