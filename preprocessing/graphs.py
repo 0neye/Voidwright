@@ -12,7 +12,8 @@ import orjson
 
 from common.files import inputs_needing_regeneration, iter_json_files, prune_stale_json_outputs, write_output_version
 from common.geometry import PartMeta, infer_meta, load_vanilla_part_geometry, normalize_part_id
-from ship_layout.connectivity import shared_attachment_sides
+from ship_layout.geometry import attachment_segments_2x
+from ship_layout.types import PlacedPart, Segment2x
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
 from .layout_helpers import door_adjacent_cells
 
@@ -192,15 +193,56 @@ def _part_from_record(record: dict) -> dict:
     }
 
 
+def _attachment_segments_by_index(
+    part_records: List[dict],
+    geometry_cache: Dict[str, object],
+) -> Dict[int, Set[Segment2x]]:
+    """Precompute world-space 2x attachment boundary segments per part.
+
+    Args:
+        part_records: Normalized part-placement records indexed by graph node id
+        geometry_cache: Shared vanilla geometry cache used for attachment checks
+
+    Returns:
+        Mapping from part index to the set of world-space 2x attachment segments
+        for that placement. Unknown geometry ids receive an empty segment set so
+        downstream callers treat contacts as non-structural
+    """
+
+    attachment_segments: Dict[int, Set[Segment2x]] = {}
+    for record in part_records:
+        part_index = int(record["index"])
+        placed_payload = _part_from_record(record)
+
+        # Build the PlacedPart wrapper once per part and resolve attachment
+        # geometry into world-space 2x boundary segments. Unknown geometry ids
+        # are treated as having no attachable hull so any contacts remain
+        # non-structural.
+        try:
+            placed_part = PlacedPart.from_object(placed_payload)
+            attachment_segments[part_index] = attachment_segments_2x(placed_part, geometry_cache)
+        except KeyError:
+            attachment_segments[part_index] = set()
+
+    return attachment_segments
+
+
 def structural_edges(
     part_records: List[dict],
     cell_to_parts: Dict[Coord, Set[int]],
     geometry_cache: Dict[str, object],
+    attachment_segments: Dict[int, Set[Segment2x]] | None = None,
 ) -> List[dict]:
     """Build structural-touching edges between distinct parts."""
 
     adjacency: Dict[Tuple[int, int], dict] = {}
     directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+
+    # Fall back to on-demand precomputation when callers do not provide a shared
+    # per-ship cache. This keeps the public API flexible while letting the main
+    # preprocessing pipeline avoid recomputing geometry for every candidate pair.
+    if attachment_segments is None:
+        attachment_segments = _attachment_segments_by_index(part_records, geometry_cache)
 
     for cell, owners in cell_to_parts.items():
         cell_x, cell_y = cell
@@ -215,9 +257,13 @@ def structural_edges(
                     key = (owner_a, owner_b) if owner_a < owner_b else (owner_b, owner_a)
                     if key in adjacency:
                         continue
-                    source_part = _part_from_record(part_records[key[0]])
-                    target_part = _part_from_record(part_records[key[1]])
-                    shared_sides = shared_attachment_sides(source_part, target_part, geometry_cache)
+                    # Look up precomputed world-space attachment segments and
+                    # intersect them to determine whether this contact is truly
+                    # structural. This preserves the shared_attachment_sides()
+                    # semantics while avoiding repeated segment generation.
+                    source_segments = attachment_segments.get(key[0], set())
+                    target_segments = attachment_segments.get(key[1], set())
+                    shared_sides = source_segments & target_segments
                     if not shared_sides:
                         continue
                     adjacency[key] = {
@@ -235,6 +281,7 @@ def structural_door_edges(
     doors: List[dict],
     cell_to_parts: Dict[Coord, Set[int]],
     geometry_cache: Dict[str, object],
+    attachment_segments: Dict[int, Set[Segment2x]] | None = None,
 ) -> Tuple[List[dict], dict]:
     """Build door edges between distinct parts for the structural part graph.
 
@@ -268,6 +315,12 @@ def structural_door_edges(
     dangling = 0
     internal = 0
     non_structural = 0
+
+    # When a shared cache is not provided (for example in tests), build a local
+    # attachment-segment map so door-edge checks share the same optimization
+    # path as structural touch edges.
+    if attachment_segments is None:
+        attachment_segments = _attachment_segments_by_index(part_records, geometry_cache)
 
     for door_index, door in enumerate(doors):
         cell_x, cell_y = map(int, door["Cell"])
@@ -311,9 +364,12 @@ def structural_door_edges(
         # source_parts owns source_coord; target_parts owns target_coord.
         source_parts = cell_to_parts[source_coord]
         for part_a, part_b in sorted(cross_pairs):
-            source_part = _part_from_record(part_records[part_a])
-            target_part = _part_from_record(part_records[part_b])
-            if not shared_attachment_sides(source_part, target_part, geometry_cache):
+            # Intersect cached world-space attachment segments to decide whether
+            # this door connects two structurally attachable hull sides. This
+            # mirrors shared_attachment_sides() semantics without redoing geometry.
+            source_segments = attachment_segments.get(part_a, set())
+            target_segments = attachment_segments.get(part_b, set())
+            if not (source_segments & target_segments):
                 non_structural += 1
                 continue
 
@@ -406,12 +462,14 @@ def process_ship(ship_path: Path) -> dict:
     ]
 
     geometry_cache = load_vanilla_part_geometry()
-    touch_edges = structural_edges(part_records, cell_to_parts, geometry_cache)
+    attachment_segments = _attachment_segments_by_index(part_records, geometry_cache)
+    touch_edges = structural_edges(part_records, cell_to_parts, geometry_cache, attachment_segments)
     door_edges_list, door_stats = structural_door_edges(
         part_records,
         doors,
         dict(cell_to_parts),
         geometry_cache,
+        attachment_segments,
     )
     all_edges = sorted(
         touch_edges + door_edges_list,

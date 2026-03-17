@@ -14,8 +14,16 @@ Generates Cosmoteer `.ship.png` files from a learned model. The main workflow is
 
 ## Commands
 
+**Python environment:**
+
+Always activate the project venv before running any Python commands:
+```bash
+source .venv/bin/activate
+```
+
 **Install dependencies:**
 ```bash
+source .venv/bin/activate
 pip install -e .[dev]
 # For the Discord download script only:
 pip install -e .[scripts]
@@ -66,7 +74,7 @@ python main.py preprocessing door-rules --input-dir extracted_ship_data_canonica
 
 **Expand graph JSON with virtual nodes and cross-edges:**
 ```bash
-python main.py graph-expansion expand structural \
+python main.py graph-expansion expand \
   --input-dir generated_ship_graphs_canonical \
   --output-dir expanded_ship_graphs
 ```
@@ -127,7 +135,7 @@ python scripts/download_ship_images.py --output-dir downloaded_ships --verbose
 The codebase is split into purpose-specific packages:
 
 - **`preprocessing/`** - four-stage pipeline (extract -> canonicalize -> graphs -> door-rules). Each stage is its own submodule with a `main(argv)` and `build_parser()`. `pipeline.py` orchestrates all stages.
-- **`graph_expansion/`** - backend-agnostic graph enrichment. `router.py` resolves backend names; each backend under `graph_expansion/backends/<name>/` registers its own CLI parser via `register_expand_parser` / `run_expand`. The `structural` backend adds a global ship-info virtual node and traversable-cluster super-nodes (with cross-edges) to preprocessing graph JSON.
+- **`graph_expansion/`** - structural graph enrichment implemented as a pass-oriented pipeline. `structural.py` orchestrates an ordered list of passes under `graph_expansion/passes/` that add virtual nodes and cross-edges to preprocessing graph JSON: a global ship-info node, traversable-cluster super-nodes, hull-perimeter/interior classification nodes, 8-sector spatial zone nodes, and weapon-group nodes.
 - **`training/`** - backend-agnostic router. `router.py` resolves backend names; each backend under `training/backends/<name>/` registers its own CLI parser via `register_build_parser` / `register_validate_parser`.
 - **`generator/`** - backend-agnostic generation router. `generator/backends/markov/backend.py` wires CLI options; `generator/backends/markov/export.py` handles `.ship.png` encoding and roundtrip validation.
 - **`markov/`** - shared Markov internals used by both training and generation: `model.py`, `generation.py`, `inputs.py`, and related helpers. `symmetry.py` is a backward-compat shim; mirror computation lives in `ship_layout/symmetry.py`.
@@ -145,7 +153,7 @@ The codebase is split into purpose-specific packages:
 
 Register it in `training/router.py` and `generator/router.py` alongside the Markov backend. Implement `register_build_parser` / `run_build` (training) and `register_generate_parser` / `run_generate` (generator) following `MarkovTrainingBackend` / `MarkovGeneratorBackend` as templates.
 
-To add a new graph expansion backend, register it in `graph_expansion/router.py` and implement `register_expand_parser` / `run_expand` following `StructuralExpansionBackend` as a template.
+Graph expansion no longer has a backend registry. Extend it by adding or reordering passes in `graph_expansion/structural.py` and implementing new passes under `graph_expansion/passes/`.
 
 ## Commit messages
 
@@ -163,6 +171,9 @@ Co-Authored-By: <model-name>
 
 After making a major change or refactor and running appropriate tests, please update the AGENTS.md and CLAUDE.md as well as any applicable docs, when you deem it appropriate. If unsure, prompt the user.
 
+## Temp files
+
+If you need to write a temporary script or generate a temp output of some kind, the file name should start with either "TEMP" or ".tmp".
 
 ## Important conventions
 
@@ -193,5 +204,67 @@ After making a major change or refactor and running appropriate tests, please up
 - **Build-time validation requires canonical corpus input.** In `training/backends/markov/backend.py`, `--validation-output` only executes when `--input-dir` is provided; graph-only builds skip validation.
 - **Part requirements merge by max, not sum.** `markov/inputs.py` merges duplicate requirement entries by per-part maximum required count.
 - **Python module exports should be declared near the top.** New Python modules should define `__all__` near the top of the file (after imports) instead of at the bottom.
-- **Graph expansion is optional and separate from training.** `graph_expansion/` enriches graph JSON with virtual nodes and cross-edges but is not consumed by training or generation by default. Run it via `graph-expansion expand structural` or by passing `--expansion-output-dir` to the pipeline command.
-- **Graph expansion cluster ordering is deterministic.** `graph_expansion/backends/structural/backend.py` normalizes each cluster's member list with `sorted()` before sorting the cluster list, so `traversable_cluster_N` indices are stable across runs.
+- **Graph expansion is optional and separate from training.** `graph_expansion/` enriches graph JSON with virtual nodes and cross-edges but is not consumed by training or generation by default. Run it via `graph-expansion expand` or by passing `--expansion-output-dir` to the pipeline command.
+- **Graph expansion cluster ordering is deterministic.** `graph_expansion/structural.py` normalizes each cluster's member list with `sorted()` before sorting the cluster list, so `traversable_cluster_N` indices are stable across runs.
+
+## Graph expansion framework
+
+The `graph_expansion/` package uses a pass-oriented framework built around a
+stateful per-run `ExpansionContext`:
+
+- `graph_expansion/context.py` defines `ExpansionContext`, which wraps a single
+  source graph JSON payload and owns backend metadata, shared caches,
+  transient annotations, emitted graphs, and ordered pass reports
+- `graph_expansion/passes/` contains small, focused passes implementing
+  `ExpansionPass` from `graph_expansion/passes/base.py`
+- the structural expansion pipeline (`graph_expansion/structural.py`)
+  now orchestrates an ordered list of passes instead of performing all
+  enrichment inline
+
+Structural passes (in pipeline order):
+
+- `BaseIndexesPass` builds common structural graph indexes and stores them in
+  `ExpansionContext.caches`
+- `GlobalShipInfoPass` emits the global ship-info node and `global_member`
+  cross-edges
+- `TraversableClustersPass` computes traversable clusters, stores cluster
+  annotations, and emits traversable-cluster super-nodes with `super_member`
+  cross-edges
+- `HullPerimeterPass` classifies each part as perimeter or interior using 2x
+  footprint cell neighbor checks; emits `hull_perimeter` / `interior` virtual
+  nodes with `hull_member` / `interior_member` cross-edges
+- `SpatialZonesPass` assigns each part to one of eight compass-direction zones
+  by centroid angle from the 2x origin; emits zone virtual nodes with
+  `zone_member` cross-edges; mirrored parts land in opposing zone pairs
+- `WeaponGroupsPass` detects weapon parts by `part_id` substring matching,
+  groups them by type, and emits `weapon_group_<type>` virtual nodes with
+  `weapon_member` cross-edges
+
+Contributor guidelines for graph expansion:
+
+- add new enrichment logic as a pass under `graph_expansion/passes/`, not by
+  growing the orchestration logic in `graph_expansion/structural.py`
+- reuse cached structure via `ExpansionContext.caches` and keep heavy
+  intermediate results in `ExpansionContext.annotations` instead of
+  serializing everything
+- keep output deterministic: sort cluster memberships, avoid leaking set
+  iteration order into serialized lists, and rely on the context to merge
+  graphs in a stable way
+- keep persisted JSON changes minimal and focused; prefer adding compact,
+  well-documented summaries and virtual nodes over dumping internal analysis
+  structures
+
+The final enriched payload includes an `expansion` block:
+
+- `backend`: backend name (for example `"structural"`)
+- `version`: backend version (bumped when behavior or schema evolves)
+- `graphs_added`: list of added graph names (for example
+  `"X_expansion_structural"`)
+- `passes`: ordered list of `{"name", "version"}` records describing the
+  passes that ran for that artifact
+
+When extending graph expansion, add or update focused tests:
+
+- context behavior: `tests/test_graph_expansion_context_and_passes.py`
+- per-pass behavior and summaries
+- end-to-end structural expansion behavior in `tests/test_graph_expansion.py`

@@ -46,6 +46,7 @@ branch = true
 relative_files = true
 source = [
   "common",
+  "ship_layout",
   "generator",
   "graph_expansion",
   "markov",
@@ -79,6 +80,8 @@ include-package-data = true
 include = [
   "common",
   "common.*",
+  "ship_layout",
+  "ship_layout.*",
   "generator",
   "generator.*",
   "graph_expansion",
