@@ -138,6 +138,7 @@ class SpatialZonesPass(ExpansionPass):
                     "id": zone_name,
                     "kind": "spatial_zone",
                     "zone_label": zone_name,
+                    "member_count": len(member_ids),
                 }
             )
 
