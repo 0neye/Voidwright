@@ -2,11 +2,15 @@
 
 This module contains both the expansion pass that materializes
 traversable-cluster super-nodes and the underlying connectivity
-helpers. The connectivity rules mirror the original structural expansion logic:
+helpers. Traversable clusters are intentionally conservative:
 
 - any two walkable parts joined by a door edge are in the same cluster
-- corridor and moving-walkway parts that share or are adjacent in the
-  2x coordinate frame are in the same cluster
+- corridor, moving-walkway, and conveyor parts that share or are adjacent in
+  the 2x coordinate frame are in the same cluster
+
+Structural touching alone does not merge clusters. Open room-to-corridor
+contacts are represented later by travel/accessibility edges rather than by
+collapsing cluster membership.
 """
 
 from __future__ import annotations
@@ -22,11 +26,11 @@ __all__ = [
     "build_traversable_clusters",
 ]
 
-_CORRIDOR_LIKE_SUBSTRINGS: tuple[str, ...] = ("corridor", "walkway")
+_CORRIDOR_LIKE_SUBSTRINGS: tuple[str, ...] = ("corridor", "walkway", "conveyor")
 
 
 def is_corridor_like(part_id: str) -> bool:
-    """Return True when *part_id* identifies a corridor or moving walkway."""
+    """Return True when *part_id* identifies a corridor, walkway, or conveyor."""
 
     lower_id = part_id.lower()
     return any(token in lower_id for token in _CORRIDOR_LIKE_SUBSTRINGS)
@@ -39,10 +43,13 @@ def build_traversable_clusters(nodes: Sequence[Mapping[str, Any]], edges: Sequen
 
     1. Door edge: they are connected by an edge with ``kind == "door"``
        in the structural part graph (applies to any two walkable parts).
-    2. Corridor-like adjacency: both parts are corridor or moving-
-       walkway parts and at least one walkable cell of each part is
+    2. Corridor-like adjacency: both parts are corridor, moving-
+       walkway, or conveyor parts and at least one walkable cell of each part is
        adjacent in the 2x coordinate frame (differs by 2 in exactly one
        axis).
+
+    Structural touching is not enough on its own. That contact is preserved for
+    later accessibility/support passes, but it does not collapse clusters.
 
     Args:
         nodes: Structural part graph nodes.
@@ -78,11 +85,11 @@ def build_traversable_clusters(nodes: Sequence[Mapping[str, Any]], edges: Sequen
         if src in parts_with_walkable and tgt in parts_with_walkable:
             union(int(src), int(tgt))
 
+    node_by_id = {int(node["id"]): node for node in nodes if node.get("id") in parts_with_walkable}
+
     # Rule 2: corridor-like parts merge when their walkable cells are adjacent.
     corridor_nodes: List[Mapping[str, Any]] = [
-        node
-        for node in nodes
-        if node.get("id") in parts_with_walkable and is_corridor_like(node.get("part_id", ""))
+        node for node in node_by_id.values() if is_corridor_like(str(node.get("part_id", "")))
     ]
     cell_to_corridor_parts: Dict[tuple[int, int], Set[int]] = {}
     for node in corridor_nodes:
@@ -92,18 +99,18 @@ def build_traversable_clusters(nodes: Sequence[Mapping[str, Any]], edges: Sequen
             cell_to_corridor_parts.setdefault(key, set()).add(node_id)
 
     for (cx, cy), part_ids in cell_to_corridor_parts.items():
-        # Merge corridor parts that share the same walkable cell.
-        part_ids_list = sorted(part_ids)
-        for index in range(1, len(part_ids_list)):
-            union(part_ids_list[0], part_ids_list[index])
-        # Merge corridor parts whose walkable cells are adjacent.
-        for dx, dy in ((2, 0), (-2, 0), (0, 2), (0, -2)):
-            neighbor_parts = cell_to_corridor_parts.get((cx + dx, cy + dy))
-            if neighbor_parts:
-                for pid_a in part_ids:
-                    for pid_b in neighbor_parts:
-                        if pid_a != pid_b:
-                            union(pid_a, pid_b)
+        neighboring_sets = [
+            cell_to_corridor_parts.get((cx + 2, cy), set()),
+            cell_to_corridor_parts.get((cx - 2, cy), set()),
+            cell_to_corridor_parts.get((cx, cy + 2), set()),
+            cell_to_corridor_parts.get((cx, cy - 2), set()),
+            part_ids,  # shared cell also counts
+        ]
+        for neighbor_ids in neighboring_sets:
+            for a in part_ids:
+                for b in neighbor_ids:
+                    if a != b:
+                        union(a, b)
 
     clusters: Dict[int, List[int]] = {}
     for node_id in parts_with_walkable:
@@ -118,7 +125,7 @@ class TraversableClustersPass(ExpansionPass):
     """Emit traversable-cluster super-nodes and membership cross-edges."""
 
     name = "traversable_clusters"
-    version = 1
+    version = 2
     requires = ("base_indexes",)
     provides = ("traversable_clusters", "cluster_by_part_id")
 

@@ -7,20 +7,27 @@ from pathlib import Path
 
 import pytest
 
+from common.cosmoteer import parse_ship_png
 from graph_expansion.cli import build_parser
 from graph_expansion.cli import main as graph_expansion_main
+from graph_expansion.passes.crew_access_layer1 import _ENABLE_CREW_ROOM_PROXY_FALLBACK
 from graph_expansion.structural import (
+    EXPANSION_VERSION,
     build_traversable_clusters as _build_traversable_clusters,
     enrich_graph as _enrich_graph,
     expand_dir,
     is_corridor_like as _is_corridor_like,
 )
+from preprocessing.graphs import process_ship
+from preprocessing.relative_coords import apply_relative_coords_transform
 
 __all__: list[str] = []
 
 _CORRIDOR_ID = "cosmoteer.corridor"
 _WALKWAY_ID = "mod.moving_walkway_1x1"
+_CONVEYOR_ID = "cosmoteer.conveyor"
 _GENERIC_ID = "cosmoteer.reactor_small"
+_CREW_QUARTERS_ID = "cosmoteer.crew_quarters_med"
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +85,17 @@ def write_graph_json(
     path.write_text(json.dumps(make_graph_data(nodes, edges=edges)) + "\n", encoding="utf-8")
 
 
+def _load_traversable_tester_graph(tmp_path: Path) -> dict:
+    """Parse the checked-in Traversable Tester PNG and build its structural graph."""
+
+    ship_payload = apply_relative_coords_transform(
+        parse_ship_png(Path(__file__).resolve().parent / "data" / "traversable_tester.ship.png")
+    )
+    source_path = tmp_path / "traversable_tester.ship.json"
+    source_path.write_text(json.dumps(ship_payload) + "\n", encoding="utf-8")
+    return process_ship(source_path)
+
+
 # ---------------------------------------------------------------------------
 # _is_corridor_like
 # ---------------------------------------------------------------------------
@@ -89,6 +107,10 @@ def test_is_corridor_like_matches_corridor() -> None:
 
 def test_is_corridor_like_matches_walkway() -> None:
     assert _is_corridor_like("mod.moving_walkway_1x1") is True
+
+
+def test_is_corridor_like_matches_conveyor() -> None:
+    assert _is_corridor_like("cosmoteer.conveyor") is True
 
 
 def test_is_corridor_like_rejects_generic_part() -> None:
@@ -192,10 +214,26 @@ def test_clusters_two_walkway_parts_adjacent_merge() -> None:
     assert _build_traversable_clusters(nodes, []) == [[0, 1]]
 
 
+def test_clusters_two_conveyors_adjacent_merge() -> None:
+    nodes = [
+        make_node(0, [[0, 0]], _CONVEYOR_ID),
+        make_node(1, [[2, 0]], _CONVEYOR_ID),
+    ]
+    assert _build_traversable_clusters(nodes, []) == [[0, 1]]
+
+
 def test_clusters_corridor_and_walkway_adjacent_merge() -> None:
     nodes = [
         make_node(0, [[0, 0]], _CORRIDOR_ID),
         make_node(1, [[2, 0]], _WALKWAY_ID),
+    ]
+    assert _build_traversable_clusters(nodes, []) == [[0, 1]]
+
+
+def test_clusters_corridor_and_conveyor_adjacent_merge() -> None:
+    nodes = [
+        make_node(0, [[0, 0]], _CORRIDOR_ID),
+        make_node(1, [[2, 0]], _CONVEYOR_ID),
     ]
     assert _build_traversable_clusters(nodes, []) == [[0, 1]]
 
@@ -210,12 +248,21 @@ def test_clusters_two_non_corridor_adjacent_no_door_stay_separate() -> None:
 
 
 def test_clusters_corridor_adjacent_to_non_corridor_no_door_stay_separate() -> None:
-    # One corridor part and one generic part adjacent with no door → separate.
+    # Mere coordinate adjacency is not enough without structural contact.
     nodes = [
         make_node(0, [[0, 0]], _CORRIDOR_ID),
         make_node(1, [[2, 0]], _GENERIC_ID),
     ]
     assert _build_traversable_clusters(nodes, []) == [[0], [1]]
+
+
+def test_clusters_touching_corridor_and_room_with_adjacent_walkable_cells_stay_separate() -> None:
+    nodes = [
+        make_node(0, [[0, 0]], _CORRIDOR_ID),
+        make_node(1, [[2, 0], [2, 2]], _CREW_QUARTERS_ID),
+    ]
+    edges = [{"source": 0, "target": 1, "kind": "touching", "shared_sides": 1}]
+    assert _build_traversable_clusters(nodes, edges) == [[0], [1]]
 
 
 def test_clusters_two_corridors_sharing_same_cell_merge() -> None:
@@ -393,15 +440,36 @@ def test_enrich_graph_summary_counts_are_consistent() -> None:
     assert summary["super_member_edges"] == 2
 
 
+def test_enrich_graph_traversable_tester_regression_counts(tmp_path: Path) -> None:
+    graph_data = _load_traversable_tester_graph(tmp_path)
+    result = _enrich_graph(graph_data)
+
+    expansion_graph = result["graphs"]["X_expansion_structural"]
+    node_kinds = [node["kind"] for node in expansion_graph["nodes"]]
+    cross_edges = expansion_graph["cross_edges"]
+
+    assert node_kinds.count("traversable_cluster") == 2
+    expected_crew_access_edges = 3 if _ENABLE_CREW_ROOM_PROXY_FALLBACK else 2
+    assert sum(edge["kind"] == "crew_access_factory" for edge in cross_edges) == expected_crew_access_edges
+    assert sum(edge["kind"] == "crew_access_reactor" for edge in cross_edges) == expected_crew_access_edges
+    assert sum(edge["kind"] == "reactor_supports_engine_room" for edge in cross_edges) == 1
+    assert sum(edge["kind"] == "reactor_supports_shield" for edge in cross_edges) == 1
+    assert sum(edge["kind"] == "reactor_supports_thruster" for edge in cross_edges) == 1
+    assert sum(edge["kind"] == "factory_supports_ammo_weapon" for edge in cross_edges) == 2
+    assert sum(edge["kind"] == "factory_supports_storage" for edge in cross_edges) == 1
+
+
 def test_enrich_graph_expansion_metadata() -> None:
     result = _enrich_graph(make_graph_data([make_node(0, part_id=_GENERIC_ID)]))
     assert result["expansion"]["backend"] == "structural"
-    assert result["expansion"]["version"] == 3
+    assert result["expansion"]["version"] == EXPANSION_VERSION
     assert "X_expansion_structural" in result["expansion"]["graphs_added"]
     pass_names = [p["name"] for p in result["expansion"]["passes"]]
     assert "base_indexes" in pass_names
     assert "global_ship_info" in pass_names
     assert "traversable_clusters" in pass_names
+    assert "crew_access_layer1" in pass_names
+    assert "core_support_layer2" in pass_names
 
 
 def test_enrich_graph_does_not_mutate_input() -> None:
