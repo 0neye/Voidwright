@@ -821,16 +821,18 @@ def test_hull_perimeter_summary_updates_expansion_graph_summary() -> None:
 
 
 def test_hull_perimeter_rotation_swaps_footprint_dimensions() -> None:
-    """A 1×2 part rotated 90° should occupy cells as a 2×1 part."""
+    """Preprocessing stores rotation-specific dimensions; the pass reads them directly."""
 
-    # 1×2 part at [0,0] rotation=0: cells (0,0) and (0,2). Width in x = 1, height in y = 2.
-    # Neighbor to the right of (0,0) is (2,0) — unoccupied → perimeter.
+    # 1×2 part at [0,0] rotation=0: preprocessing stores width=1, height=2.
+    # Cells: (0,0) and (0,2). Neighbor to the right of (0,0) is (2,0) — unoccupied → perimeter.
     node = make_full_node(0, [0, 0], width=1, height=2, rotation=0)
     context, summary = _run_hull_perimeter([node])
     assert context.get_annotation("hull_role_by_part_id")[0] == "perimeter"
 
-    # 1×2 part at [0,0] rotation=1: swaps to effective 2×1, cells (0,0) and (2,0).
-    node_r = make_full_node(1, [0, 0], width=1, height=2, rotation=1)
+    # Same physical part rotated 90° (rotation=1): preprocessing stores width=2, height=1.
+    # Cells: (0,0) and (2,0). No dimension swap is applied by the pass — the stored
+    # values are already rotation-specific.
+    node_r = make_full_node(1, [0, 0], width=2, height=1, rotation=1)
     context_r, _ = _run_hull_perimeter([node_r])
     assert context_r.get_annotation("hull_role_by_part_id")[1] == "perimeter"
 
