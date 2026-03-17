@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import orjson
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Iterator, Optional, Tuple
+from typing import Dict, Iterator, Mapping, Optional, Tuple
 
 Coord = Tuple[int, int]
 Coord2x = Tuple[int, int]
@@ -22,6 +22,14 @@ VANILLA_PARTS_PATH = DATA_DIR / "vanilla_parts_full_geometry.json"
 VANILLA_NAMESPACE = "cosmoteer."
 PART_ID_ALIASES = {
     "cosmoteer.electro_bolter": "cosmoteer.disruptor",
+    # Legacy / alternate factory IDs declared via OtherIDs in vanilla rules.
+    "cosmoteer.missile_factory": "cosmoteer.factory_he",
+    "missile_factory": "cosmoteer.factory_he",
+    "cosmoteer.missile_factory_high_explosive": "cosmoteer.factory_he",
+    "cosmoteer.missile_factory_he": "cosmoteer.factory_he",
+    "cosmoteer.missile_factory_emp": "cosmoteer.factory_emp",
+    "cosmoteer.missile_factory_nuke": "cosmoteer.factory_nuke",
+    "cosmoteer.mine_factory": "cosmoteer.factory_mine",
     # The _L variant of each flippable wedge is identical to the base part.
     # Confirmed via armor_1x2_wedge.rules / structure_1x2_wedge.rules:
     #   OtherIDs includes both _L and _R; FlipWhenLoadingIDs lists only _R.
@@ -136,7 +144,15 @@ class PartRect:
 
 @dataclass(frozen=True)
 class RotationGeometry:
-    """Geometry for one rotated vanilla part footprint."""
+    """Geometry for one rotated vanilla part footprint.
+
+    Note:
+        This record carries richer per-rotation travel metadata sourced from
+        ``common/data/vanilla_parts_full_geometry.json``. Preprocessing graph
+        JSON intentionally does not inline these fields for now; later stages
+        that need detailed movement semantics should load them from the shared
+        geometry cache on demand.
+    """
 
     rotation: int
     width: int
@@ -146,6 +162,39 @@ class RotationGeometry:
     blocked_travel_cells: frozenset[Coord]
     allowed_door_locations: Tuple[Coord, ...]
     polygon_vertices: Tuple[Tuple[float, float], ...] = ()
+    blocked_travel_cell_directions: Mapping[Coord, frozenset[str]] = field(default_factory=dict)
+    force_manhattan_path: bool | None = None
+    crew_speed_factor: float | None = None
+    crew_speed_by_direction: Mapping[str, float] | None = None
+    crew_congested_speed_factor: float | None = None
+    crew_congested_speed_by_direction: Mapping[str, float] | None = None
+
+    def crew_speed_for_direction(self, direction: str, default: float | None = None) -> float | None:
+        """Return the travel speed for a world-cardinal movement direction."""
+
+        if self.crew_speed_by_direction:
+            return self.crew_speed_by_direction.get(direction, default)
+        if self.crew_speed_factor is not None:
+            return self.crew_speed_factor
+        return default
+
+    def crew_congested_speed_for_direction(
+        self,
+        direction: str,
+        default: float | None = None,
+    ) -> float | None:
+        """Return the congested travel speed for a world-cardinal direction."""
+
+        if self.crew_congested_speed_by_direction:
+            return self.crew_congested_speed_by_direction.get(direction, default)
+        if self.crew_congested_speed_factor is not None:
+            return self.crew_congested_speed_factor
+        return default
+
+    def is_direction_blocked(self, tile: Coord, direction: str) -> bool:
+        """Return True when movement from *tile* in *direction* is blocked."""
+
+        return direction in self.blocked_travel_cell_directions.get(tile, frozenset())
 
 
 @dataclass(frozen=True)
@@ -156,10 +205,39 @@ class VanillaPartGeometry:
     rotations: Dict[int, RotationGeometry]
     save_rect: Optional[PartRect] = None
     physical_rect: Optional[PartRect] = None
-    crew_speed_factor: Optional[float] = None
-    crew_congested_speed_factor: Optional[float] = None
+    crew_speed_factor: float | None = None
+    crew_speed_by_direction: Mapping[str, float] | None = None
+    crew_congested_speed_factor: float | None = None
+    crew_congested_speed_by_direction: Mapping[str, float] | None = None
     cell_occupancy_factor: Optional[float] = None
     note: str = "game-file geometry"
+
+    def rotation_geometry(self, rotation: int) -> RotationGeometry:
+        """Return the best matching rotation geometry for *rotation*."""
+
+        return (
+            self.rotations.get(rotation)
+            or self.rotations.get(rotation % 4)
+            or next(iter(self.rotations.values()))
+        )
+
+    def crew_speed_for_direction(
+        self,
+        rotation: int,
+        direction: str,
+        default: float | None = None,
+    ) -> float | None:
+        """Return travel speed for a rotated part moving in a world direction."""
+
+        rotation_geometry = self.rotation_geometry(rotation)
+        per_rotation_speed = rotation_geometry.crew_speed_for_direction(direction)
+        if per_rotation_speed is not None:
+            return per_rotation_speed
+        if self.crew_speed_by_direction:
+            return self.crew_speed_by_direction.get(direction, default)
+        if self.crew_speed_factor is not None:
+            return self.crew_speed_factor
+        return default
 
 
 @dataclass(frozen=True)
@@ -237,6 +315,57 @@ def part_rect_to_2x_bounds(
     return (rect.x * 2, rect.y * 2, rect.width * 2, rect.height * 2)
 
 
+def _normalize_directional_speed_map(raw_value: object) -> Dict[str, float] | None:
+    """Normalize a scalar-or-mapping travel speed payload into a direction map."""
+
+    if not isinstance(raw_value, Mapping):
+        return None
+    normalized: Dict[str, float] = {}
+    for direction, value in raw_value.items():
+        if not isinstance(direction, str):
+            continue
+        try:
+            normalized[direction] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return normalized or None
+
+
+def _normalize_blocked_travel_directions(raw_value: object) -> Dict[Coord, frozenset[str]]:
+    """Normalize per-cell blocked travel directions from exported JSON."""
+
+    if not isinstance(raw_value, list):
+        return {}
+    normalized: Dict[Coord, frozenset[str]] = {}
+    for entry in raw_value:
+        if not isinstance(entry, Mapping):
+            continue
+        tile = entry.get("tile")
+        if not isinstance(tile, (list, tuple)) or len(tile) != 2:
+            continue
+        directions = entry.get("value")
+        if not isinstance(directions, list):
+            continue
+        direction_names = frozenset(str(direction) for direction in directions if isinstance(direction, str))
+        if not direction_names:
+            continue
+        normalized[(int(tile[0]), int(tile[1]))] = direction_names
+    return normalized
+
+
+def _has_positive_travel_speed(
+    scalar_speed: float | None,
+    directional_speed: Mapping[str, float] | None,
+) -> bool:
+    """Return True when either scalar or directional travel speed is positive."""
+
+    if scalar_speed is not None and scalar_speed > 0:
+        return True
+    if directional_speed:
+        return any(speed > 0 for speed in directional_speed.values())
+    return False
+
+
 def is_vanilla_part_id(part_id: str) -> bool:
     """Return True when a part ID belongs to the vanilla Cosmoteer namespace."""
 
@@ -261,12 +390,20 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
         part_id = part.get("id")
         per_rotation = ((part.get("geometry") or {}).get("per_rotation") or {})
         travel_payload = part.get("travel") or {}
+        top_level_speed = part.get("crew_speed_factor", travel_payload.get("crew_speed_factor"))
+        top_level_congested_speed = part.get(
+            "crew_congested_speed_factor",
+            travel_payload.get("crew_congested_speed_factor"),
+        )
         rotations: Dict[int, RotationGeometry] = {}
         source_file = str(part.get("source_file") or "repo geometry export")
 
         for key, rotation_payload in per_rotation.items():
             rotation = int(rotation_payload.get("rotation_index", key))
             size = rotation_payload.get("size") or [0, 0]
+            rotation_speed = rotation_payload.get("crew_speed_factor")
+            rotation_congested_speed = rotation_payload.get("crew_congested_speed_factor")
+            force_manhattan = rotation_payload.get("force_manhattan_path")
             rotations[rotation] = RotationGeometry(
                 rotation=rotation,
                 width=int(size[0]),
@@ -291,6 +428,24 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
                     parse_polygon_vertex(vertex)
                     for vertex in rotation_payload.get("polygon_vertices", [])
                 ),
+                blocked_travel_cell_directions=_normalize_blocked_travel_directions(
+                    rotation_payload.get("blocked_travel_cell_directions", [])
+                ),
+                force_manhattan_path=(bool(force_manhattan) if force_manhattan is not None else None),
+                crew_speed_factor=(
+                    float(rotation_speed)
+                    if isinstance(rotation_speed, (int, float))
+                    else None
+                ),
+                crew_speed_by_direction=_normalize_directional_speed_map(rotation_speed),
+                crew_congested_speed_factor=(
+                    float(rotation_congested_speed)
+                    if isinstance(rotation_congested_speed, (int, float))
+                    else None
+                ),
+                crew_congested_speed_by_direction=_normalize_directional_speed_map(
+                    rotation_congested_speed
+                ),
             )
 
         if part_id and rotations:
@@ -305,8 +460,20 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
                     part.get("physical_rect"),
                     source=f"{source_file}:physical_rect",
                 ),
-                crew_speed_factor=travel_payload.get("crew_speed_factor"),
-                crew_congested_speed_factor=travel_payload.get("crew_congested_speed_factor"),
+                crew_speed_factor=(
+                    float(top_level_speed)
+                    if isinstance(top_level_speed, (int, float))
+                    else None
+                ),
+                crew_speed_by_direction=_normalize_directional_speed_map(top_level_speed),
+                crew_congested_speed_factor=(
+                    float(top_level_congested_speed)
+                    if isinstance(top_level_congested_speed, (int, float))
+                    else None
+                ),
+                crew_congested_speed_by_direction=_normalize_directional_speed_map(
+                    top_level_congested_speed
+                ),
                 cell_occupancy_factor=travel_payload.get("cell_occupancy_factor"),
             )
 
@@ -372,17 +539,16 @@ def infer_meta(part_id: str, rotation: int) -> Tuple[PartMeta, bool]:
 
     vanilla_geometry = load_vanilla_part_geometry().get(part_id)
     if vanilla_geometry is not None:
-        rotation_geometry = (
-            vanilla_geometry.rotations.get(rotation)
-            or vanilla_geometry.rotations.get(rotation % 4)
-            or next(iter(vanilla_geometry.rotations.values()))
-        )
+        rotation_geometry = vanilla_geometry.rotation_geometry(rotation)
 
-        # Vanilla traversability is gated by crew movement speed, while
-        # unblocked tiles still describe which cells inside the footprint are
-        # actually walkable when movement is allowed.
-        crew_speed_factor = vanilla_geometry.crew_speed_factor or 0
-        traversable = crew_speed_factor > 0 and bool(rotation_geometry.unblocked_tiles)
+        # Vanilla traversability is gated by travel speed, while unblocked tiles
+        # still describe which cells inside the footprint are actually walkable
+        # once movement is allowed. Some parts, such as conveyors, now expose
+        # direction-specific travel speed maps instead of one scalar factor.
+        traversable = _has_positive_travel_speed(
+            vanilla_geometry.crew_speed_factor,
+            vanilla_geometry.crew_speed_by_direction,
+        ) and bool(rotation_geometry.unblocked_tiles)
         return (
             PartMeta(
                 width=rotation_geometry.width,

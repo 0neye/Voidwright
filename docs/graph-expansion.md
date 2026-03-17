@@ -69,7 +69,10 @@ graph_expansion/
     ├── __init__.py
     ├── base.py
     ├── base_indexes.py
+    ├── core_support_layer2.py
+    ├── crew_access_layer1.py
     ├── global_ship_info.py
+    ├── travel_support.py
     ├── hull_perimeter.py
     ├── spatial_zones.py
     ├── traversable_clusters.py
@@ -113,9 +116,26 @@ Current structural passes:
   - emits `global_member` cross-edges from that node to every structural node
 
 - `TraversableClustersPass`
-  - computes crew-traversable clusters
+  - computes crew-traversable clusters conservatively from doors plus corridor-like adjacency
   - stores transient annotations like `traversable_clusters` and `cluster_by_part_id`
   - emits traversable-cluster super-nodes and `super_member` cross-edges
+
+- `travel_support.py`
+  - shared weighted-travel helpers for Layer 1 / Layer 2 passes
+  - centralizes movement semantics, role classification, cached traversable-cluster cell graphs, and reverse-Dijkstra distance queries
+
+- `Layer1CrewAccessPass`
+  - emits direct structural-to-structural `crew_access_reactor` and `crew_access_factory` edges
+  - computes weighted travel distance with Dijkstra over exact walkable `2x` cells plus explicit door portals
+  - currently restricts crew-access edges to the crew room's own traversable cluster; if no in-cluster core target exists, the room is skipped
+  - proxy recovery via structural `touching` edges remains available in shared helper code but is currently disabled
+  - loads richer per-rotation travel metadata on demand from `common.geometry` via the shared travel-support module rather than inlining it into preprocessing graph JSON
+
+- `Layer2CoreSupportPass`
+  - emits downstream structural support edges from reactors/factories to infrastructure and weapon consumers in the same traversable cluster
+  - reactor edges currently include `reactor_supports_power_storage`, `reactor_supports_shield`, `reactor_supports_engine_room`, `reactor_supports_thruster`, and `reactor_supports_energy_weapon`
+  - factory edges currently include `factory_supports_storage`, `factory_supports_ammo_weapon`, and `factory_supports_missile_weapon`
+  - reuses the same shared weighted Dijkstra travel helpers as Layer 1, but does not use classic-ship proxy fallback
 
 - `HullPerimeterPass`
   - classifies each part as `perimeter` (has at least one unoccupied 2x neighbor cell) or `interior`
@@ -145,6 +165,8 @@ source graph JSON
   -> BaseIndexesPass
   -> GlobalShipInfoPass
   -> TraversableClustersPass
+  -> Layer1CrewAccessPass
+  -> Layer2CoreSupportPass
   -> HullPerimeterPass
   -> SpatialZonesPass
   -> WeaponGroupsPass
@@ -172,12 +194,14 @@ That graph contains:
 - `cross_edges`
   - `global_member` edges from the global node to every structural node
   - `super_member` edges from cluster nodes to their member structural nodes
+  - direct structural-to-structural `crew_access_reactor` / `crew_access_factory` edges with weighted `travel_distance`
+  - downstream structural support edges such as `reactor_supports_power_storage`, `reactor_supports_shield`, `reactor_supports_engine_room`, `reactor_supports_thruster`, `reactor_supports_energy_weapon`, `factory_supports_storage`, `factory_supports_ammo_weapon`, and `factory_supports_missile_weapon`
   - `hull_member` edges from the `hull_perimeter` node to perimeter parts
   - `interior_member` edges from the `interior` node to interior parts
   - `zone_member` edges from each zone node to its member structural nodes
   - `weapon_member` edges from each weapon-group node to its member structural nodes
 - `summary`
-  - compact counts for all of the above: cluster count, hull-perimeter/interior counts, spatial-zone and weapon-group node/edge counts
+  - compact counts for all of the above: cluster count, crew-access edge counts, Layer 2 core-support edge counts, hull-perimeter/interior counts, spatial-zone and weapon-group node/edge counts
 
 The top-level payload also gets an `expansion` metadata block like:
 
@@ -185,12 +209,14 @@ The top-level payload also gets an `expansion` metadata block like:
 {
   "expansion": {
     "backend": "structural",
-    "version": 3,
+    "version": 7,
     "graphs_added": ["X_expansion_structural"],
     "passes": [
       {"name": "base_indexes", "version": 1},
       {"name": "global_ship_info", "version": 1},
-      {"name": "traversable_clusters", "version": 1},
+      {"name": "traversable_clusters", "version": 2},
+      {"name": "crew_access_layer1", "version": 2},
+      {"name": "core_support_layer2", "version": 1},
       {"name": "hull_perimeter", "version": 1},
       {"name": "spatial_zones", "version": 1},
       {"name": "weapon_groups", "version": 1}
@@ -275,6 +301,7 @@ A few deliberate constraints remain:
 - there is no pass plugin registry or dependency solver yet
 - `requires` / `provides` on passes are descriptive metadata, not enforced scheduling rules
 - the persisted expansion metadata still uses the key `backend` for compatibility
+- richer travel geometry is loaded on demand from `common.geometry`; preprocessing graph JSON still does not inline directional speed maps or blocked-travel direction metadata
 - no specialized graph library such as `rustworkx` is used yet; plain Python structures remain the default
 
-Those are intentional for now. The current goal is a clean, contributor-friendly, deterministic pass pipeline.
+Those are intentional for now. The current goal is a clean, contributor-friendly, deterministic pass pipeline with efficient, pass-local travel analysis where needed.

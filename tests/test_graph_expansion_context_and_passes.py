@@ -10,6 +10,8 @@ from graph_expansion.passes.global_ship_info import GlobalShipInfoPass
 from graph_expansion.passes.hull_perimeter import HullPerimeterPass
 from graph_expansion.passes.spatial_zones import SpatialZonesPass, ZONE_NAMES
 from graph_expansion.passes.traversable_clusters import TraversableClustersPass
+from graph_expansion.passes.crew_access_layer1 import Layer1CrewAccessPass, _ENABLE_CREW_ROOM_PROXY_FALLBACK
+from graph_expansion.passes.core_support_layer2 import Layer2CoreSupportPass
 from graph_expansion.passes.weapon_groups import WeaponGroupsPass, WEAPON_TYPE_SUBSTRINGS
 
 __all__: list[str] = []
@@ -262,6 +264,406 @@ def test_traversable_clusters_pass_records_annotations_and_emits_exact_clusters(
 
 
 # ---------------------------------------------------------------------------
+# Layer1CrewAccessPass
+# ---------------------------------------------------------------------------
+
+
+def make_door_edge_with_cells(
+    source: int,
+    target: int,
+    source_cell_2x: list[int],
+    target_cell_2x: list[int],
+) -> dict[str, Any]:
+    """Build a structural door edge including portal cell coordinates."""
+
+    return {
+        "source": source,
+        "target": target,
+        "kind": "door",
+        "source_cell_2x": source_cell_2x,
+        "target_cell_2x": target_cell_2x,
+    }
+
+
+def test_layer1_crew_access_simple_distances_reactor_and_factory() -> None:
+    """Crew access should compute weighted travel distance with deterministic output."""
+
+    nodes = [
+        make_full_node(0, [0, 0], part_id="mod.crew_quarters", walkable_cells=[[0, 0]]),
+        make_full_node(1, [2, 0], part_id="cosmoteer.corridor", walkable_cells=[[2, 0], [4, 0], [4, 2]]),
+        make_full_node(2, [6, 0], part_id="mod.reactor_test", walkable_cells=[[6, 0]]),
+        make_full_node(3, [6, 2], part_id="mod.factory_test", walkable_cells=[[6, 2]]),
+    ]
+    edges = [
+        make_door_edge_with_cells(0, 1, [0, 0], [2, 0]),
+        make_door_edge_with_cells(1, 2, [4, 0], [6, 0]),
+        make_door_edge_with_cells(1, 3, [4, 2], [6, 2]),
+    ]
+    context = ExpansionContext(make_graph_payload(nodes, edges), expansion_name="structural", expansion_version=4)
+    BaseIndexesPass().run(context)
+    TraversableClustersPass().run(context)
+
+    summary = Layer1CrewAccessPass().run(context)
+    assert summary["crew_rooms"] == 1
+    assert summary["crew_access_reactor_edges"] == 1
+    assert summary["crew_access_factory_edges"] == 1
+
+    cross_edges = context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+    crew_edges = [e for e in cross_edges if e["kind"].startswith("crew_access_")]
+    assert {(e["kind"], e["target"]) for e in crew_edges} == {
+        ("crew_access_reactor", 2),
+        ("crew_access_factory", 3),
+    }
+
+    reactor_edge = next(e for e in crew_edges if e["kind"] == "crew_access_reactor")
+    factory_edge = next(e for e in crew_edges if e["kind"] == "crew_access_factory")
+
+    assert reactor_edge["travel_distance"] == 3.0
+    assert factory_edge["travel_distance"] == 4.0
+    assert reactor_edge["distance_unit"] == "movement_cost"
+    assert reactor_edge["path_model"] == "dijkstra_cardinal_cell_entry_cost_v1"
+    assert reactor_edge["cluster_id"] == "traversable_cluster_0"
+    assert reactor_edge["via_proxy"] is False
+    assert reactor_edge["proxy_part_id"] is None
+    assert reactor_edge["proxy_touching_hops"] is None
+
+
+def test_layer1_crew_access_conveyor_direction_changes_weighted_cost() -> None:
+    """Directional conveyor speed should affect weighted travel distance."""
+
+    def run_for_rotation(rotation: int) -> float:
+        nodes = [
+            make_full_node(0, [0, 0], part_id="mod.crew_quarters", walkable_cells=[[0, 0]]),
+            make_full_node(
+                1,
+                [2, 0],
+                rotation=rotation,
+                part_id="cosmoteer.conveyor",
+                walkable_cells=[[2, 0]],
+            ),
+            make_full_node(2, [4, 0], part_id="mod.reactor_test", walkable_cells=[[4, 0]]),
+        ]
+        edges = [
+            make_door_edge_with_cells(0, 1, [0, 0], [2, 0]),
+            make_door_edge_with_cells(1, 2, [2, 0], [4, 0]),
+        ]
+        context = ExpansionContext(
+            make_graph_payload(nodes, edges),
+            expansion_name="structural",
+            expansion_version=4,
+        )
+        BaseIndexesPass().run(context)
+        TraversableClustersPass().run(context)
+        Layer1CrewAccessPass().run(context)
+        edge = next(
+            e
+            for e in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+            if e["kind"] == "crew_access_reactor"
+        )
+        return float(edge["travel_distance"])
+
+    assert run_for_rotation(1) < run_for_rotation(0)
+
+
+def test_layer1_crew_access_blocked_internal_direction_prevents_path() -> None:
+    """Per-rotation blocked travel directions must prevent illegal in-part movement."""
+
+    nodes = [
+        make_full_node(0, [-2, 2], part_id="mod.crew_quarters", walkable_cells=[[-2, 2]]),
+        make_full_node(
+            1,
+            [0, 0],
+            part_id="cosmoteer.control_room_med",
+            walkable_cells=[[2, 2], [2, 4]],
+        ),
+        make_full_node(2, [4, 4], part_id="mod.reactor_test", walkable_cells=[[4, 4]]),
+    ]
+    edges = [
+        make_door_edge_with_cells(0, 1, [-2, 2], [2, 2]),
+        make_door_edge_with_cells(1, 2, [2, 4], [4, 4]),
+    ]
+    context = ExpansionContext(make_graph_payload(nodes, edges), expansion_name="structural", expansion_version=4)
+    BaseIndexesPass().run(context)
+    TraversableClustersPass().run(context)
+
+    Layer1CrewAccessPass().run(context)
+    cross_edges = context.emitted_graphs.get(_EXPANSION_GRAPH_NAME, {}).get("cross_edges", [])
+    assert [e for e in cross_edges if e.get("kind") == "crew_access_reactor"] == []
+
+
+def test_layer1_crew_access_proxy_fallback_recovers_cross_cluster_touching_path() -> None:
+    """A direct touching walkable proxy should recover cross-cluster crew access."""
+
+    nodes = [
+        make_full_node(10, [0, 0], part_id="mod.crew_quarters", walkable_cells=[[0, 0]]),
+        make_full_node(11, [2, 0], part_id="cosmoteer.corridor", walkable_cells=[[2, 0], [4, 0]]),
+        make_full_node(12, [6, 0], part_id="mod.reactor_test", walkable_cells=[[6, 0]]),
+    ]
+    edges = [
+        make_edge(10, 11, "touching"),
+        make_door_edge_with_cells(11, 12, [4, 0], [6, 0]),
+    ]
+
+    context = ExpansionContext(make_graph_payload(nodes, edges), expansion_name="structural", expansion_version=4)
+    BaseIndexesPass().run(context)
+    TraversableClustersPass().run(context)
+
+    summary = Layer1CrewAccessPass().run(context)
+    cross_edges = context.emitted_graphs.get(_EXPANSION_GRAPH_NAME, {}).get("cross_edges", [])
+    reactor_edges = [e for e in cross_edges if e.get("kind") == "crew_access_reactor"]
+
+    if _ENABLE_CREW_ROOM_PROXY_FALLBACK:
+        assert summary["crew_access_reactor_edges"] == 1
+        assert len(reactor_edges) == 1
+        assert reactor_edges[0]["source"] == 10
+        assert reactor_edges[0]["target"] == 12
+        assert reactor_edges[0]["via_proxy"] is True
+        assert reactor_edges[0]["proxy_part_id"] == 11
+        assert reactor_edges[0]["proxy_touching_hops"] == 1
+    else:
+        assert summary["crew_access_reactor_edges"] == 0
+        assert len(reactor_edges) == 0
+
+def test_layer1_crew_access_proxy_fallback_failure_skips_crew_room() -> None:
+    """When proxy discovery fails, isolated crew rooms must not emit edges."""
+
+    nodes = [
+        make_full_node(20, [0, 0], part_id="mod.crew_quarters", walkable_cells=[[0, 0]]),
+        make_full_node(21, [2, 0], part_id="cosmoteer.armor", walkable_cells=None),
+        make_full_node(22, [10, 0], part_id="mod.reactor_test", walkable_cells=[[10, 0]]),
+    ]
+    edges = [make_edge(20, 21, "touching")]
+    context = ExpansionContext(make_graph_payload(nodes, edges), expansion_name="structural", expansion_version=4)
+    BaseIndexesPass().run(context)
+    TraversableClustersPass().run(context)
+
+    Layer1CrewAccessPass().run(context)
+    cross_edges = context.emitted_graphs.get(_EXPANSION_GRAPH_NAME, {}).get("cross_edges", [])
+    assert [
+        e
+        for e in cross_edges
+        if e.get("source") == 20 and str(e.get("kind", "")).startswith("crew_access_")
+    ] == []
+
+
+def test_layer1_crew_access_proxy_fallback_does_not_follow_touching_chains() -> None:
+    """Proxy fallback must stay local instead of traversing arbitrary touching chains."""
+
+    nodes = [
+        make_full_node(30, [0, 0], part_id="mod.crew_quarters", walkable_cells=[[0, 0]]),
+        make_full_node(31, [2, 0], part_id="cosmoteer.armor", walkable_cells=None),
+        make_full_node(32, [4, 0], part_id="cosmoteer.corridor", walkable_cells=[[4, 0], [6, 0]]),
+        make_full_node(33, [8, 0], part_id="mod.reactor_test", walkable_cells=[[8, 0]]),
+    ]
+    edges = [
+        make_edge(30, 31, "touching"),
+        make_edge(31, 32, "touching"),
+        make_door_edge_with_cells(32, 33, [6, 0], [8, 0]),
+    ]
+    context = ExpansionContext(make_graph_payload(nodes, edges), expansion_name="structural", expansion_version=4)
+    BaseIndexesPass().run(context)
+    TraversableClustersPass().run(context)
+
+    Layer1CrewAccessPass().run(context)
+    cross_edges = context.emitted_graphs.get(_EXPANSION_GRAPH_NAME, {}).get("cross_edges", [])
+    assert [
+        e
+        for e in cross_edges
+        if e.get("source") == 30 and str(e.get("kind", "")).startswith("crew_access_")
+    ] == []
+
+
+def test_layer1_crew_access_edges_emitted_in_deterministic_order() -> None:
+    """Crew-access edges must be deterministic regardless of input node/edge order."""
+
+    nodes = [
+        make_full_node(5, [0, 0], part_id="mod.crew_quarters", walkable_cells=[[0, 0]]),
+        make_full_node(2, [2, 0], part_id="cosmoteer.corridor", walkable_cells=[[2, 0], [4, 0], [2, 2], [4, 2]]),
+        make_full_node(9, [6, 0], part_id="mod.reactor_test", walkable_cells=[[6, 0]]),
+        make_full_node(7, [6, 2], part_id="mod.factory_test", walkable_cells=[[6, 2]]),
+        make_full_node(3, [0, 2], part_id="mod.crew_quarters_large", walkable_cells=[[0, 2]]),
+    ]
+    edges = [
+        make_door_edge_with_cells(2, 9, [4, 0], [6, 0]),
+        make_door_edge_with_cells(2, 7, [4, 2], [6, 2]),
+        make_door_edge_with_cells(3, 2, [0, 2], [2, 2]),
+        make_door_edge_with_cells(5, 2, [0, 0], [2, 0]),
+    ]
+
+    context_a = ExpansionContext(
+        make_graph_payload(list(reversed(nodes)), list(reversed(edges))),
+        expansion_name="structural",
+        expansion_version=4,
+    )
+    BaseIndexesPass().run(context_a)
+    TraversableClustersPass().run(context_a)
+    Layer1CrewAccessPass().run(context_a)
+    edges_a = [
+        e
+        for e in context_a.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+        if e["kind"].startswith("crew_access_")
+    ]
+
+    context_b = ExpansionContext(make_graph_payload(nodes, edges), expansion_name="structural", expansion_version=4)
+    BaseIndexesPass().run(context_b)
+    TraversableClustersPass().run(context_b)
+    Layer1CrewAccessPass().run(context_b)
+    edges_b = [
+        e
+        for e in context_b.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+        if e["kind"].startswith("crew_access_")
+    ]
+
+    def edge_key(e: Mapping[str, Any]) -> tuple[int, str, int]:
+        return (int(e["source"]), str(e["kind"]), int(e["target"]))
+
+    assert [edge_key(e) for e in edges_a] == [edge_key(e) for e in edges_b]
+    assert [edge_key(e) for e in edges_b] == sorted(edge_key(e) for e in edges_b)
+
+
+# ---------------------------------------------------------------------------
+# Layer2CoreSupportPass
+# ---------------------------------------------------------------------------
+
+
+def _run_layer2(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> tuple[ExpansionContext, dict[str, Any]]:
+    """Run the Layer 1 + Layer 2 support passes on a minimal payload."""
+
+    context = ExpansionContext(
+        make_graph_payload(nodes, edges),
+        expansion_name="structural",
+        expansion_version=5,
+    )
+    BaseIndexesPass().run(context)
+    TraversableClustersPass().run(context)
+    Layer1CrewAccessPass().run(context)
+    summary = Layer2CoreSupportPass().run(context)
+    return context, summary
+
+
+def test_layer2_reactor_support_edges_cover_power_storage_shield_engine_room_thruster_and_energy_weapon() -> None:
+    """Reactors should connect to cluster-local infrastructure and skip engine-room-adjacent thrusters."""
+
+    nodes = [
+        make_full_node(1, [0, 0], part_id="mod.reactor_test", walkable_cells=[[0, 0]]),
+        make_full_node(9, [2, 0], part_id="cosmoteer.corridor", walkable_cells=[[2, 0], [4, 0], [6, 0], [8, 0], [10, 0], [12, 0], [14, 0], [16, 0]]),
+        make_full_node(2, [18, 0], part_id="mod.power_storage", walkable_cells=[[18, 0]]),
+        make_full_node(3, [20, 0], part_id="mod.shield_gen", walkable_cells=[[20, 0]]),
+        make_full_node(5, [22, 0], part_id="mod.engine_room", walkable_cells=[[22, 0]]),
+        make_full_node(6, [24, 0], part_id="mod.thruster_med", walkable_cells=[[24, 0]]),
+        make_full_node(7, [26, 0], part_id="mod.thruster_boost", walkable_cells=[[26, 0]]),
+        make_full_node(4, [28, 0], part_id="mod.laser_blaster", walkable_cells=[[28, 0]]),
+    ]
+    edges = [
+        make_door_edge_with_cells(1, 9, [0, 0], [2, 0]),
+        make_door_edge_with_cells(9, 2, [16, 0], [18, 0]),
+        make_door_edge_with_cells(2, 3, [18, 0], [20, 0]),
+        make_door_edge_with_cells(3, 5, [20, 0], [22, 0]),
+        make_door_edge_with_cells(5, 6, [22, 0], [24, 0]),
+        make_door_edge_with_cells(6, 7, [24, 0], [26, 0]),
+        make_door_edge_with_cells(7, 4, [26, 0], [28, 0]),
+        make_edge(5, 6, "touching"),
+    ]
+
+    context, summary = _run_layer2(nodes, edges)
+    assert summary["reactor_support_edges"] == 5
+    reactor_edges = [
+        e
+        for e in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+        if e["kind"].startswith("reactor_supports_")
+    ]
+    assert {(e["kind"], e["target"]) for e in reactor_edges} == {
+        ("reactor_supports_power_storage", 2),
+        ("reactor_supports_shield", 3),
+        ("reactor_supports_engine_room", 5),
+        ("reactor_supports_thruster", 7),
+        ("reactor_supports_energy_weapon", 4),
+    }
+    assert all(e["travel_distance"] > 0 for e in reactor_edges)
+
+
+def test_layer2_factory_support_edges_respect_factory_mode() -> None:
+    """Ammo factories should target ammo weapons, missile factories missile weapons, and all factories storage."""
+
+    nodes = [
+        make_full_node(10, [0, 0], part_id="cosmoteer.factory_ammo", walkable_cells=[[0, 0]]),
+        make_full_node(11, [0, 2], part_id="cosmoteer.factory_he", walkable_cells=[[0, 2]]),
+        make_full_node(12, [8, 0], part_id="mod.storage", walkable_cells=[[8, 0]]),
+        make_full_node(13, [8, 2], part_id="cosmoteer.cannon_med", walkable_cells=[[8, 2]]),
+        make_full_node(14, [8, 4], part_id="cosmoteer.missile_launcher", walkable_cells=[[8, 4]]),
+        make_full_node(15, [0, 4], part_id="cosmoteer.factory_steel", walkable_cells=[[0, 4]]),
+        make_full_node(16, [2, 0], part_id="cosmoteer.corridor", walkable_cells=[[2, 0], [4, 0], [6, 0]]),
+        make_full_node(17, [2, 2], part_id="cosmoteer.corridor", walkable_cells=[[2, 2], [4, 2], [6, 2]]),
+        make_full_node(18, [2, 4], part_id="cosmoteer.corridor", walkable_cells=[[2, 4], [4, 4], [6, 4]]),
+    ]
+    edges = [
+        make_door_edge_with_cells(10, 16, [0, 0], [2, 0]),
+        make_door_edge_with_cells(11, 17, [0, 2], [2, 2]),
+        make_door_edge_with_cells(15, 18, [0, 4], [2, 4]),
+        make_door_edge_with_cells(16, 12, [6, 0], [8, 0]),
+        make_door_edge_with_cells(17, 13, [6, 2], [8, 2]),
+        make_door_edge_with_cells(18, 14, [6, 4], [8, 4]),
+        make_door_edge_with_cells(16, 17, [4, 0], [4, 2]),
+        make_door_edge_with_cells(17, 18, [4, 2], [4, 4]),
+    ]
+
+    context, summary = _run_layer2(nodes, edges)
+    assert summary["factory_support_edges"] == 5
+    factory_edges = [
+        e
+        for e in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+        if e["kind"].startswith("factory_supports_")
+    ]
+    assert {(e["source"], e["kind"], e["target"]) for e in factory_edges} == {
+        (10, "factory_supports_storage", 12),
+        (10, "factory_supports_ammo_weapon", 13),
+        (11, "factory_supports_storage", 12),
+        (11, "factory_supports_missile_weapon", 14),
+        (15, "factory_supports_storage", 12),
+    }
+
+
+def test_layer2_support_edges_are_deterministic() -> None:
+    """Layer 2 support edges must not depend on input ordering."""
+
+    nodes = [
+        make_full_node(1, [0, 0], part_id="mod.reactor_test", walkable_cells=[[0, 0]]),
+        make_full_node(2, [2, 0], part_id="cosmoteer.power_storage", walkable_cells=[[2, 0]]),
+        make_full_node(3, [4, 0], part_id="cosmoteer.shield_gen_small", walkable_cells=[[4, 0]]),
+        make_full_node(4, [0, 2], part_id="cosmoteer.factory_ammo", walkable_cells=[[0, 2]]),
+        make_full_node(5, [2, 2], part_id="cosmoteer.storage_3x2", walkable_cells=[[2, 2]]),
+        make_full_node(6, [4, 2], part_id="cosmoteer.cannon_med", walkable_cells=[[4, 2]]),
+    ]
+    edges = [
+        make_door_edge_with_cells(1, 2, [0, 0], [2, 0]),
+        make_door_edge_with_cells(2, 3, [2, 0], [4, 0]),
+        make_door_edge_with_cells(4, 5, [0, 2], [2, 2]),
+        make_door_edge_with_cells(5, 6, [2, 2], [4, 2]),
+        make_door_edge_with_cells(2, 5, [2, 0], [2, 2]),
+    ]
+
+    context_a, _ = _run_layer2(list(reversed(nodes)), list(reversed(edges)))
+    context_b, _ = _run_layer2(nodes, edges)
+
+    def edge_key(e: Mapping[str, Any]) -> tuple[int, str, int]:
+        return (int(e["source"]), str(e["kind"]), int(e["target"]))
+
+    edges_a = [
+        e for e in context_a.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+        if e["kind"].startswith("reactor_supports_") or e["kind"].startswith("factory_supports_")
+    ]
+    edges_b = [
+        e for e in context_b.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+        if e["kind"].startswith("reactor_supports_") or e["kind"].startswith("factory_supports_")
+    ]
+    assert [edge_key(e) for e in edges_a] == [edge_key(e) for e in edges_b]
+    assert [edge_key(e) for e in edges_b] == sorted(edge_key(e) for e in edges_b)
+
+
+# ---------------------------------------------------------------------------
 # Helpers for passes that require location_2x and footprint
 # ---------------------------------------------------------------------------
 
@@ -419,16 +821,18 @@ def test_hull_perimeter_summary_updates_expansion_graph_summary() -> None:
 
 
 def test_hull_perimeter_rotation_swaps_footprint_dimensions() -> None:
-    """A 1×2 part rotated 90° should occupy cells as a 2×1 part."""
+    """Preprocessing stores rotation-specific dimensions; the pass reads them directly."""
 
-    # 1×2 part at [0,0] rotation=0: cells (0,0) and (0,2). Width in x = 1, height in y = 2.
-    # Neighbor to the right of (0,0) is (2,0) — unoccupied → perimeter.
+    # 1×2 part at [0,0] rotation=0: preprocessing stores width=1, height=2.
+    # Cells: (0,0) and (0,2). Neighbor to the right of (0,0) is (2,0) — unoccupied → perimeter.
     node = make_full_node(0, [0, 0], width=1, height=2, rotation=0)
     context, summary = _run_hull_perimeter([node])
     assert context.get_annotation("hull_role_by_part_id")[0] == "perimeter"
 
-    # 1×2 part at [0,0] rotation=1: swaps to effective 2×1, cells (0,0) and (2,0).
-    node_r = make_full_node(1, [0, 0], width=1, height=2, rotation=1)
+    # Same physical part rotated 90° (rotation=1): preprocessing stores width=2, height=1.
+    # Cells: (0,0) and (2,0). No dimension swap is applied by the pass — the stored
+    # values are already rotation-specific.
+    node_r = make_full_node(1, [0, 0], width=2, height=1, rotation=1)
     context_r, _ = _run_hull_perimeter([node_r])
     assert context_r.get_annotation("hull_role_by_part_id")[1] == "perimeter"
 
