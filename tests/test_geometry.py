@@ -35,6 +35,25 @@ def test_vanilla_geometry_still_overrides_fallback_name_matches() -> None:
     assert meta.traversable is False
 
 
+def test_legacy_factory_aliases_resolve_to_exact_vanilla_geometry() -> None:
+    """Old factory IDs should map onto the canonical vanilla part geometry."""
+
+    alias_expectations = {
+        "cosmoteer.missile_factory_nuke": (4, 4),
+        "cosmoteer.missile_factory_emp": (3, 4),
+        "cosmoteer.missile_factory": (3, 3),
+        "missile_factory": (3, 3),
+        "cosmoteer.missile_factory_high_explosive": (3, 3),
+        "cosmoteer.missile_factory_he": (3, 3),
+        "cosmoteer.mine_factory": (4, 3),
+    }
+
+    for part_id, expected_size in alias_expectations.items():
+        meta, inferred = infer_meta(part_id, 0)
+        assert inferred is False, part_id
+        assert (meta.width, meta.height) == expected_size, part_id
+
+
 def test_full_geometry_loader_exposes_rect_metadata() -> None:
     """The full-geometry export should expose save and physical rect metadata."""
 
@@ -77,3 +96,42 @@ def test_triangle_polygon_vertices_convert_cleanly_to_integer_2x_coordinates() -
     tri_vertices = geometry_cache["cosmoteer.armor_tri"].rotations[0].polygon_vertices
 
     assert polygon_vertices_to_2x(tri_vertices) == ((1, 1), (2, 2), (0, 2))
+
+
+def test_conveyor_directional_speed_maps_load_and_rotate() -> None:
+    """Conveyors should preserve direction-dependent travel speeds per rotation."""
+
+    geometry_cache = load_vanilla_part_geometry()
+    conveyor = geometry_cache["cosmoteer.conveyor"]
+
+    assert conveyor.crew_speed_factor is None
+    assert conveyor.crew_speed_by_direction == {
+        "Up": 2.0,
+        "Right": 0.75,
+        "Down": 0.25,
+        "Left": 0.75,
+    }
+    assert conveyor.rotation_geometry(0).crew_speed_for_direction("Up") == 2.0
+    assert conveyor.rotation_geometry(1).crew_speed_for_direction("Right") == 2.0
+    assert conveyor.rotation_geometry(1).crew_speed_for_direction("Up") == 0.75
+    assert conveyor.crew_speed_for_direction(1, "Right") == 2.0
+
+
+def test_rotation_geometry_exposes_blocked_travel_directions_and_manhattan_flag() -> None:
+    """Per-rotation blocked travel directions should rotate with the part geometry."""
+
+    geometry_cache = load_vanilla_part_geometry()
+    control_room = geometry_cache["cosmoteer.control_room_med"]
+
+    rotation_0 = control_room.rotation_geometry(0)
+    rotation_1 = control_room.rotation_geometry(1)
+
+    assert rotation_0.force_manhattan_path is True
+    assert rotation_0.is_direction_blocked((1, 1), "Down") is True
+    assert rotation_0.is_direction_blocked((1, 2), "Up") is True
+
+    # Rotating 3x3 clockwise maps (1,1)->(1,1) and Down->Left,
+    # while (1,2)->(0,1) and Up->Right.
+    assert rotation_1.force_manhattan_path is True
+    assert rotation_1.is_direction_blocked((1, 1), "Left") is True
+    assert rotation_1.is_direction_blocked((0, 1), "Right") is True
