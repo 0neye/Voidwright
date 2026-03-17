@@ -177,7 +177,7 @@ If you need to write a temporary script or generate a temp output of some kind, 
 
 ## Important conventions
 
-- **Geometry source of truth:** `common/data/vanilla_parts_full_geometry.json` via `common/geometry.py`. All vanilla part footprints, dimensions, traversability, stored-location rect metadata, and most mirrored-footprint behavior come from here. Non-vanilla parts fall back to regex inference.
+- **Geometry source of truth:** `common/data/vanilla_parts_full_geometry.json` via `common/geometry.py`. All vanilla part footprints, dimensions, traversability, stored-location rect metadata, mirrored-footprint behavior, and richer per-rotation travel metadata (directional crew speeds, blocked travel directions, Manhattan-path flags) come from here. Preprocessing graph JSON intentionally stays compact and does not inline that richer travel metadata; graph expansion should load it on demand from `common.geometry`. Non-vanilla parts fall back to regex inference.
 - **Model artifacts** live under `models/markov/`. Preferred artifact: `markov-model.v2.json` (built from graph corpus). Legacy `v1` artifacts used the raw canonical corpus.
 - **Graph training is preferred** over the legacy `--input-dir` raw-corpus path. Use `--graph-input-dir` when building models.
 - **Canonicalization is content-based.** Files may get `__dedup-<12 hex>` suffixes - this is normal, not a failure.
@@ -204,7 +204,7 @@ If you need to write a temporary script or generate a temp output of some kind, 
 - **Build-time validation requires canonical corpus input.** In `training/backends/markov/backend.py`, `--validation-output` only executes when `--input-dir` is provided; graph-only builds skip validation.
 - **Part requirements merge by max, not sum.** `markov/inputs.py` merges duplicate requirement entries by per-part maximum required count.
 - **Python module exports should be declared near the top.** New Python modules should define `__all__` near the top of the file (after imports) instead of at the bottom.
-- **Graph expansion is optional and separate from training.** `graph_expansion/` enriches graph JSON with virtual nodes and cross-edges but is not consumed by training or generation by default. Run it via `graph-expansion expand` or by passing `--expansion-output-dir` to the pipeline command.
+- **Graph expansion is optional and separate from training.** `graph_expansion/` enriches graph JSON with virtual nodes and cross-edges but is not consumed by training or generation by default. Travel-aware passes may load richer movement metadata from `common.geometry` at expansion time rather than embedding it into preprocessing graph JSON. Run graph expansion via `graph-expansion expand` or by passing `--expansion-output-dir` to the pipeline command.
 - **Graph expansion cluster ordering is deterministic.** `graph_expansion/structural.py` normalizes each cluster's member list with `sorted()` before sorting the cluster list, so `traversable_cluster_N` indices are stable across runs.
 
 ## Graph expansion framework
@@ -230,6 +230,18 @@ Structural passes (in pipeline order):
 - `TraversableClustersPass` computes traversable clusters, stores cluster
   annotations, and emits traversable-cluster super-nodes with `super_member`
   cross-edges
+- `Layer1CrewAccessPass` emits direct structural-to-structural `crew_access_reactor`
+  and `crew_access_factory` cross-edges. It uses weighted Dijkstra over exact
+  walkable 2x cells plus door portals, and may repair legacy isolated crew rooms
+  via touching-edge proxy discovery. It intentionally loads richer travel
+  metadata from `common.geometry` on demand instead of expanding preprocessing
+  graph JSON.
+- `Layer2CoreSupportPass` emits downstream structural support edges from
+  reactors/factories to in-cluster infrastructure and weapon consumers such as
+  `reactor_supports_power_storage`, `reactor_supports_shield`,
+  `reactor_supports_energy_weapon`, `factory_supports_storage`,
+  `factory_supports_ammo_weapon`, and `factory_supports_missile_weapon`.
+  It reuses the same weighted cluster-local Dijkstra machinery as Layer 1.
 - `HullPerimeterPass` classifies each part as perimeter or interior using 2x
   footprint cell neighbor checks; emits `hull_perimeter` / `interior` virtual
   nodes with `hull_member` / `interior_member` cross-edges
