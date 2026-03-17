@@ -239,6 +239,7 @@ Structural passes (in pipeline order):
 - `Layer2CoreSupportPass` emits downstream structural support edges from
   reactors/factories to in-cluster infrastructure and weapon consumers such as
   `reactor_supports_power_storage`, `reactor_supports_shield`,
+  `reactor_supports_engine_room`, `reactor_supports_thruster`,
   `reactor_supports_energy_weapon`, `factory_supports_storage`,
   `factory_supports_ammo_weapon`, and `factory_supports_missile_weapon`.
   It reuses the same weighted cluster-local Dijkstra machinery as Layer 1.

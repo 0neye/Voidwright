@@ -214,7 +214,7 @@ The top-level payload also gets an `expansion` metadata block like:
     "passes": [
       {"name": "base_indexes", "version": 1},
       {"name": "global_ship_info", "version": 1},
-      {"name": "traversable_clusters", "version": 1},
+      {"name": "traversable_clusters", "version": 2},
       {"name": "crew_access_layer1", "version": 2},
       {"name": "core_support_layer2", "version": 1},
       {"name": "hull_perimeter", "version": 1},
