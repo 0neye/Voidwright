@@ -164,7 +164,7 @@ Include the AI model name in every commit message footer. Format:
 
 <body if needed>
 
-Co-Authored-By: <model-name>
+Co-Authored-By: <model-name> <noreply lab email with <> brackets>
 ```
 
 ## Major change workflow
