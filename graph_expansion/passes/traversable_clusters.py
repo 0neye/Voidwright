@@ -30,6 +30,7 @@ _CORRIDOR_LIKE_SUBSTRINGS: tuple[str, ...] = ("corridor", "walkway", "conveyor")
 
 # Clusters with a combined walkable-cell footprint at or below this 2x threshold
 # *and* no door edges are considered trivially isolated and are not emitted.
+# This includes single-part clusters with no traversable neighbours.
 # 16 2x-cells corresponds to a 4-tile (2x2) footprint in canonical coordinates.
 _SMALL_CLUSTER_2X_CELL_THRESHOLD: int = 16
 
@@ -127,7 +128,11 @@ def build_traversable_clusters(nodes: Sequence[Mapping[str, Any]], edges: Sequen
 
 
 class TraversableClustersPass(ExpansionPass):
-    """Emit traversable-cluster super-nodes and membership cross-edges."""
+    """Emit traversable-cluster super-nodes and membership cross-edges.
+
+    Single-part clusters (trivially isolated parts with no traversable
+    neighbours) are filtered out and receive no super-node or cross-edges.
+    """
 
     name = "traversable_clusters"
     version = 3

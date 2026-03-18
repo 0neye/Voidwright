@@ -83,7 +83,7 @@ def _compute_zones_impl(node: Mapping[str, Any], zone_names: List[str], angle_of
         angle = math.atan2(ly, lx) - angle_offset
         return [zone_names[int(round(angle * 4 / math.pi)) % 8]]
 
-    rx, ry = lx + width - 1, ly + height - 1  # far corner (inclusive)
+    rx, ry = lx + 2 * (width - 1), ly + 2 * (height - 1)  # far corner (inclusive, 2x stride)
 
     # --- Corner-check shortcut (origin outside the footprint) ---
     # Zone boundaries are rays that emanate from the origin.  When the origin
@@ -107,9 +107,10 @@ def _compute_zones_impl(node: Mapping[str, Any], zone_names: List[str], angle_of
             return [zone_names[next(iter(corner_sectors))]]
 
     # --- Full cell scan (straddling or origin-inside) ---
+    # Each tile occupies 2 units in the 2x frame, so step by 2.
     sector_indices: set[int] = set()
-    for cy in range(ly, ly + height):
-        for cx in range(lx, lx + width):
+    for cy in range(ly, ly + 2 * height, 2):
+        for cx in range(lx, lx + 2 * width, 2):
             angle = math.atan2(cy, cx) - angle_offset
             sector_indices.add(int(round(angle * 4 / math.pi)) % 8)
         if len(sector_indices) == 8:
