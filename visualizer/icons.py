@@ -87,10 +87,13 @@ class PartIconLibrary:
 
     def _load_base_icon(self, part_id: str):
         Image, ImageDraw = _require_pillow()
-        icon_path = self.icons_root / part_id.removeprefix("cosmoteer.") / "icon.png"
-        if icon_path.exists():
-            with Image.open(icon_path) as icon_image:
-                return icon_image.convert("RGBA")
+        part_dir = self.icons_root / part_id.removeprefix("cosmoteer.")
+        for icon_name in ("blueprints.png", "icon.png"):
+            try:
+                with Image.open(part_dir / icon_name) as icon_image:
+                    return icon_image.convert("RGBA")
+            except FileNotFoundError:
+                pass
 
         geometry = self.geometry_cache.get(part_id)
         width = 1
