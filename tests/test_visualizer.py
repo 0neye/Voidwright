@@ -201,12 +201,17 @@ def test_iter_steam_install_paths_discovers_linux_steam_roots(
 ) -> None:
     """Linux discovery should include native and Flatpak Steam root paths."""
 
+    import common.cosmoteer_install as _ci
+
     linux_home = tmp_path / "linux-home"
     linux_home.mkdir(parents=True)
 
     # Force the platform and HOME lookup so the test remains deterministic on Windows CI
     monkeypatch.setattr("common.cosmoteer_install.os.name", "posix")
     monkeypatch.setattr("common.cosmoteer_install.Path.home", lambda: linux_home)
+    # Suppress WSL path discovery so the strict equality assertion is not broken
+    # by real Windows-side Steam installs on WSL developer machines
+    monkeypatch.setattr(_ci, "_is_wsl", lambda: False)
 
     discovered_install_paths = iter_steam_install_paths()
 
