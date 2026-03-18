@@ -5,11 +5,15 @@ This will be covered in greater detail later.
 
 ## Setup
 
-Install dev dependencies after cloning:
+Create and activate a virtual environment, then install dev dependencies:
 
 ```bash
+python3 -m venv .venv
+. .venv/bin/activate
 pip install -e .[dev]
 ```
+
+Always activate the venv before running any Python commands in this project.
 
 Then copy the ship files you want to use into a new folder in your project directory. You'll need some ships for the program to work on. Recommended ships are your own library and the built-in library excluding stations.
 
@@ -20,7 +24,7 @@ Read `CLAUDE.md` (or `AGENTS.md` for non-Claude agents) for a full architecture 
 
 ## First Contributions
 
-A good starting place for first contributions are things like extra validation checks for parts during generation, new nodes during graph expansion (once implemented), and fixing bugs.
+A good starting place for first contributions are things like extra validation checks for parts during generation, new passes in `graph_expansion/passes/` (see `docs/graph-expansion.md`), and fixing bugs.
 
 If you aren't sure what to work on but want to contribute, feel free to ask me (0neye) in the Excelsior project thread.
 
