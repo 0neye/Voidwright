@@ -12,7 +12,9 @@ from typing import Any, Dict, List, Mapping, MutableMapping
 from graph_expansion.context import EXPANSION_GRAPH_NAME, STRUCTURAL_GRAPH_NAME, ExpansionContext
 from graph_expansion.passes.base import ExpansionPass
 
-__all__ = ["GlobalShipInfoPass"]
+__all__ = ["GlobalShipInfoPass", "GLOBAL_SHIP_NODE_ID"]
+
+GLOBAL_SHIP_NODE_ID = "global_ship"
 
 
 class GlobalShipInfoPass(ExpansionPass):
@@ -37,13 +39,13 @@ class GlobalShipInfoPass(ExpansionPass):
         cross_edges: List[MutableMapping[str, Any]] = expansion_graph["cross_edges"]
 
         global_node: Dict[str, Any] = {
-            "id": "global_ship",
+            "id": GLOBAL_SHIP_NODE_ID,
             "kind": "global_ship_info",
             "ship": ship_info,
         }
         global_edges: List[Dict[str, Any]] = [
             {
-                "source": "global_ship",
+                "source": GLOBAL_SHIP_NODE_ID,
                 "source_graph": EXPANSION_GRAPH_NAME,
                 "target": node["id"],
                 "target_graph": STRUCTURAL_GRAPH_NAME,

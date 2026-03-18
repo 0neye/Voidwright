@@ -377,10 +377,13 @@ def test_enrich_graph_global_member_edges_connect_to_all_parts() -> None:
 
 
 def test_enrich_graph_cluster_nodes_for_each_isolated_walkable_part() -> None:
-    # Two walkable generic parts with no door → two separate clusters.
+    # Two groups of adjacent corridor parts with no cross-group connection → two clusters.
+    # Each group has 9 cells (18 total) and 2 members so both survive filtering.
     nodes = [
-        make_node(0, [[0, 0]], _GENERIC_ID),
-        make_node(1, [[100, 100]], _GENERIC_ID),
+        make_node(0, [[i * 2, 0] for i in range(9)], _CORRIDOR_ID),
+        make_node(1, [[18 + i * 2, 0] for i in range(9)], _CORRIDOR_ID),
+        make_node(2, [[i * 2, 200] for i in range(9)], _CORRIDOR_ID),
+        make_node(3, [[18 + i * 2, 200] for i in range(9)], _CORRIDOR_ID),
     ]
     result = _enrich_graph(make_graph_data(nodes))
     exp_nodes = result["graphs"]["X_expansion_structural"]["nodes"]
@@ -400,7 +403,12 @@ def test_enrich_graph_door_edge_merges_clusters() -> None:
 
 def test_enrich_graph_corridor_adjacency_merges_clusters() -> None:
     # Two adjacent corridor parts → one cluster (no door required).
-    nodes = [make_node(0, [[0, 0]], _CORRIDOR_ID), make_node(1, [[2, 0]], _CORRIDOR_ID)]
+    # Each node has 9 2x cells (total 18 > 16) to survive small-cluster filtering;
+    # the last cell of node 0 ([16,0]) is adjacent to the first cell of node 1 ([18,0]).
+    nodes = [
+        make_node(0, [[i * 2, 0] for i in range(9)], _CORRIDOR_ID),
+        make_node(1, [[18 + i * 2, 0] for i in range(9)], _CORRIDOR_ID),
+    ]
     result = _enrich_graph(make_graph_data(nodes))
     exp_nodes = result["graphs"]["X_expansion_structural"]["nodes"]
     cluster_nodes = [n for n in exp_nodes if n["kind"] == "traversable_cluster"]
@@ -417,7 +425,11 @@ def test_enrich_graph_no_cluster_nodes_when_no_walkable_cells() -> None:
 
 def test_enrich_graph_super_member_edges_connect_cluster_to_members() -> None:
     # Two adjacent corridor parts form one cluster; both should appear as super_member targets.
-    nodes = [make_node(0, [[0, 0]], _CORRIDOR_ID), make_node(1, [[2, 0]], _CORRIDOR_ID)]
+    # Each node has 9 2x cells (total 18 > 16) to survive small-cluster filtering.
+    nodes = [
+        make_node(0, [[i * 2, 0] for i in range(9)], _CORRIDOR_ID),
+        make_node(1, [[18 + i * 2, 0] for i in range(9)], _CORRIDOR_ID),
+    ]
     result = _enrich_graph(make_graph_data(nodes))
     cross_edges = result["graphs"]["X_expansion_structural"]["cross_edges"]
     super_edges = [e for e in cross_edges if e["kind"] == "super_member"]
@@ -426,18 +438,21 @@ def test_enrich_graph_super_member_edges_connect_cluster_to_members() -> None:
 
 
 def test_enrich_graph_summary_counts_are_consistent() -> None:
-    # nodes 0 and 1 are isolated walkable parts; node 2 has no walkable cells.
+    # Two groups of adjacent corridors (2 members, 18 cells each) plus a non-walkable part.
+    # Each walkable group survives both the single-part and small-footprint filters.
     nodes = [
-        make_node(0, [[0, 0]], _GENERIC_ID),
-        make_node(1, [[100, 100]], _GENERIC_ID),
-        make_node(2, part_id=_GENERIC_ID),
+        make_node(0, [[i * 2, 0] for i in range(9)], _CORRIDOR_ID),
+        make_node(1, [[18 + i * 2, 0] for i in range(9)], _CORRIDOR_ID),
+        make_node(2, [[i * 2, 200] for i in range(9)], _CORRIDOR_ID),
+        make_node(3, [[18 + i * 2, 200] for i in range(9)], _CORRIDOR_ID),
+        make_node(4, part_id=_GENERIC_ID),
     ]
     result = _enrich_graph(make_graph_data(nodes))
     summary = result["graphs"]["X_expansion_structural"]["summary"]
     assert summary["global_ship_nodes"] == 1
     assert summary["traversable_clusters"] == 2
-    assert summary["global_member_edges"] == 3
-    assert summary["super_member_edges"] == 2
+    assert summary["global_member_edges"] == 5
+    assert summary["super_member_edges"] == 4
 
 
 def test_enrich_graph_traversable_tester_regression_counts(tmp_path: Path) -> None:
@@ -448,7 +463,8 @@ def test_enrich_graph_traversable_tester_regression_counts(tmp_path: Path) -> No
     node_kinds = [node["kind"] for node in expansion_graph["nodes"]]
     cross_edges = expansion_graph["cross_edges"]
 
-    assert node_kinds.count("traversable_cluster") == 2
+    # One cluster: the isolated crew_quarters_med (4 2x cells, no doors) is filtered.
+    assert node_kinds.count("traversable_cluster") == 1
     expected_crew_access_edges = 3 if _ENABLE_CREW_ROOM_PROXY_FALLBACK else 2
     assert sum(edge["kind"] == "crew_access_factory" for edge in cross_edges) == expected_crew_access_edges
     assert sum(edge["kind"] == "crew_access_reactor" for edge in cross_edges) == expected_crew_access_edges
@@ -559,8 +575,14 @@ def test_expand_dir_traversable_clusters_total_is_sum_across_files(tmp_path: Pat
         nodes=[make_node(0, [[0, 0]], _GENERIC_ID), make_node(1, [[100, 100]], _GENERIC_ID)],
         edges=[make_door_edge(0, 1)],
     )
-    # ship_b: one corridor part → 1 cluster
-    write_graph_json(input_dir / "ship_b.json", [make_node(0, [[0, 0]], _CORRIDOR_ID)])
+    # ship_b: two adjacent corridor parts (18 total 2x cells) → 1 cluster
+    write_graph_json(
+        input_dir / "ship_b.json",
+        nodes=[
+            make_node(0, [[i * 2, 0] for i in range(9)], _CORRIDOR_ID),
+            make_node(1, [[18 + i * 2, 0] for i in range(9)], _CORRIDOR_ID),
+        ],
+    )
 
     result = expand_dir(input_dir=input_dir, output_dir=output_dir, workers=1, executor="thread")
 

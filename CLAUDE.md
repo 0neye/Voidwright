@@ -135,7 +135,7 @@ python scripts/download_ship_images.py --output-dir downloaded_ships --verbose
 The codebase is split into purpose-specific packages:
 
 - **`preprocessing/`** - four-stage pipeline (extract -> canonicalize -> graphs -> door-rules). Each stage is its own submodule with a `main(argv)` and `build_parser()`. `pipeline.py` orchestrates all stages.
-- **`graph_expansion/`** - structural graph enrichment implemented as a pass-oriented pipeline. `structural.py` orchestrates an ordered list of passes under `graph_expansion/passes/` that add virtual nodes and cross-edges to preprocessing graph JSON: a global ship-info node, traversable-cluster super-nodes, hull-perimeter/interior classification nodes, 8-sector spatial zone nodes, and weapon-group nodes.
+- **`graph_expansion/`** - structural graph enrichment implemented as a pass-oriented pipeline. `structural.py` orchestrates an ordered list of passes under `graph_expansion/passes/` that add virtual nodes and cross-edges to preprocessing graph JSON: a global ship-info node, traversable-cluster super-nodes, hull-perimeter/interior classification nodes, 8-sector spatial zone nodes, a 22.5°-rotated 8-sector zone variant, weapon-group nodes, and a global virtual linker node.
 - **`training/`** - backend-agnostic router. `router.py` resolves backend names; each backend under `training/backends/<name>/` registers its own CLI parser via `register_build_parser` / `register_validate_parser`.
 - **`generator/`** - backend-agnostic generation router. `generator/backends/markov/backend.py` wires CLI options; `generator/backends/markov/export.py` handles `.ship.png` encoding and roundtrip validation.
 - **`markov/`** - shared Markov internals used by both training and generation: `model.py`, `generation.py`, `inputs.py`, and related helpers. `symmetry.py` is a backward-compat shim; mirror computation lives in `ship_layout/symmetry.py`.
@@ -157,14 +157,15 @@ Graph expansion no longer has a backend registry. Extend it by adding or reorder
 
 ## Commit messages
 
-Include the AI model name in every commit message footer. Format:
+Include the AI model name in every commit message footer. The noreply email for
+the model's lab must be wrapped in `<>` angle brackets. Format:
 
 ```text
 <subject line>
 
 <body if needed>
 
-Co-Authored-By: <model-name>
+Co-Authored-By: Model Name <noreply@lab.com>
 ```
 
 ## Major change workflow
@@ -229,7 +230,9 @@ Structural passes (in pipeline order):
   cross-edges
 - `TraversableClustersPass` computes traversable clusters, stores cluster
   annotations, and emits traversable-cluster super-nodes with `super_member`
-  cross-edges
+  cross-edges; single-part clusters and small clusters (combined walkable-cell
+  footprint ≤ 16 2x-cells with no door edges) are filtered out and receive no
+  super-node or cross-edges
 - `Layer1CrewAccessPass` emits direct structural-to-structural `crew_access_reactor`
   and `crew_access_factory` cross-edges. It uses weighted Dijkstra over exact
   walkable 2x cells plus door portals, and may repair legacy isolated crew rooms
@@ -246,12 +249,21 @@ Structural passes (in pipeline order):
 - `HullPerimeterPass` classifies each part as perimeter or interior using 2x
   footprint cell neighbor checks; emits `hull_perimeter` / `interior` virtual
   nodes with `hull_member` / `interior_member` cross-edges
-- `SpatialZonesPass` assigns each part to one of eight compass-direction zones
-  by centroid angle from the 2x origin; emits zone virtual nodes with
-  `zone_member` cross-edges; mirrored parts land in opposing zone pairs
+- `SpatialZonesPass` assigns each part to one or more of eight compass-direction
+  zones by 2x footprint cell angles from the origin; parts straddling a zone
+  boundary receive `zone_member` edges in every touched zone; mirrored parts
+  land in opposing zone pairs; the `zone_by_part_id` annotation is
+  `Dict[int, List[str]]`
+- `SpatialZonesRotatedPass` same semantics as `SpatialZonesPass` but sector
+  boundaries rotated 22.5° so they fall on cardinal and semi-cardinal directions;
+  zone IDs use the `zone_ene` / `zone_nne` / … 16-point naming convention;
+  cross-edges carry `kind="zone_member_rotated"`
 - `WeaponGroupsPass` detects weapon parts by `part_id` substring matching,
   groups them by type, and emits `weapon_group_<type>` virtual nodes with
   `weapon_member` cross-edges
+- `GlobalVirtualLinkerPass` emits `global_virtual_member` cross-edges from the
+  `global_ship` node to every other virtual node in the expansion graph, linking
+  the global anchor to all zone, cluster, hull, and weapon-group nodes
 
 Contributor guidelines for graph expansion:
 

@@ -8,11 +8,12 @@ from graph_expansion.context import EXPANSION_GRAPH_NAME, STRUCTURAL_GRAPH_NAME,
 from graph_expansion.passes.base_indexes import BaseIndexesPass
 from graph_expansion.passes.global_ship_info import GlobalShipInfoPass
 from graph_expansion.passes.hull_perimeter import HullPerimeterPass
-from graph_expansion.passes.spatial_zones import SpatialZonesPass, ZONE_NAMES
+from graph_expansion.passes.spatial_zones import SpatialZonesPass, SpatialZonesRotatedPass, ZONE_NAMES, ZONE_NAMES_ROTATED
 from graph_expansion.passes.traversable_clusters import TraversableClustersPass
 from graph_expansion.passes.crew_access_layer1 import Layer1CrewAccessPass, _ENABLE_CREW_ROOM_PROXY_FALLBACK
 from graph_expansion.passes.core_support_layer2 import Layer2CoreSupportPass
 from graph_expansion.passes.weapon_groups import WeaponGroupsPass, WEAPON_TYPE_SUBSTRINGS
+from graph_expansion.passes.global_virtual_linker import GlobalVirtualLinkerPass
 
 __all__: list[str] = []
 
@@ -230,7 +231,7 @@ def test_traversable_clusters_pass_records_annotations_and_emits_exact_clusters(
 
     assert context.get_annotation("traversable_clusters") == [[0, 1, 2]]
     assert context.get_annotation("cluster_by_part_id") == {0: 0, 1: 0, 2: 0}
-    assert summary == {"cluster_count": 1, "super_member_edges": 3}
+    assert summary == {"cluster_count": 1, "super_member_edges": 3, "filtered_small_clusters": 0}
     assert expansion_graph["nodes"] == [
         {"id": "traversable_cluster_0", "kind": "traversable_cluster", "member_count": 3}
     ]
@@ -845,7 +846,7 @@ def test_hull_perimeter_rotation_swaps_footprint_dimensions() -> None:
 def test_spatial_zones_all_eight_directions() -> None:
     """Each compass direction must produce the correct zone for a 1×1 part."""
 
-    # (location_2x, expected_zone) for a 1×1 part (centroid == location_2x).
+    # (location_2x, expected_zone) for a 1×1 part well within a single sector.
     cases: list[tuple[list[int], str]] = [
         ([4, 0], "zone_e"),
         ([4, 4], "zone_ne"),
@@ -860,8 +861,8 @@ def test_spatial_zones_all_eight_directions() -> None:
         nodes = [make_full_node(node_id, loc)]
         context, _ = _run_spatial_zones(nodes)
         annotation = context.get_annotation("zone_by_part_id")
-        assert annotation[node_id] == expected_zone, (
-            f"location_2x={loc} expected {expected_zone}, got {annotation[node_id]}"
+        assert annotation[node_id] == [expected_zone], (
+            f"location_2x={loc} expected [{expected_zone}], got {annotation[node_id]}"
         )
 
 
@@ -902,9 +903,9 @@ def test_spatial_zones_annotation_maps_all_nodes() -> None:
     context, _ = _run_spatial_zones(nodes)
     annotation = context.get_annotation("zone_by_part_id")
     assert set(annotation.keys()) == {0, 1, 2}
-    assert annotation[0] == "zone_e"
-    assert annotation[1] == "zone_n"
-    assert annotation[2] == "zone_w"
+    assert annotation[0] == ["zone_e"]
+    assert annotation[1] == ["zone_n"]
+    assert annotation[2] == ["zone_w"]
 
 
 def test_spatial_zones_cross_edges_have_zone_member_kind() -> None:
@@ -925,8 +926,8 @@ def test_spatial_zones_mirror_pair_lands_in_opposite_zones() -> None:
     nodes = [make_full_node(0, [4, 0]), make_full_node(1, [-6, 0])]
     context, _ = _run_spatial_zones(nodes)
     annotation = context.get_annotation("zone_by_part_id")
-    assert annotation[0] == "zone_e"
-    assert annotation[1] == "zone_w"
+    assert annotation[0] == ["zone_e"]
+    assert annotation[1] == ["zone_w"]
 
 
 def test_spatial_zones_node_missing_location_2x_falls_back_to_zone_e() -> None:
@@ -935,24 +936,165 @@ def test_spatial_zones_node_missing_location_2x_falls_back_to_zone_e() -> None:
     bare: dict[str, Any] = {"id": 0, "part_id": "cosmoteer.armor"}
     context, summary = _run_spatial_zones([bare])
     annotation = context.get_annotation("zone_by_part_id")
-    assert annotation[0] == "zone_e"
+    assert annotation[0] == ["zone_e"]
     assert summary["spatial_zone_nodes"] == 1
 
 
-def test_spatial_zones_large_part_centroid_shifted() -> None:
-    """A 3×1 part's centroid is offset from its location_2x by (ew-1, 0)."""
+def test_spatial_zones_large_part_footprint_cells() -> None:
+    """Zone assignment iterates all footprint cells; straddling parts land in multiple zones."""
 
-    # 3×1 part at location_2x=[0,0], rotation=0: ew=3, eh=1.
-    # centroid_x = 0 + (3-1) = 2, centroid_y = 0. → zone_e.
+    # 3×1 part at location_2x=[0,0]: cells (0,0), (1,0), (2,0) — all at y=0 → zone_e only.
     node = make_full_node(0, [0, 0], width=3, height=1)
     context, _ = _run_spatial_zones([node])
-    assert context.get_annotation("zone_by_part_id")[0] == "zone_e"
+    assert context.get_annotation("zone_by_part_id")[0] == ["zone_e"]
 
     # Same part rotated 90°: preprocessing stores already-rotated dims width=1, height=3.
-    # centroid_x = 0 + (1-1) = 0, centroid_y = 0 + (3-1) = 2. → zone_n.
+    # Cells: (0,0) → zone_e; (0,1) → zone_n; (0,2) → zone_n.
+    # The part straddles the E/N boundary so it is assigned to both zones.
     node_r = make_full_node(1, [0, 0], width=1, height=3, rotation=1)
     context_r, _ = _run_spatial_zones([node_r])
-    assert context_r.get_annotation("zone_by_part_id")[1] == "zone_n"
+    assert context_r.get_annotation("zone_by_part_id")[1] == ["zone_e", "zone_n"]
+
+
+# ---------------------------------------------------------------------------
+# SpatialZonesRotatedPass
+# ---------------------------------------------------------------------------
+
+
+def _run_spatial_zones_rotated(nodes: list[dict[str, Any]]) -> tuple[ExpansionContext, dict[str, Any]]:
+    """Run BaseIndexesPass then SpatialZonesRotatedPass and return the context and summary."""
+
+    context = ExpansionContext(
+        make_graph_payload(nodes), expansion_name="structural", expansion_version=3
+    )
+    BaseIndexesPass().run(context)
+    summary = SpatialZonesRotatedPass().run(context)
+    return context, summary
+
+
+def test_spatial_zones_rotated_all_eight_directions() -> None:
+    """Each interstitial compass direction must produce the correct rotated zone for a 1×1 part."""
+
+    # (location_2x, expected_zone) for a 1×1 part (centroid == location_2x).
+    # Rotated zones are centred at 22.5°, 67.5°, 112.5°, … so we test points
+    # that lie clearly within each sector.
+    cases: list[tuple[list[int], str]] = [
+        ([4, 2], "zone_ene"),   # ~26.6° — between E and NE
+        ([2, 4], "zone_nne"),   # ~63.4° — between NE and N
+        ([-2, 4], "zone_nnw"),  # ~116.6° — between N and NW
+        ([-4, 2], "zone_wnw"),  # ~153.4° — between NW and W
+        ([-4, -2], "zone_wsw"), # ~206.6° — between W and SW
+        ([-2, -4], "zone_ssw"), # ~243.4° — between SW and S
+        ([2, -4], "zone_sse"),  # ~296.6° — between S and SE
+        ([4, -2], "zone_ese"),  # ~333.4° — between SE and E
+    ]
+    for node_id, (loc, expected_zone) in enumerate(cases):
+        nodes = [make_full_node(node_id, loc)]
+        context, _ = _run_spatial_zones_rotated(nodes)
+        annotation = context.get_annotation("rotated_zone_by_part_id")
+        assert annotation[node_id] == [expected_zone], (
+            f"location_2x={loc} expected [{expected_zone}], got {annotation[node_id]}"
+        )
+
+
+def test_spatial_zones_rotated_only_populated_zones_emitted() -> None:
+    """Rotated zone virtual nodes must not be emitted for zones with no members."""
+
+    nodes = [make_full_node(0, [4, 2]), make_full_node(1, [8, 3])]
+    context, summary = _run_spatial_zones_rotated(nodes)
+    emitted_ids = {n["id"] for n in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]}
+    assert emitted_ids == {"zone_ene"}
+    assert summary["spatial_zone_rotated_nodes"] == 1
+    assert summary["zone_member_rotated_edges"] == 2
+
+
+def test_spatial_zones_rotated_emitted_in_zone_names_rotated_order() -> None:
+    """Rotated zone nodes must be emitted in ZONE_NAMES_ROTATED order."""
+
+    # Populate zone_ese (last) and zone_ene (first) out of order.
+    nodes = [make_full_node(0, [4, -2]), make_full_node(1, [4, 2])]
+    context, _ = _run_spatial_zones_rotated(nodes)
+    emitted = [
+        n["id"]
+        for n in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]
+    ]
+    assert emitted.index("zone_ene") < emitted.index("zone_ese")
+
+
+def test_spatial_zones_rotated_annotation_maps_all_nodes() -> None:
+    """rotated_zone_by_part_id must contain an entry for every structural node."""
+
+    nodes = [
+        make_full_node(0, [4, 2]),
+        make_full_node(1, [-4, 2]),
+        make_full_node(2, [-4, -2]),
+    ]
+    context, _ = _run_spatial_zones_rotated(nodes)
+    annotation = context.get_annotation("rotated_zone_by_part_id")
+    assert set(annotation.keys()) == {0, 1, 2}
+    assert annotation[0] == ["zone_ene"]
+    assert annotation[1] == ["zone_wnw"]
+    assert annotation[2] == ["zone_wsw"]
+
+
+def test_spatial_zones_rotated_cross_edges_have_zone_member_rotated_kind() -> None:
+    """All cross-edges from SpatialZonesRotatedPass must have kind 'zone_member_rotated'."""
+
+    nodes = [make_full_node(0, [4, 2]), make_full_node(1, [-4, 2])]
+    context, _ = _run_spatial_zones_rotated(nodes)
+    cross_edges = context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+    assert all(e["kind"] == "zone_member_rotated" for e in cross_edges)
+
+
+def test_spatial_zones_rotated_node_missing_location_2x_falls_back_to_zone_ene() -> None:
+    """A node without location_2x must not raise and must fall back to zone_ene."""
+
+    bare: dict[str, Any] = {"id": 0, "part_id": "cosmoteer.armor"}
+    context, summary = _run_spatial_zones_rotated([bare])
+    annotation = context.get_annotation("rotated_zone_by_part_id")
+    assert annotation[0] == ["zone_ene"]
+    assert summary["spatial_zone_rotated_nodes"] == 1
+
+
+def test_spatial_zones_rotated_distinct_from_unrotated() -> None:
+    """Running both passes on the same context must not produce duplicate zone node IDs."""
+
+    nodes = [make_full_node(0, [4, 0]), make_full_node(1, [0, 4])]
+    context = ExpansionContext(
+        make_graph_payload(nodes), expansion_name="structural", expansion_version=3
+    )
+    BaseIndexesPass().run(context)
+    SpatialZonesPass().run(context)
+    SpatialZonesRotatedPass().run(context)
+    emitted_ids = [n["id"] for n in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]]
+    # No duplicate IDs — rotated names (zone_ene, …) differ from cardinal names (zone_e, …)
+    assert len(emitted_ids) == len(set(emitted_ids))
+    # Both sets present
+    assert any(nid in ZONE_NAMES for nid in emitted_ids)
+    assert any(nid in ZONE_NAMES_ROTATED for nid in emitted_ids)
+
+
+def test_spatial_zones_straddling_part_gets_multiple_zone_edges() -> None:
+    """A part whose footprint crosses a zone boundary must appear in all touched zones."""
+
+    # 1×3 part at [0,0]: cells (0,0)→zone_e, (0,1)→zone_n, (0,2)→zone_n.
+    # Straddles the E/N boundary → must be a member of both zone_e and zone_n.
+    node = make_full_node(0, [0, 0], width=1, height=3)
+    context, summary = _run_spatial_zones([node])
+
+    annotation = context.get_annotation("zone_by_part_id")
+    assert annotation[0] == ["zone_e", "zone_n"]
+
+    emitted_ids = {n["id"] for n in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]}
+    assert "zone_e" in emitted_ids
+    assert "zone_n" in emitted_ids
+    assert summary["spatial_zone_nodes"] == 2
+
+    cross_edges = context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+    edge_sources = [e["source"] for e in cross_edges]
+    assert edge_sources.count("zone_e") == 1
+    assert edge_sources.count("zone_n") == 1
+    assert summary["zone_member_edges"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1092,3 +1234,138 @@ def test_weapon_groups_weapon_node_has_weapon_type_field() -> None:
     )
     assert missile_node["weapon_type"] == "missile_launcher"
     assert missile_node["kind"] == "weapon_group"
+
+
+# ---------------------------------------------------------------------------
+# GlobalVirtualLinkerPass
+# ---------------------------------------------------------------------------
+
+
+def _run_global_virtual_linker(
+    nodes: list[dict],
+    edges: list[dict] | None = None,
+) -> tuple[ExpansionContext, dict]:
+    """Run BaseIndexes + GlobalShipInfo + TraversableClusters + HullPerimeter + GlobalVirtualLinker."""
+
+    context = ExpansionContext(
+        make_graph_payload(nodes, edges),
+        expansion_name="structural",
+        expansion_version=2,
+    )
+    BaseIndexesPass().run(context)
+    GlobalShipInfoPass().run(context)
+    TraversableClustersPass().run(context)
+    HullPerimeterPass().run(context)
+    summary = GlobalVirtualLinkerPass().run(context)
+    return context, summary
+
+
+def test_global_virtual_linker_connects_to_all_virtual_nodes() -> None:
+    """GlobalVirtualLinkerPass should emit one edge per non-global virtual node."""
+
+    nodes = [
+        make_node(0, [[0, 0]], _CORRIDOR_ID),
+        make_node(1, [[2, 0]], _CORRIDOR_ID),
+    ]
+    edges = [make_edge(0, 1, "door")]
+    context, summary = _run_global_virtual_linker(nodes, edges)
+
+    expansion_nodes = context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]
+    # Only non-global nodes with at least one member should receive a linker edge.
+    virtual_ids = {
+        n["id"] for n in expansion_nodes
+        if n["id"] != "global_ship" and n.get("member_count", 1) > 0
+    }
+    assert len(virtual_ids) > 0, "expected at least one other virtual node"
+
+    linker_edges = [
+        e for e in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+        if e.get("kind") == "global_virtual_member"
+    ]
+    linked_targets = {e["target"] for e in linker_edges}
+
+    assert linked_targets == virtual_ids
+    assert all(e["source"] == "global_ship" for e in linker_edges)
+    assert all(e["source_graph"] == _EXPANSION_GRAPH_NAME for e in linker_edges)
+    assert all(e["target_graph"] == _EXPANSION_GRAPH_NAME for e in linker_edges)
+    assert summary == {"global_virtual_member_edges": len(virtual_ids)}
+
+
+def test_global_virtual_linker_skips_empty_virtual_nodes() -> None:
+    """GlobalVirtualLinkerPass must not link to virtual nodes with member_count == 0.
+
+    A single-part ship has no interior parts, so HullPerimeterPass emits an
+    ``interior`` node with ``member_count=0``.  That placeholder must not
+    receive a ``global_virtual_member`` edge.
+    """
+
+    nodes = [make_node(0, [[0, 0]], _CORRIDOR_ID)]
+    context, _ = _run_global_virtual_linker(nodes)
+
+    expansion_nodes = context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]
+
+    # make_node produces no location_2x/footprint, so the part falls back to
+    # interior classification — hull_perimeter gets member_count == 0.
+    hull_node = next(
+        (n for n in expansion_nodes if n.get("kind") == "hull_perimeter"),
+        None,
+    )
+    assert hull_node is not None, "HullPerimeterPass should always emit hull_perimeter node"
+    assert hull_node["member_count"] == 0
+
+    # Confirm no linker edge targets the empty placeholder.
+    linker_edges = [
+        e for e in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+        if e.get("kind") == "global_virtual_member"
+    ]
+    linked_targets = {e["target"] for e in linker_edges}
+    assert hull_node["id"] not in linked_targets
+
+
+def test_global_virtual_linker_no_self_edge() -> None:
+    """GlobalVirtualLinkerPass must not emit an edge from global_ship to itself."""
+
+    nodes = [make_node(0, [[0, 0]], _CORRIDOR_ID)]
+    context, _ = _run_global_virtual_linker(nodes)
+
+    self_edges = [
+        e for e in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+        if e.get("kind") == "global_virtual_member" and e["target"] == "global_ship"
+    ]
+    assert self_edges == []
+
+
+def test_global_virtual_linker_summary_increments_graph_summary() -> None:
+    """GlobalVirtualLinkerPass should increment global_virtual_member_edges in the graph summary."""
+
+    nodes = [make_node(0, [[0, 0]], _CORRIDOR_ID)]
+    context, _ = _run_global_virtual_linker(nodes)
+
+    graph_summary = context.emitted_graphs[_EXPANSION_GRAPH_NAME]["summary"]
+    linker_edges = [
+        e for e in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+        if e.get("kind") == "global_virtual_member"
+    ]
+    assert graph_summary["global_virtual_member_edges"] == len(linker_edges)
+
+
+def test_global_virtual_linker_empty_expansion_graph() -> None:
+    """GlobalVirtualLinkerPass on a graph with only global_ship emits no linker edges."""
+
+    nodes = [make_node(0, part_id=_GENERIC_ID)]
+    context = ExpansionContext(
+        make_graph_payload(nodes),
+        expansion_name="structural",
+        expansion_version=2,
+    )
+    BaseIndexesPass().run(context)
+    GlobalShipInfoPass().run(context)
+    # Deliberately skip other passes so global_ship is the only virtual node.
+    summary = GlobalVirtualLinkerPass().run(context)
+
+    linker_edges = [
+        e for e in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+        if e.get("kind") == "global_virtual_member"
+    ]
+    assert linker_edges == []
+    assert summary == {"global_virtual_member_edges": 0}
