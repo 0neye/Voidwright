@@ -27,8 +27,9 @@ from graph_expansion.passes.traversable_clusters import (
 from graph_expansion.passes.crew_access_layer1 import Layer1CrewAccessPass
 from graph_expansion.passes.core_support_layer2 import Layer2CoreSupportPass
 from graph_expansion.passes.hull_perimeter import HullPerimeterPass
-from graph_expansion.passes.spatial_zones import SpatialZonesPass
+from graph_expansion.passes.spatial_zones import SpatialZonesPass, SpatialZonesRotatedPass
 from graph_expansion.passes.weapon_groups import WeaponGroupsPass
+from graph_expansion.passes.global_virtual_linker import GlobalVirtualLinkerPass
 from preprocessing.concurrency import (
     add_concurrency_arguments,
     resolve_worker_count,
@@ -51,7 +52,7 @@ __all__ = [
 ]
 
 EXPANSION_NAME = "structural"
-EXPANSION_VERSION = 7
+EXPANSION_VERSION = 9
 DEFAULT_PASSES: tuple[type[ExpansionPass], ...] = (
     BaseIndexesPass,
     GlobalShipInfoPass,
@@ -60,7 +61,9 @@ DEFAULT_PASSES: tuple[type[ExpansionPass], ...] = (
     Layer2CoreSupportPass,
     HullPerimeterPass,
     SpatialZonesPass,
+    SpatialZonesRotatedPass,
     WeaponGroupsPass,
+    GlobalVirtualLinkerPass,
 )
 
 
