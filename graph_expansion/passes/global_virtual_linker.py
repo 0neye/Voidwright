@@ -41,7 +41,9 @@ class GlobalVirtualLinkerPass(ExpansionPass):
                 "target_graph": EXPANSION_GRAPH_NAME,
                 "kind": "global_virtual_member",
             }
-            for node in nodes if node["id"] != GLOBAL_SHIP_NODE_ID
+            for node in nodes
+            if node["id"] != GLOBAL_SHIP_NODE_ID
+            and node.get("member_count", 1) > 0
         ]
 
         cross_edges.extend(new_edges)

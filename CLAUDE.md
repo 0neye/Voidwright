@@ -157,14 +157,15 @@ Graph expansion no longer has a backend registry. Extend it by adding or reorder
 
 ## Commit messages
 
-Include the AI model name in every commit message footer. Format:
+Include the AI model name in every commit message footer. The noreply email for
+the model's lab must be wrapped in `<>` angle brackets. Format:
 
 ```text
 <subject line>
 
 <body if needed>
 
-Co-Authored-By: <model-name> <noreply lab email with <> brackets>
+Co-Authored-By: Model Name <noreply@lab.com>
 ```
 
 ## Major change workflow

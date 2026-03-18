@@ -1271,7 +1271,11 @@ def test_global_virtual_linker_connects_to_all_virtual_nodes() -> None:
     context, summary = _run_global_virtual_linker(nodes, edges)
 
     expansion_nodes = context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]
-    virtual_ids = {n["id"] for n in expansion_nodes if n["id"] != "global_ship"}
+    # Only non-global nodes with at least one member should receive a linker edge.
+    virtual_ids = {
+        n["id"] for n in expansion_nodes
+        if n["id"] != "global_ship" and n.get("member_count", 1) > 0
+    }
     assert len(virtual_ids) > 0, "expected at least one other virtual node"
 
     linker_edges = [
@@ -1285,6 +1289,37 @@ def test_global_virtual_linker_connects_to_all_virtual_nodes() -> None:
     assert all(e["source_graph"] == _EXPANSION_GRAPH_NAME for e in linker_edges)
     assert all(e["target_graph"] == _EXPANSION_GRAPH_NAME for e in linker_edges)
     assert summary == {"global_virtual_member_edges": len(virtual_ids)}
+
+
+def test_global_virtual_linker_skips_empty_virtual_nodes() -> None:
+    """GlobalVirtualLinkerPass must not link to virtual nodes with member_count == 0.
+
+    A single-part ship has no interior parts, so HullPerimeterPass emits an
+    ``interior`` node with ``member_count=0``.  That placeholder must not
+    receive a ``global_virtual_member`` edge.
+    """
+
+    nodes = [make_node(0, [[0, 0]], _CORRIDOR_ID)]
+    context, _ = _run_global_virtual_linker(nodes)
+
+    expansion_nodes = context.emitted_graphs[_EXPANSION_GRAPH_NAME]["nodes"]
+
+    # make_node produces no location_2x/footprint, so the part falls back to
+    # interior classification — hull_perimeter gets member_count == 0.
+    hull_node = next(
+        (n for n in expansion_nodes if n.get("kind") == "hull_perimeter"),
+        None,
+    )
+    assert hull_node is not None, "HullPerimeterPass should always emit hull_perimeter node"
+    assert hull_node["member_count"] == 0
+
+    # Confirm no linker edge targets the empty placeholder.
+    linker_edges = [
+        e for e in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
+        if e.get("kind") == "global_virtual_member"
+    ]
+    linked_targets = {e["target"] for e in linker_edges}
+    assert hull_node["id"] not in linked_targets
 
 
 def test_global_virtual_linker_no_self_edge() -> None:
