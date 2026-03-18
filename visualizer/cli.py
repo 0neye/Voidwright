@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from pathlib import Path
 from typing import Sequence
 
@@ -85,6 +86,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"[visualizer] ERROR: {exc}")
             return 1
 
+        name_counts = Counter(p.name for p in args.inputs)
         for input_path in args.inputs:
             if not input_path.exists():
                 print(f"[visualizer] WARNING: input file not found, skipping: {input_path}")
@@ -95,7 +97,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"[visualizer] WARNING: failed to load {input_path.name}: {exc}")
                 continue
             try:
-                ship_name = input_path.name
+                basename = input_path.name
+                ship_name = (
+                    f"{input_path.parent.name}_{basename}"
+                    if name_counts[basename] > 1
+                    else basename
+                )
                 output_path = backend.render_ship(
                     ship_name, expanded_data, flip_map, output_dir, icon_library, args
                 )

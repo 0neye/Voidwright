@@ -67,17 +67,16 @@ class SpatialZonesBackend(StaticVisualizationBackend):
 
         nodes = expanded_data["graphs"]["A_structural_part_graph"]["nodes"]
 
-        # Build zone_by_part_id from cross_edges with kind=="zone_member".
+        # Build zones_by_part_id from cross_edges with kind=="zone_member".
         # source is zone name (str like "zone_e"), target is part_id (int).
+        # Parts straddling a boundary receive multiple edges; collect all.
         expansion_graph = expanded_data["graphs"].get("X_expansion_structural", {})
-        zone_by_part_id: dict[int, str] = {}
+        zones_by_part_id: dict[int, list[str]] = {}
         for edge in expansion_graph.get("cross_edges", []):
             if edge.get("kind") == "zone_member":
                 part_id = int(edge["target"])
                 zone_name = str(edge["source"])
-                # Keep the first assignment; parts may straddle multiple zones.
-                if part_id not in zone_by_part_id:
-                    zone_by_part_id[part_id] = zone_name
+                zones_by_part_id.setdefault(part_id, []).append(zone_name)
 
         min_x2, min_y2, max_x2, max_y2 = bounds_2x(nodes)
         width_px = (max_x2 - min_x2 + 2 * PADDING_2X) * SUBCELL_SIZE
@@ -95,12 +94,21 @@ class SpatialZonesBackend(StaticVisualizationBackend):
         zone_counts: dict[str, int] = {z: 0 for z in ZONE_NAMES}
         for node in sorted(nodes, key=lambda n: int(n["id"])):
             node_id = int(node["id"])
-            zone_name = zone_by_part_id.get(node_id, fallback_zone)
-            zone_counts[zone_name] += 1
+            zones = zones_by_part_id.get(node_id) or [fallback_zone]
+            for z in zones:
+                zone_counts[z] += 1
+            colors = [zone_colors[z] for z in zones]
+            n = len(colors)
+            tint = (
+                sum(c[0] for c in colors) // n,
+                sum(c[1] for c in colors) // n,
+                sum(c[2] for c in colors) // n,
+                sum(c[3] for c in colors) // n,
+            )
             paste_tinted(
                 canvas, icon_library, node,
                 origin_x=origin_x, origin_y=origin_y,
-                tint=zone_colors[zone_name], flip_map=flip_map,
+                tint=tint, flip_map=flip_map,
             )
 
         draw.rectangle((0, 0, width_px, _HEADER_HEIGHT), fill=(16, 18, 24, 255))
