@@ -14,10 +14,9 @@ from typing import Any, List, Mapping, MutableMapping
 
 from graph_expansion.context import EXPANSION_GRAPH_NAME, ExpansionContext
 from graph_expansion.passes.base import ExpansionPass
+from graph_expansion.passes.global_ship_info import GLOBAL_SHIP_NODE_ID
 
 __all__ = ["GlobalVirtualLinkerPass"]
-
-_GLOBAL_SHIP_ID = "global_ship"
 
 
 class GlobalVirtualLinkerPass(ExpansionPass):
@@ -34,19 +33,15 @@ class GlobalVirtualLinkerPass(ExpansionPass):
         nodes: List[MutableMapping[str, Any]] = expansion_graph["nodes"]
         cross_edges: List[MutableMapping[str, Any]] = expansion_graph["cross_edges"]
 
-        virtual_node_ids = [
-            node["id"] for node in nodes if node["id"] != _GLOBAL_SHIP_ID
-        ]
-
         new_edges = [
             {
-                "source": _GLOBAL_SHIP_ID,
+                "source": GLOBAL_SHIP_NODE_ID,
                 "source_graph": EXPANSION_GRAPH_NAME,
-                "target": node_id,
+                "target": node["id"],
                 "target_graph": EXPANSION_GRAPH_NAME,
                 "kind": "global_virtual_member",
             }
-            for node_id in virtual_node_ids
+            for node in nodes if node["id"] != GLOBAL_SHIP_NODE_ID
         ]
 
         cross_edges.extend(new_edges)

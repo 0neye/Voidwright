@@ -147,14 +147,17 @@ class TraversableClustersPass(ExpansionPass):
         clusters = build_traversable_clusters(structural_nodes, structural_edges)
 
         # Filter out trivially isolated clusters: small footprint with no door access.
+        # Reuse the door-edge list cached by BaseIndexesPass when available.
+        door_edges = context.caches.get("door_edges") or [
+            e for e in structural_edges if e.get("kind") == "door"
+        ]
         door_part_ids: Set[int] = set()
-        for edge in structural_edges:
-            if edge.get("kind") == "door":
-                src, tgt = edge.get("source"), edge.get("target")
-                if src is not None:
-                    door_part_ids.add(int(src))
-                if tgt is not None:
-                    door_part_ids.add(int(tgt))
+        for edge in door_edges:
+            src, tgt = edge.get("source"), edge.get("target")
+            if src is not None:
+                door_part_ids.add(int(src))
+            if tgt is not None:
+                door_part_ids.add(int(tgt))
 
         node_2x_cell_count: Dict[int, int] = {
             int(n["id"]): len(n.get("walkable_cells_2x") or [])

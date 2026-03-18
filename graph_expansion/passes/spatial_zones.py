@@ -112,6 +112,8 @@ def _compute_zones_impl(node: Mapping[str, Any], zone_names: List[str], angle_of
         for cx in range(lx, lx + width):
             angle = math.atan2(cy, cx) - angle_offset
             sector_indices.add(int(round(angle * 4 / math.pi)) % 8)
+        if len(sector_indices) == 8:
+            return list(zone_names)
 
     return [zone_names[i] for i in sorted(sector_indices)]
 
