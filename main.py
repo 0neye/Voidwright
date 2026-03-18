@@ -14,6 +14,7 @@ from generator import cli as generator_cli
 from graph_expansion import cli as graph_expansion_cli
 from preprocessing import cli as preprocessing_cli
 from training import cli as training_cli
+from visualizer import cli as visualizer_cli
 
 __all__ = ["main"]
 
@@ -60,6 +61,12 @@ def build_domain_registry() -> dict[str, CommandDomain]:
             help_text="Enrich preprocessing graph JSON with virtual nodes and cross-edges",
             build_parser=graph_expansion_cli.build_parser,
             run=graph_expansion_cli.main,
+        ),
+        CommandDomain(
+            name="visualizer",
+            help_text="Render static visualizations of ship graph structures",
+            build_parser=visualizer_cli.build_parser,
+            run=visualizer_cli.main,
         ),
     )
     return {command_domain.name: command_domain for command_domain in command_domains}

@@ -1,4 +1,4 @@
-"""Generation-process visualization helpers."""
+"""Visualization helpers for generation video and static ship analysis renders."""
 
 from .events import (
     VisualizationEvent,
