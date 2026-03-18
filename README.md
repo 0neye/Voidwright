@@ -67,6 +67,7 @@ The repository now includes a root entry point at `main.py` that delegates to:
 - `training`
 - `generator`
 - `graph-expansion`
+- `visualizer`
 
 You can use it to discover commands, inspect help, and run an interactive REPL:
 
@@ -185,7 +186,25 @@ Optional diagnostics:
 - `--mirror-symmetry`, `--allowlist`, and `--requirements-file` preserve the existing Markov runtime options
 - `--visualization-fps` controls MP4 playback speed when `--visualize` is enabled
 
-### 5. Visualize generation as MP4
+### 5. Render static ship visualizations
+
+Render expanded graph data as tinted static PNGs — useful for inspecting zone assignments, traversable clusters, and hull layout without running generation:
+
+```bash
+python main.py visualizer render spatial-zones --input <ship.png> [--input <ship2.png> ...]
+python main.py visualizer render cardinal-zones --input <ship.png> ...
+python main.py visualizer render traversable-clusters --input <ship.png> ...
+```
+
+Available backends:
+
+- `spatial-zones` — parts tinted by 8-sector compass zone (boundaries offset 22.5° from axes)
+- `cardinal-zones` — parts tinted by 8-sector zone with boundaries on cardinal/semi-cardinal axes
+- `traversable-clusters` — parts tinted by traversable cluster membership; gray = not in any cluster
+
+Outputs are written to `out/visualizations/<backend>/`. Icon discovery is automatic; see icon discovery notes below.
+
+### 6. Visualize generation as MP4
 
 The Markov generator can now render one MP4 per generated sample showing the
 ship grow step by step, including accepted placements and renderable rejected
@@ -210,8 +229,13 @@ Icon discovery order:
 
 1. `--icons-root` if you want to point directly at a Terran icon directory such as `Data/ships/terran`
 2. `--game-root` if you want to point at a local Cosmoteer install root
-3. Windows Steam auto-discovery via the Steam registry plus `steamapps/libraryfolders.vdf` or `config/libraryfolders.vdf`
+3. Steam auto-discovery:
+   - **Windows:** registry lookup via `winreg` + `steamapps/libraryfolders.vdf`
+   - **Linux:** standard Steam paths (`~/.steam/steam`, `~/.local/share/Steam`, Flatpak)
+   - **WSL2:** Windows drives mounted under `/mnt/` are scanned for `Program Files (x86)/Steam`; library paths from `libraryfolders.vdf` are converted from Windows drive-letter format automatically
 4. Repo-local fallback cache under `assets/local/cosmoteer-icons/terran/`
+
+`blueprints.png` is preferred over `icon.png` when both are present (blueprint sprites render more cleanly in static visualizations).
 
 Example with a manual override:
 
@@ -224,9 +248,7 @@ python main.py generator generate markov \
   --game-root "F:/SteamLibrary/steamapps/common/Cosmoteer"
 ```
 
-If auto-discovery fails, copy the Terran part folders containing `icon.png` into
-`assets/local/cosmoteer-icons/terran/`. That folder is ignored by git on
-purpose, so it can be used as a local cache without polluting the repo.
+If auto-discovery fails, copy the Terran part folders (containing `blueprints.png` or `icon.png`) into `assets/local/cosmoteer-icons/terran/`. That folder is ignored by git on purpose, so it can be used as a local cache without polluting the repo.
 
 ## Module layout
 
@@ -236,7 +258,7 @@ purpose, so it can be used as a local cache without polluting the repo.
 - `training/` - backend router and training adapters
 - `generator/` - backend router and generation adapters
 - `markov/` - shared Markov model, sampling, and backend input helpers; `markov/symmetry.py` is a backward-compat shim over `ship_layout/symmetry.py`
-- `visualizer/` - shared generation event recording, icon loading, frame rendering, and MP4 export
+- `visualizer/` - generation event recording, icon loading, frame rendering, and MP4 export; also hosts a static visualization system (`cli.py`, `router.py`, `static_render.py`, `backends/`) for rendering expanded graph data as tinted PNGs
 - `scripts/` - miscellaneous operational utilities such as Discord acquisition
 - `models/` - generated model artifacts
 

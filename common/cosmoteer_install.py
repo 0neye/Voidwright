@@ -19,6 +19,7 @@ __all__ = [
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOCAL_ICON_CACHE_ROOT = REPO_ROOT / "assets" / "local" / "cosmoteer-icons" / "terran"
+_WINDOWS_DRIVE_PATH_RE = re.compile(r"^([A-Za-z]):[/\\](.*)")
 _STEAM_REGISTRY_KEYS = (
     r"SOFTWARE\WOW6432Node\Valve\Steam",
     r"SOFTWARE\Valve\Steam",
@@ -67,6 +68,45 @@ def _iter_libraryfolders_vdf_paths(steam_install_path: Path) -> tuple[Path, ...]
     )
 
 
+def _is_wsl() -> bool:
+    """Return True when running inside Windows Subsystem for Linux."""
+    try:
+        return "microsoft" in Path("/proc/version").read_text(encoding="utf-8", errors="ignore").lower()
+    except OSError:
+        return False
+
+
+def _wsl_path(path: Path) -> Path:
+    """Convert a Windows drive-letter path to its WSL ``/mnt/<drive>`` equivalent.
+
+    Paths that are already POSIX-style are returned unchanged.
+    """
+    m = _WINDOWS_DRIVE_PATH_RE.match(str(path))
+    if m:
+        return Path("/mnt") / m.group(1).lower() / m.group(2).replace("\\", "/")
+    return path
+
+
+def _iter_wsl_steam_install_paths() -> tuple[Path, ...]:
+    """Return Windows Steam install paths from drives mounted under ``/mnt/`` in WSL."""
+    try:
+        drive_dirs = sorted(Path("/mnt").iterdir())
+    except OSError:
+        return ()
+    install_paths: list[Path] = []
+    for drive_dir in drive_dirs:
+        if not drive_dir.is_dir() or len(drive_dir.name) != 1 or not drive_dir.name.isalpha():
+            continue
+        for steam_relative in (
+            Path("Program Files (x86)") / "Steam",
+            Path("Program Files") / "Steam",
+        ):
+            candidate = drive_dir / steam_relative
+            if (candidate / "Steam.exe").exists():
+                install_paths.append(candidate)
+    return _dedupe_paths(install_paths)
+
+
 def iter_steam_install_paths() -> tuple[Path, ...]:
     """Return Steam install paths discovered from local platform conventions."""
 
@@ -74,7 +114,10 @@ def iter_steam_install_paths() -> tuple[Path, ...]:
         return _iter_windows_steam_install_paths()
 
     if os.name == "posix":
-        return _iter_linux_steam_install_paths()
+        linux_paths = _iter_linux_steam_install_paths()
+        if _is_wsl():
+            return _dedupe_paths((*linux_paths, *_iter_wsl_steam_install_paths()))
+        return linux_paths
 
     return ()
 
@@ -128,7 +171,11 @@ def iter_steam_library_paths(
             if not libraryfolders_path.exists():
                 continue
             library_text = libraryfolders_path.read_text(encoding="utf-8")
-            library_paths.extend(parse_steam_libraryfolders_vdf(library_text))
+            raw_paths = parse_steam_libraryfolders_vdf(library_text)
+            if _is_wsl():
+                library_paths.extend(_wsl_path(p) for p in raw_paths)
+            else:
+                library_paths.extend(raw_paths)
     return _dedupe_paths(library_paths)
 
 
@@ -150,7 +197,11 @@ def _validate_icons_root(candidate_root: Path) -> Path | None:
     resolved_root = candidate_root.expanduser()
     if not resolved_root.is_dir():
         return None
-    if next(resolved_root.rglob("icon.png"), None) is None:
+    has_icons = any(
+        next(resolved_root.rglob(name), None) is not None
+        for name in ("blueprints.png", "icon.png")
+    )
+    if not has_icons:
         return None
     return resolved_root
 
@@ -167,7 +218,7 @@ def resolve_terran_part_icons_root(
         validated_root = _validate_icons_root(Path(icons_root))
         if validated_root is None:
             raise FileNotFoundError(
-                f"Part icon root does not exist or has no icon.png files: {Path(icons_root)}"
+                f"Part icon root does not exist or has no icon files: {Path(icons_root)}"
             )
         return validated_root
 

@@ -125,6 +125,15 @@ Useful generation options:
 - `--allowlist`, `--allowlist-file`, `--require`, and `--requirements-file` constrain output
 - `--visualize` and `--visualization-fps` render MP4 growth videos alongside samples
 
+**Render static ship visualizations** (expanded graph -> tinted PNG):
+```bash
+python main.py visualizer render spatial-zones --input <ship.png> [--input <ship2.png> ...]
+python main.py visualizer render cardinal-zones --input <ship.png> ...
+python main.py visualizer render traversable-clusters --input <ship.png> ...
+```
+
+Icons are auto-discovered (Steam on Windows; Linux Steam paths and WSL2 `/mnt/*/Program Files*/Steam` on POSIX; local cache at `assets/local/cosmoteer-icons/terran/`). Override with `--icons-root` or `--game-root`. Outputs go to `out/visualizations/<backend>/`.
+
 **Discord acquisition** (requires `DISCORD_BOT_TOKEN` in `.env`):
 ```bash
 python scripts/download_ship_images.py --output-dir downloaded_ships --verbose
@@ -140,7 +149,7 @@ The codebase is split into purpose-specific packages:
 - **`generator/`** - backend-agnostic generation router. `generator/backends/markov/backend.py` wires CLI options; `generator/backends/markov/export.py` handles `.ship.png` encoding and roundtrip validation.
 - **`markov/`** - shared Markov internals used by both training and generation: `model.py`, `generation.py`, `inputs.py`, and related helpers. `symmetry.py` is a backward-compat shim; mirror computation lives in `ship_layout/symmetry.py`.
 - **`ship_layout/`** - shared structural geometry, connectivity, mirror symmetry (`symmetry.py`), and the `PlacementValidator` API (`validator.py`) used by generation and analysis.
-- **`visualizer/`** - event capture, icon loading, frame rendering, and MP4 export for generation visualization.
+- **`visualizer/`** - generation event capture, icon loading, frame rendering, and MP4 export; also hosts a static visualization system (`cli.py`, `router.py`, `static_render.py`, `backends/`) that renders expanded graph data as static PNGs tinted by zone, cluster, or hull membership.
 - **`common/`** - geometry metadata (`geometry.py`), file helpers, logging, and `common/cosmoteer/` (parser and encoder for `.ship.png` LSB payloads). `common/data/vanilla_parts_full_geometry.json` is the authoritative part geometry source.
 
 ### Key data flow
@@ -207,6 +216,8 @@ If you need to write a temporary script or generate a temp output of some kind, 
 - **Python module exports should be declared near the top.** New Python modules should define `__all__` near the top of the file (after imports) instead of at the bottom.
 - **Graph expansion is optional and separate from training.** `graph_expansion/` enriches graph JSON with virtual nodes and cross-edges but is not consumed by training or generation by default. Travel-aware passes may load richer movement metadata from `common.geometry` at expansion time rather than embedding it into preprocessing graph JSON. Run graph expansion via `graph-expansion expand` or by passing `--expansion-output-dir` to the pipeline command.
 - **Graph expansion cluster ordering is deterministic.** `graph_expansion/structural.py` normalizes each cluster's member list with `sorted()` before sorting the cluster list, so `traversable_cluster_N` indices are stable across runs.
+- **Visualizer static backends** implement `StaticVisualizationBackend` from `visualizer/backends/base.py` and are registered in `visualizer/router.py`. Shared rendering utilities (bounds, grid, icon paste, zone legend) live in `visualizer/static_render.py`. Add new backends there; do not grow the CLI or router with backend-specific rendering logic.
+- **Icon auto-discovery order:** `--icons-root` > `--game-root` > Steam auto-discovery (Windows registry on `nt`; Linux Steam paths plus WSL2 `/mnt/*/Program Files*/Steam` on `posix`) > local cache at `assets/local/cosmoteer-icons/terran/`. `blueprints.png` is preferred over `icon.png` when loading icons; `_validate_icons_root` accepts directories containing either.
 
 ## Graph expansion framework
 

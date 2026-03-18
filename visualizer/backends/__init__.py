@@ -1,0 +1,1 @@
+"""Static ship visualization backends."""
