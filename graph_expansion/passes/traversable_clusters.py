@@ -28,6 +28,11 @@ __all__ = [
 
 _CORRIDOR_LIKE_SUBSTRINGS: tuple[str, ...] = ("corridor", "walkway", "conveyor")
 
+# Clusters with a combined walkable-cell footprint at or below this 2x threshold
+# *and* no door edges are considered trivially isolated and are not emitted.
+# 16 2x-cells corresponds to a 4-tile (2x2) footprint in canonical coordinates.
+_SMALL_CLUSTER_2X_CELL_THRESHOLD: int = 16
+
 
 def is_corridor_like(part_id: str) -> bool:
     """Return True when *part_id* identifies a corridor, walkway, or conveyor."""
@@ -125,7 +130,7 @@ class TraversableClustersPass(ExpansionPass):
     """Emit traversable-cluster super-nodes and membership cross-edges."""
 
     name = "traversable_clusters"
-    version = 2
+    version = 3
     requires = ("base_indexes",)
     provides = ("traversable_clusters", "cluster_by_part_id")
 
@@ -140,6 +145,37 @@ class TraversableClustersPass(ExpansionPass):
             structural_edges = list(structural_graph.get("edges", []))
 
         clusters = build_traversable_clusters(structural_nodes, structural_edges)
+
+        # Filter out trivially isolated clusters: small footprint with no door access.
+        door_part_ids: Set[int] = set()
+        for edge in structural_edges:
+            if edge.get("kind") == "door":
+                src, tgt = edge.get("source"), edge.get("target")
+                if src is not None:
+                    door_part_ids.add(int(src))
+                if tgt is not None:
+                    door_part_ids.add(int(tgt))
+
+        node_2x_cell_count: Dict[int, int] = {
+            int(n["id"]): len(n.get("walkable_cells_2x") or [])
+            for n in structural_nodes
+            if n.get("walkable_cells_2x")
+        }
+
+        kept_clusters: List[List[int]] = []
+        filtered_count: int = 0
+        for member_ids in clusters:
+            if len(member_ids) == 1:
+                filtered_count += 1
+                continue
+            total_cells = sum(node_2x_cell_count.get(mid, 0) for mid in member_ids)
+            has_door = any(mid in door_part_ids for mid in member_ids)
+            if total_cells <= _SMALL_CLUSTER_2X_CELL_THRESHOLD and not has_door:
+                filtered_count += 1
+                continue
+            kept_clusters.append(member_ids)
+        clusters = kept_clusters
+
         context.set_annotation("traversable_clusters", clusters)
 
         cluster_by_part_id: Dict[int, int] = {}
@@ -186,5 +222,6 @@ class TraversableClustersPass(ExpansionPass):
         return {
             "cluster_count": len(clusters),
             "super_member_edges": len(cluster_cross_edges),
+            "filtered_small_clusters": filtered_count,
         }
 
