@@ -171,9 +171,11 @@ def iter_steam_library_paths(
             if not libraryfolders_path.exists():
                 continue
             library_text = libraryfolders_path.read_text(encoding="utf-8")
-            library_paths.extend(
-                _wsl_path(p) for p in parse_steam_libraryfolders_vdf(library_text)
-            )
+            raw_paths = parse_steam_libraryfolders_vdf(library_text)
+            if _is_wsl():
+                library_paths.extend(_wsl_path(p) for p in raw_paths)
+            else:
+                library_paths.extend(raw_paths)
     return _dedupe_paths(library_paths)
 
 

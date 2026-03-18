@@ -135,8 +135,14 @@ def test_parse_steam_libraryfolders_vdf_reads_all_paths() -> None:
     )
 
 
-def test_iter_steam_library_paths_reads_libraryfolders_file(tmp_path: Path) -> None:
+def test_iter_steam_library_paths_reads_libraryfolders_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Library iteration should include the install path and additional Steam libraries."""
+
+    import common.cosmoteer_install as _ci
+
+    monkeypatch.setattr(_ci, "_is_wsl", lambda: False)
 
     steam_root = tmp_path / "Steam"
     steamapps_root = steam_root / "steamapps"
@@ -157,6 +163,36 @@ def test_iter_steam_library_paths_reads_libraryfolders_file(tmp_path: Path) -> N
     assert steam_root in libraries
     assert Path(r"C:\Steam") in libraries
     assert Path(r"D:\SteamLibrary") in libraries
+
+
+def test_iter_steam_library_paths_converts_windows_paths_in_wsl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In WSL, Windows drive-letter paths from VDF are converted to /mnt/<drive>/... paths."""
+
+    import common.cosmoteer_install as _ci
+
+    monkeypatch.setattr(_ci, "_is_wsl", lambda: True)
+
+    steam_root = tmp_path / "Steam"
+    steamapps_root = steam_root / "steamapps"
+    steamapps_root.mkdir(parents=True)
+    (steamapps_root / "libraryfolders.vdf").write_text(
+        """
+"libraryfolders"
+{
+    "0" { "path" "C:\\\\Steam" }
+    "1" { "path" "D:\\\\SteamLibrary" }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    libraries = iter_steam_library_paths([steam_root])
+
+    assert steam_root in libraries
+    assert Path("/mnt/c/Steam") in libraries
+    assert Path("/mnt/d/SteamLibrary") in libraries
 
 
 def test_iter_steam_install_paths_discovers_linux_steam_roots(

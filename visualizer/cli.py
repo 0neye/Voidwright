@@ -37,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
             type=Path,
             metavar="FILE",
             nargs="+",
+            action="extend",
             required=True,
             help="One or more .ship.png files to visualize",
         )
