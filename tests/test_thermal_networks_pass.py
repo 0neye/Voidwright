@@ -28,6 +28,7 @@ _EXPANSION_GRAPH_NAME = EXPANSION_GRAPH_NAME
 # Stable part IDs used across tests.
 _HEAT_PIPE_ID = "cosmoteer.heat_pipe"
 _RADIATOR_ID = "cosmoteer.radiator"
+_HEAT_EXCHANGER_ID = "cosmoteer.heat_exchanger"
 _OVERCLOCK_PART_ID = "cosmoteer.ion_beam_emitter"
 _ENGINE_ROOM_ID = "cosmoteer.engine_room"
 _THRUSTER_SMALL_ID = "cosmoteer.thruster_small"
@@ -426,6 +427,100 @@ def test_thermal_networks_summary_increments_in_expansion_graph() -> None:
 
     assert expansion_graph["summary"]["thermal_network_nodes"] == 1
     assert expansion_graph["summary"]["thermal_member_edges"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Heat-exchanger radius special-case tests
+# ---------------------------------------------------------------------------
+
+
+def test_connected_heat_exchanger_pulls_in_overclocked_part_within_radius() -> None:
+    """A connected heat exchanger should include nearby overclocked parts."""
+
+    nodes = [
+        make_node(0, [0, 0], _HEAT_EXCHANGER_ID, overclocked=False, footprint={"width": 1, "height": 1}),
+        make_node(1, [0, 2], _HEAT_PIPE_ID,      overclocked=False, footprint={"width": 1, "height": 1}),
+        make_node(2, [8, 0], _ARMOR_ID,          overclocked=True,  footprint={"width": 1, "height": 1}),
+    ]
+    fake_geo = {
+        _HEAT_EXCHANGER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Down"),)),
+        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
+        _ARMOR_ID: _make_vanilla_geo(()),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 1
+    assert summary["heat_exchanger_radius_edges"] == 1
+    assert summary["networks"] == 1
+    assert summary["network_sizes"] == [3]
+    assert context.get_annotation("thermal_networks") == [[0, 1, 2]]
+
+
+def test_connected_heat_exchanger_does_not_pull_in_overclocked_part_outside_radius() -> None:
+    """Overclocked parts outside the heat exchanger radius must stay excluded."""
+
+    nodes = [
+        make_node(0, [0, 0], _HEAT_EXCHANGER_ID, overclocked=False, footprint={"width": 1, "height": 1}),
+        make_node(1, [0, 2], _HEAT_PIPE_ID,      overclocked=False, footprint={"width": 1, "height": 1}),
+        make_node(2, [12, 0], _ARMOR_ID,         overclocked=True,  footprint={"width": 1, "height": 1}),
+    ]
+    fake_geo = {
+        _HEAT_EXCHANGER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Down"),)),
+        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
+        _ARMOR_ID: _make_vanilla_geo(()),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 1
+    assert summary["heat_exchanger_radius_edges"] == 0
+    assert summary["networks"] == 1
+    assert summary["network_sizes"] == [2]
+    assert context.get_annotation("thermal_networks") == [[0, 1]]
+
+
+def test_connected_heat_exchanger_ignores_non_overclocked_parts_within_radius() -> None:
+    """Radius inclusion applies only to overclocked parts."""
+
+    nodes = [
+        make_node(0, [0, 0], _HEAT_EXCHANGER_ID, overclocked=False, footprint={"width": 1, "height": 1}),
+        make_node(1, [0, 2], _HEAT_PIPE_ID,      overclocked=False, footprint={"width": 1, "height": 1}),
+        make_node(2, [8, 0], _ARMOR_ID,          overclocked=False, footprint={"width": 1, "height": 1}),
+    ]
+    fake_geo = {
+        _HEAT_EXCHANGER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Down"),)),
+        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
+        _ARMOR_ID: _make_vanilla_geo(()),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 1
+    assert summary["heat_exchanger_radius_edges"] == 0
+    assert summary["networks"] == 1
+    assert summary["network_sizes"] == [2]
+    assert context.get_annotation("thermal_networks") == [[0, 1]]
+
+
+def test_disconnected_heat_exchanger_does_not_create_radius_only_network() -> None:
+    """A heat exchanger must already be connected to a thermal network to expand by radius."""
+
+    nodes = [
+        make_node(0, [0, 0], _HEAT_EXCHANGER_ID, overclocked=False, footprint={"width": 1, "height": 1}),
+        make_node(1, [8, 0], _ARMOR_ID,          overclocked=True,  footprint={"width": 1, "height": 1}),
+    ]
+    fake_geo = {
+        _HEAT_EXCHANGER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Down"),)),
+        _ARMOR_ID: _make_vanilla_geo(()),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 0
+    assert summary["heat_exchanger_radius_edges"] == 0
+    assert summary["networks"] == 0
+    assert context.get_annotation("thermal_networks") == []
 
 
 # ---------------------------------------------------------------------------

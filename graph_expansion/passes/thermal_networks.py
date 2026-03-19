@@ -24,6 +24,13 @@ engine room, an implicit thermal edge is added between the two, regardless of
 whether their explicit thermal ports align.  This means thrusters that are not
 connected via dedicated heat pipes are still pulled into the engine room's
 thermal network simply by touching it.
+
+Heat exchanger radius special case
+----------------------------------
+After direct thermal connectivity is constructed, each connected heat exchanger
+acts as an inclusion source for overclocked parts inside its absorption radius.
+Overclocked parts that are not already in that thermal network are attached to
+it when any occupied tile is within the heat exchanger's configured radius.
 """
 
 from __future__ import annotations
@@ -47,6 +54,13 @@ _DIRECTION_DELTA: Dict[str, Tuple[int, int]] = {
     "Right": ( 2, 0),
 }
 
+# Heat exchanger absorption rules are defined in:
+# Data/ships/terran/heat_exchanger/heat_exchanger.rules
+#   Region { Type = EdgeDistance; Distance = 5 }
+# Distances here are in tile units.  One tile = 2 units in this pass's 2x-space.
+_HEAT_EXCHANGER_ABSORPTION_RADIUS_TILES = 5.0
+_HEAT_EXCHANGER_PART_ID = "cosmoteer.heat_exchanger"
+
 
 @dataclass(frozen=True)
 class _ActivePort:
@@ -59,6 +73,10 @@ class _ActivePort:
 
     node_id: int
     direction: str
+
+
+def _is_heat_exchanger(part_id: str) -> bool:
+    return part_id.lower() == _HEAT_EXCHANGER_PART_ID
 
 
 def _build_port_index(
@@ -177,14 +195,35 @@ def _footprint_cells_2x(node: Mapping[str, Any]) -> Set[Tuple[int, int]]:
     footprint = node.get("footprint")
     if not isinstance(location_2x, (list, tuple)) or len(location_2x) != 2:
         return set()
-    if not isinstance(footprint, dict):
-        return set()
     lx, ly = int(location_2x[0]), int(location_2x[1])
+    if not isinstance(footprint, dict):
+        # Fall back to a single 1x1 occupied tile at the part origin.
+        # This keeps heuristics available for synthetic/minimal test nodes.
+        return {(lx, ly)}
     w = int(footprint.get("width", 0))
     h = int(footprint.get("height", 0))
     if w <= 0 or h <= 0:
-        return set()
+        return {(lx, ly)}
     return {(lx + 2 * col, ly + 2 * row) for row in range(h) for col in range(w)}
+
+
+def _cells_within_distance_2x(
+    cells_a: Set[Tuple[int, int]],
+    cells_b: Set[Tuple[int, int]],
+    max_distance_2x: float,
+) -> bool:
+    """Return True when any cell pair is within *max_distance_2x* (euclidean)."""
+
+    if not cells_a or not cells_b:
+        return False
+    max_sq = max_distance_2x * max_distance_2x
+    for ax, ay in cells_a:
+        for bx, by in cells_b:
+            dx = float(ax - bx)
+            dy = float(ay - by)
+            if (dx * dx) + (dy * dy) <= max_sq:
+                return True
+    return False
 
 
 def _build_engine_room_thruster_edges(
@@ -249,6 +288,65 @@ def _build_engine_room_thruster_edges(
     return sorted(edges)
 
 
+def _build_heat_exchanger_radius_edges(
+    context: ExpansionContext,
+    clusters: List[List[int]],
+) -> List[Tuple[int, int]]:
+    """Return edges that pull overclocked parts into connected heat-exchanger networks.
+
+    For each already-connected thermal network, every heat exchanger in that
+    network can connect to overclocked parts that are not yet network members
+    when the shortest occupied-cell distance is within the exchanger's
+    absorption radius.
+    """
+
+    node_by_id: Dict[int, Mapping[str, Any]] = context.caches.get("node_by_id") or {}
+    cells_by_id: Dict[int, Set[Tuple[int, int]]] = {
+        node_id: _footprint_cells_2x(node)
+        for node_id, node in node_by_id.items()
+    }
+
+    candidates_overclocked: List[int] = [
+        node_id
+        for node_id, node in node_by_id.items()
+        if node.get("overclocked")
+    ]
+
+    max_distance_2x = _HEAT_EXCHANGER_ABSORPTION_RADIUS_TILES * 2.0
+    edges: Set[Tuple[int, int]] = set()
+
+    for members in clusters:
+        member_set = set(members)
+        exchanger_ids = [
+            node_id
+            for node_id in members
+            if _is_heat_exchanger((node_by_id.get(node_id) or {}).get("part_id", ""))
+        ]
+        if not exchanger_ids:
+            continue
+
+        for exchanger_id in exchanger_ids:
+            exchanger_cells = cells_by_id.get(exchanger_id) or set()
+            if not exchanger_cells:
+                continue
+
+            for candidate_id in candidates_overclocked:
+                if candidate_id in member_set:
+                    continue
+                candidate_cells = cells_by_id.get(candidate_id) or set()
+                if not candidate_cells:
+                    continue
+                if not _cells_within_distance_2x(
+                    exchanger_cells,
+                    candidate_cells,
+                    max_distance_2x,
+                ):
+                    continue
+                edges.add((min(exchanger_id, candidate_id), max(exchanger_id, candidate_id)))
+
+    return sorted(edges)
+
+
 def _union_find_clusters(
     node_ids: List[int],
     edges: List[Tuple[int, int]],
@@ -302,7 +400,7 @@ class ThermalNetworksPass(ExpansionPass):
     """
 
     name = "thermal_networks"
-    version = 2
+    version = 3
     requires = ("base_indexes",)
     provides = ("thermal_networks", "thermal_network_by_part_id")
 
@@ -341,9 +439,16 @@ class ThermalNetworksPass(ExpansionPass):
                 "parts_with_ports": parts_with_ports,
                 "thermal_edges": 0,
                 "engine_room_thruster_edges": 0,
+                "heat_exchanger_radius_edges": 0,
                 "networks": 0,
                 "network_sizes": [],
             }
+
+        initial_clusters = _union_find_clusters(sorted(connected_ids), all_edges)
+        heat_exchanger_radius_edges = _build_heat_exchanger_radius_edges(context, initial_clusters)
+        all_edges = sorted(set(all_edges) | set(heat_exchanger_radius_edges))
+
+        connected_ids = {node for edge in all_edges for node in edge}
 
         clusters = _union_find_clusters(sorted(connected_ids), all_edges)
 
@@ -394,6 +499,7 @@ class ThermalNetworksPass(ExpansionPass):
             "parts_with_ports": parts_with_ports,
             "thermal_edges": len(thermal_edges),
             "engine_room_thruster_edges": len(er_thruster_edges),
+            "heat_exchanger_radius_edges": len(heat_exchanger_radius_edges),
             "networks": len(clusters),
             "network_sizes": [len(m) for m in clusters],
         }
