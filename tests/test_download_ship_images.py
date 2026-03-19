@@ -1,4 +1,4 @@
-"""Tests for download-time ship opt-out filtering."""
+"""Tests for download-time ship opt-in filtering."""
 
 from __future__ import annotations
 
@@ -86,54 +86,54 @@ class _FakeHistorySource:
             yield message
 
 
-def test_cleanup_existing_opt_out_files_removes_deleted_names_from_state(tmp_path: Path) -> None:
-    """Startup cleanup should delete opted-out files and untrack their filenames."""
+def test_cleanup_non_opted_in_files_removes_deleted_names_from_state(tmp_path: Path) -> None:
+    """Startup cleanup should delete non-opted-in files and untrack their filenames."""
 
     download_module = _load_download_module()
     output_dir = tmp_path / "downloaded_ships"
-    blocked_ship_path = output_dir / "blocked.ship.png"
-    allowed_ship_path = output_dir / "allowed.ship.png"
+    excluded_ship_path = output_dir / "excluded.ship.png"
+    opted_in_ship_path = output_dir / "opted-in.ship.png"
     output_dir.mkdir()
-    _write_ship_png(blocked_ship_path, name="Blocked", author="blocked")
-    _write_ship_png(allowed_ship_path, name="Allowed", author="allowed")
+    _write_ship_png(excluded_ship_path, name="Excluded", author="excluded")
+    _write_ship_png(opted_in_ship_path, name="OptedIn", author="opted-in")
 
     downloader = download_module.ShipImageDownloader(
         output_dir=output_dir,
         channel_ids=[],
-        opt_out_author_names={"blocked"},
+        opt_in_author_names={"opted-in"},
         intents=discord.Intents.none(),
     )
     downloader.downloaded_filenames = {
-        blocked_ship_path.name,
-        allowed_ship_path.name,
+        excluded_ship_path.name,
+        opted_in_ship_path.name,
     }
 
-    downloader._cleanup_existing_opt_out_files()
+    downloader._cleanup_non_opted_in_files()
 
-    assert not blocked_ship_path.exists()
-    assert allowed_ship_path.exists()
-    assert blocked_ship_path.name not in downloader.downloaded_filenames
-    assert allowed_ship_path.name in downloader.downloaded_filenames
+    assert not excluded_ship_path.exists()
+    assert opted_in_ship_path.exists()
+    assert excluded_ship_path.name not in downloader.downloaded_filenames
+    assert opted_in_ship_path.name in downloader.downloaded_filenames
 
 
-def test_filter_downloaded_ship_file_deletes_matching_author(tmp_path: Path) -> None:
-    """A just-downloaded file should be removed immediately when author matches."""
+def test_filter_downloaded_ship_file_deletes_non_opted_in_author(tmp_path: Path) -> None:
+    """A just-downloaded file should be removed immediately when author is not opted in."""
 
     download_module = _load_download_module()
     output_dir = tmp_path / "downloaded_ships"
-    blocked_ship_path = output_dir / "blocked.ship.png"
+    excluded_ship_path = output_dir / "excluded.ship.png"
     output_dir.mkdir()
-    _write_ship_png(blocked_ship_path, name="Blocked", author="blocked")
+    _write_ship_png(excluded_ship_path, name="Excluded", author="excluded")
 
     downloader = download_module.ShipImageDownloader(
         output_dir=output_dir,
         channel_ids=[],
-        opt_out_author_names={"blocked"},
+        opt_in_author_names={"opted-in"},
         intents=discord.Intents.none(),
     )
 
-    assert downloader._filter_downloaded_ship_file(blocked_ship_path) is True
-    assert not blocked_ship_path.exists()
+    assert downloader._filter_downloaded_ship_file(excluded_ship_path) is True
+    assert not excluded_ship_path.exists()
 
 
 def test_filtered_attachments_are_not_persisted_as_processed(tmp_path: Path) -> None:
@@ -146,12 +146,12 @@ def test_filtered_attachments_are_not_persisted_as_processed(tmp_path: Path) -> 
     downloader = download_module.ShipImageDownloader(
         output_dir=output_dir,
         channel_ids=[],
-        opt_out_author_names={"blocked"},
+        opt_in_author_names=set(),
         intents=discord.Intents.none(),
     )
 
     async def _fake_save_attachment_with_retries(*args, **kwargs) -> str:  # noqa: ANN002, ANN003
-        """Pretend the downloaded attachment was filtered out by the opt-out step."""
+        """Pretend the downloaded attachment was filtered out by the opt-in step."""
 
         del args, kwargs
         return "filtered"

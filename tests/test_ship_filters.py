@@ -1,4 +1,4 @@
-"""Tests for author-based ship opt-out filtering."""
+"""Tests for author-based ship opt-in filtering."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 from common.cosmoteer import create_ship_png_bytes
 from common.files import output_name_for_ship_png
-from common.ship_filters import delete_opted_out_ship_files, load_opt_out_author_names
+from common.ship_filters import delete_non_opted_in_ship_files, load_opt_in_author_names
 from preprocessing.pipeline import run_pipeline
 
 
@@ -37,71 +37,70 @@ def _write_ship_png(path: Path, *, name: str, author: str) -> None:
     path.write_bytes(create_ship_png_bytes(_build_ship_payload(name=name, author=author)))
 
 
-def _write_opt_out_csv(path: Path, author_names: str) -> None:
-    """Write a minimal opt-out CSV fixture with the expected author column."""
+def _write_opt_in_csv(path: Path, author_names: str) -> None:
+    """Write a minimal opt-in CSV fixture with the expected author column."""
 
     with path.open("w", encoding="utf-8", newline="") as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow(
             [
                 "Timestamp",
-                "Your Cosmoteer ship author names to exclude (Exact match; comma-separated list)",
+                "Your Cosmoteer ship author names to include (Exact match; comma-separated list)\n\nThis is the name shown in-game in the Author field.",
             ]
         )
-        writer.writerow(["2026/03/11 4:36:05 PM MDT", author_names])
+        writer.writerow(["2026/03/15 4:45:58 PM MDT", author_names])
 
 
-def test_load_opt_out_author_names_splits_and_trims_entries(tmp_path: Path) -> None:
+def test_load_opt_in_author_names_splits_and_trims_entries(tmp_path: Path) -> None:
     """CSV parsing should preserve exact names while trimming separator whitespace."""
 
-    csv_path = tmp_path / "opt-out.csv"
-    _write_opt_out_csv(csv_path, "alpha, beta ,gamma")
+    csv_path = tmp_path / "opt-in.csv"
+    _write_opt_in_csv(csv_path, "alpha, beta ,gamma")
 
-    assert load_opt_out_author_names(csv_path) == {"alpha", "beta", "gamma"}
+    assert load_opt_in_author_names(csv_path) == {"alpha", "beta", "gamma"}
 
 
-def test_delete_opted_out_ship_files_uses_exact_author_matches(tmp_path: Path) -> None:
-    """Filtering should delete exact author matches without folding case."""
+def test_delete_non_opted_in_ship_files_uses_exact_author_matches(tmp_path: Path) -> None:
+    """Filtering should keep exact opt-in matches and delete all others."""
 
-    csv_path = tmp_path / "opt-out.csv"
-    _write_opt_out_csv(csv_path, "blocked")
-    blocked_ship_path = tmp_path / "blocked.ship.png"
+    csv_path = tmp_path / "opt-in.csv"
+    _write_opt_in_csv(csv_path, "allowed")
+    opted_in_ship_path = tmp_path / "opted-in.ship.png"
     case_variant_ship_path = tmp_path / "case-variant.ship.png"
-    allowed_ship_path = tmp_path / "allowed.ship.png"
-    _write_ship_png(blocked_ship_path, name="Blocked", author="blocked")
-    _write_ship_png(case_variant_ship_path, name="CaseVariant", author="Blocked")
-    _write_ship_png(allowed_ship_path, name="Allowed", author="allowed")
+    excluded_ship_path = tmp_path / "excluded.ship.png"
+    _write_ship_png(opted_in_ship_path, name="OptedIn", author="allowed")
+    _write_ship_png(case_variant_ship_path, name="CaseVariant", author="Allowed")
+    _write_ship_png(excluded_ship_path, name="Excluded", author="excluded")
 
-    filter_summary = delete_opted_out_ship_files(
+    filter_summary = delete_non_opted_in_ship_files(
         [tmp_path],
-        load_opt_out_author_names(csv_path),
+        load_opt_in_author_names(csv_path),
     )
 
     assert filter_summary["ship_files_scanned"] == 3
-    assert filter_summary["ship_files_deleted"] == 1
-    assert filter_summary["matched_authors"] == ["blocked"]
-    assert not blocked_ship_path.exists()
-    assert case_variant_ship_path.exists()
-    assert allowed_ship_path.exists()
+    assert filter_summary["ship_files_deleted"] == 2
+    assert opted_in_ship_path.exists()
+    assert not case_variant_ship_path.exists()
+    assert not excluded_ship_path.exists()
 
 
-def test_pipeline_deletes_opted_out_source_ships_before_extraction(tmp_path: Path) -> None:
-    """The preprocessing pipeline should delete blocked source ships before extract runs."""
+def test_pipeline_deletes_non_opted_in_source_ships_before_extraction(tmp_path: Path) -> None:
+    """The preprocessing pipeline should delete non-opted-in source ships before extract runs."""
 
     input_dir = tmp_path / "downloaded_ships"
     graph_output_dir = tmp_path / "generated_graphs"
-    csv_path = tmp_path / "opt-out.csv"
-    blocked_ship_path = input_dir / "blocked.ship.png"
-    allowed_ship_path = input_dir / "allowed.ship.png"
+    csv_path = tmp_path / "opt-in.csv"
+    excluded_ship_path = input_dir / "excluded.ship.png"
+    opted_in_ship_path = input_dir / "opted-in.ship.png"
     input_dir.mkdir()
-    _write_opt_out_csv(csv_path, "blocked")
-    _write_ship_png(blocked_ship_path, name="Blocked", author="blocked")
-    _write_ship_png(allowed_ship_path, name="Allowed", author="allowed")
+    _write_opt_in_csv(csv_path, "opted-in-author")
+    _write_ship_png(excluded_ship_path, name="Excluded", author="excluded-author")
+    _write_ship_png(opted_in_ship_path, name="OptedIn", author="opted-in-author")
 
     payload = run_pipeline(
         input_paths=[input_dir],
         output_dir=graph_output_dir,
-        opt_out_csv=csv_path,
+        opt_in_csv=csv_path,
         extract_workers=1,
         extract_executor="thread",
         canonicalize_workers=1,
@@ -114,27 +113,27 @@ def test_pipeline_deletes_opted_out_source_ships_before_extraction(tmp_path: Pat
 
     assert payload["opt_out_filter"]["ship_files_deleted"] == 1
     assert payload["graphs"]["ships_processed"] == 1
-    assert not blocked_ship_path.exists()
-    assert allowed_ship_path.exists()
-    assert manifest["sample_outputs"] == [output_name_for_ship_png(allowed_ship_path)]
+    assert not excluded_ship_path.exists()
+    assert opted_in_ship_path.exists()
+    assert manifest["sample_outputs"] == [output_name_for_ship_png(opted_in_ship_path)]
 
 
-def test_pipeline_validates_missing_inputs_before_deleting_opted_out_ships(tmp_path: Path) -> None:
+def test_pipeline_validates_missing_inputs_before_filtering_ships(tmp_path: Path) -> None:
     """A missing input path should abort before the pipeline mutates valid source dirs."""
 
     input_dir = tmp_path / "downloaded_ships"
     missing_input_dir = tmp_path / "missing_ships"
-    csv_path = tmp_path / "opt-out.csv"
-    blocked_ship_path = input_dir / "blocked.ship.png"
+    csv_path = tmp_path / "opt-in.csv"
+    opted_in_ship_path = input_dir / "opted-in.ship.png"
     input_dir.mkdir()
-    _write_opt_out_csv(csv_path, "blocked")
-    _write_ship_png(blocked_ship_path, name="Blocked", author="blocked")
+    _write_opt_in_csv(csv_path, "opted-in-author")
+    _write_ship_png(opted_in_ship_path, name="OptedIn", author="opted-in-author")
 
     try:
         run_pipeline(
             input_paths=[input_dir, missing_input_dir],
             output_dir=tmp_path / "generated_graphs",
-            opt_out_csv=csv_path,
+            opt_in_csv=csv_path,
             extract_workers=1,
             extract_executor="thread",
             canonicalize_workers=1,
@@ -147,4 +146,4 @@ def test_pipeline_validates_missing_inputs_before_deleting_opted_out_ships(tmp_p
     else:
         raise AssertionError("run_pipeline should fail for missing input paths")
 
-    assert blocked_ship_path.exists()
+    assert opted_in_ship_path.exists()

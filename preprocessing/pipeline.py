@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Sequence
 
 from common.ship_filters import (
-    DEFAULT_OPT_OUT_CSV_PATH,
-    delete_opted_out_ship_files,
-    load_opt_out_author_names,
+    DEFAULT_OPT_IN_CSV_PATH,
+    delete_non_opted_in_ship_files,
+    load_opt_in_author_names,
 )
 
 from .canonicalize import run_canonicalize
@@ -71,9 +71,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable verbose logging during extraction",
     )
     parser.add_argument(
-        "--opt-out-csv",
-        default=str(DEFAULT_OPT_OUT_CSV_PATH),
-        help="CSV containing exact author names to exclude before extraction",
+        "--opt-in-csv",
+        default=str(DEFAULT_OPT_IN_CSV_PATH),
+        help="CSV containing exact author names to include before extraction",
     )
     add_concurrency_arguments(
         parser,
@@ -124,7 +124,7 @@ def run_pipeline(
     report_md: str | Path | None = None,
     limit: int | None = None,
     verbose: bool = False,
-    opt_out_csv: str | Path = DEFAULT_OPT_OUT_CSV_PATH,
+    opt_in_csv: str | Path = DEFAULT_OPT_IN_CSV_PATH,
     extract_workers: int | None = None,
     extract_executor: str = "auto",
     canonicalize_workers: int | None = None,
@@ -147,7 +147,7 @@ def run_pipeline(
         report_md: Optional canonicalization markdown report path
         limit: Optional validation subset size for each stage
         verbose: When True, enable verbose extraction logging
-        opt_out_csv: CSV containing exact author names to filter before extraction
+        opt_in_csv: CSV containing exact author names to keep before extraction
         extract_workers: Optional extraction worker-count override
         extract_executor: Extraction executor mode override
         canonicalize_workers: Optional canonicalization worker-count override
@@ -175,10 +175,10 @@ def run_pipeline(
         raise RuntimeError(f"Input path does not exist: {missing_inputs_text}")
 
     # Validate all requested inputs up front so failed invocations never mutate
-    # the user's ship corpus as a side effect of opt-out filtering.
-    opt_out_filter = delete_opted_out_ship_files(
+    # the user's ship corpus as a side effect of opt-in filtering.
+    opt_out_filter = delete_non_opted_in_ship_files(
         resolved_input_paths,
-        load_opt_out_author_names(opt_out_csv),
+        load_opt_in_author_names(opt_in_csv),
     )
     filtered_input_paths = [path for path in resolved_input_paths if path.exists()]
 
@@ -259,7 +259,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         report_md=args.report_md,
         limit=args.limit,
         verbose=args.verbose,
-        opt_out_csv=args.opt_out_csv,
+        opt_in_csv=args.opt_in_csv,
         extract_workers=args.extract_workers,
         extract_executor=args.extract_executor,
         canonicalize_workers=args.canonicalize_workers,
