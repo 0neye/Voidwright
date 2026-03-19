@@ -35,6 +35,14 @@ The Discord downloader is stateful and resumable, but it is no longer part of th
 - Filename collisions are handled by appending `__msg<message_id>`
 - The script retries transient Discord/network/history/download failures with backoff
 
+Opt-in filtering:
+
+- Pass `--opt-in-csv <path>` to a CSV listing exact `Author` names that should be kept
+- Ships whose `Author` does not appear in the list are deleted immediately after download
+- The CSV is also applied to any previously downloaded files at startup
+- When the CSV is absent or produces an empty list, all ships are kept (filtering disabled)
+- Use `scripts/patch_ship_author.py` to fix a blank `Author` field on an individual ship before preprocessing
+
 Operational notes:
 
 - The bot token is loaded from `.env` via `DISCORD_BOT_TOKEN`

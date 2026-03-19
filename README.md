@@ -92,6 +92,14 @@ python scripts/download_ship_images.py --output-dir downloaded_ships --verbose
 
 This step is optional. Everything else starts from local `.ship.png` files or directories.
 
+If you have an opt-in CSV from participants, pass it with `--opt-in-csv` so only ships from listed authors are kept. Ships whose `Author` field does not appear in the CSV are deleted immediately after download. When the CSV is absent or the list is empty, all downloaded ships are kept.
+
+If a downloaded ship has a blank `Author` field, use `patch_ship_author.py` to set it before running preprocessing:
+
+```bash
+python scripts/patch_ship_author.py <input.ship.png> <output.ship.png> <author>
+```
+
 ### 2. Run preprocessing
 
 Run the full preprocessing pipeline from local ship images to canonical graph JSON outputs:
@@ -259,7 +267,7 @@ If auto-discovery fails, copy the Terran part folders (containing `blueprints.pn
 - `generator/` - backend router and generation adapters
 - `markov/` - shared Markov model, sampling, and backend input helpers; `markov/symmetry.py` is a backward-compat shim over `ship_layout/symmetry.py`
 - `visualizer/` - generation event recording, icon loading, frame rendering, and MP4 export; also hosts a static visualization system (`cli.py`, `router.py`, `static_render.py`, `backends/`) for rendering expanded graph data as tinted PNGs
-- `scripts/` - miscellaneous operational utilities such as Discord acquisition
+- `scripts/` - miscellaneous operational utilities: Discord acquisition (`download_ship_images.py`) and ship author patching (`patch_ship_author.py`)
 - `models/` - generated model artifacts
 
 ## Notes
