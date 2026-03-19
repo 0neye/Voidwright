@@ -125,6 +125,7 @@ def run_pipeline(
     limit: int | None = None,
     verbose: bool = False,
     opt_in_csv: str | Path = DEFAULT_OPT_IN_CSV_PATH,
+    filter_cache_path: Path | None = None,
     extract_workers: int | None = None,
     extract_executor: str = "auto",
     canonicalize_workers: int | None = None,
@@ -148,6 +149,8 @@ def run_pipeline(
         limit: Optional validation subset size for each stage
         verbose: When True, enable verbose extraction logging
         opt_in_csv: CSV containing exact author names to keep before extraction
+        filter_cache_path: Optional path for the author-cache JSON file used to
+            skip re-parsing unchanged ship files during opt-in filtering
         extract_workers: Optional extraction worker-count override
         extract_executor: Extraction executor mode override
         canonicalize_workers: Optional canonicalization worker-count override
@@ -179,6 +182,7 @@ def run_pipeline(
     opt_out_filter = delete_non_opted_in_ship_files(
         resolved_input_paths,
         load_opt_in_author_names(opt_in_csv),
+        cache_path=filter_cache_path,
     )
     filtered_input_paths = [path for path in resolved_input_paths if path.exists()]
 
@@ -250,6 +254,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+    # Derive a default filter cache path from the first input directory so that
+    # unchanged ship files are not re-parsed on every pipeline run.
+    first_input = Path(args.inputs[0])
+    filter_cache_dir = first_input if first_input.is_dir() else first_input.parent
+    filter_cache_path = filter_cache_dir / ".ship-filter-cache.json"
     payload = run_pipeline(
         input_paths=args.inputs,
         output_dir=args.output_dir,
@@ -260,6 +269,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         limit=args.limit,
         verbose=args.verbose,
         opt_in_csv=args.opt_in_csv,
+        filter_cache_path=filter_cache_path,
         extract_workers=args.extract_workers,
         extract_executor=args.extract_executor,
         canonicalize_workers=args.canonicalize_workers,

@@ -42,6 +42,8 @@ Opt-in filtering:
 - The CSV is also applied to any previously downloaded files at startup
 - When the CSV is absent or produces an empty list, all ships are kept (filtering disabled)
 - Use `scripts/patch_ship_author.py` to fix a blank `Author` field on an individual ship before preprocessing
+- The pipeline CLI automatically maintains a stat-keyed author cache at `.ship-filter-cache.json`
+  in the first input directory; unchanged files are skipped on subsequent runs without re-parsing
 
 Operational notes:
 

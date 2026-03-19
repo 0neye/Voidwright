@@ -84,6 +84,42 @@ def test_delete_non_opted_in_ship_files_uses_exact_author_matches(tmp_path: Path
     assert not excluded_ship_path.exists()
 
 
+def test_delete_non_opted_in_ship_files_cache_skips_reparsing(tmp_path: Path) -> None:
+    """A warm cache should skip re-parsing unchanged files on the second call."""
+
+    import json
+
+    csv_path = tmp_path / "opt-in.csv"
+    _write_opt_in_csv(csv_path, "allowed")
+    ship_path = tmp_path / "kept.ship.png"
+    _write_ship_png(ship_path, name="Kept", author="allowed")
+    cache_path = tmp_path / ".ship-filter-cache.json"
+    opt_in = load_opt_in_author_names(csv_path)
+
+    # First call: cold cache — file should be parsed and cache written
+    delete_non_opted_in_ship_files([tmp_path], opt_in, cache_path=cache_path)
+    assert cache_path.exists()
+    cache_after_first = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert len(cache_after_first) == 1
+    entry = next(iter(cache_after_first.values()))
+    assert entry["author"] == "allowed"
+    assert entry["parse_ok"] is True
+
+    # Overwrite the file with garbage of the same size and restore mtime so the
+    # cache entry remains valid by (mtime, size).  A re-parse of this data would
+    # fail, so a kept result proves the cache was used instead.
+    import os
+
+    original_stat = ship_path.stat()
+    ship_path.write_bytes(b"\x00" * original_stat.st_size)
+    os.utime(ship_path, (original_stat.st_atime, original_stat.st_mtime))
+
+    # Second call: warm cache — should use cached author, not attempt to parse
+    result = delete_non_opted_in_ship_files([tmp_path], opt_in, cache_path=cache_path)
+    assert result["ship_files_kept"] == 1
+    assert result["parse_failures"] == 0
+
+
 def test_pipeline_deletes_non_opted_in_source_ships_before_extraction(tmp_path: Path) -> None:
     """The preprocessing pipeline should delete non-opted-in source ships before extract runs."""
 
