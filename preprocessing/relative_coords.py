@@ -152,11 +152,41 @@ def canonicalize_for_translation_invariant_hash(ship_data: object) -> object:
     projected_payload["Doors"] = projected_doors
 
     coord_transform = ship_data.get("coord_transform")
+    center_2x: list[int] | None = None
     if isinstance(coord_transform, dict):
+        raw_center = coord_transform.get("center_2x")
+        if isinstance(raw_center, list) and len(raw_center) == 2:
+            center_2x = [int(raw_center[0]), int(raw_center[1])]
         projected_payload["coord_transform"] = {
             "version": int(coord_transform.get("version", 1)),
             "frame": str(coord_transform.get("frame", "bbox_center_2x")),
             "scale": int(coord_transform.get("scale", 2)),
         }
+
+    # PartUIToggleStates entries carry Key[0].Location in world grid coordinates.
+    # Without canonicalization, translated copies of the same overclocked ship
+    # produce different hashes even though their normalised layouts are identical.
+    # Replace Key[0].Location with a centered-2x equivalent so the hash is
+    # invariant to pure translation.
+    raw_toggle_states = ship_data.get("PartUIToggleStates")
+    if isinstance(raw_toggle_states, list):
+        projected_toggle_states: list[dict] = []
+        for entry in raw_toggle_states:
+            if not isinstance(entry, dict):
+                continue
+            key = entry.get("Key")
+            if not isinstance(key, list) or not key or not isinstance(key[0], dict):
+                projected_toggle_states.append(dict(entry))
+                continue
+            projected_key_0 = dict(key[0])
+            if center_2x is not None:
+                loc = _coerce_coord_pair(projected_key_0.get("Location"))
+                if loc is not None:
+                    projected_key_0["Location2x"] = _to_local_2x(loc, center_2x)
+                    projected_key_0.pop("Location", None)
+            projected_entry = dict(entry)
+            projected_entry["Key"] = [projected_key_0, *key[1:]]
+            projected_toggle_states.append(projected_entry)
+        projected_payload["PartUIToggleStates"] = projected_toggle_states
 
     return projected_payload
