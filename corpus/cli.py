@@ -16,19 +16,11 @@ from corpus.rules.require_reachable_reactor import RequireReachableReactorRule
 __all__ = ["build_parser", "main"]
 
 
-def build_parser(parent: argparse.ArgumentParser | None = None) -> argparse.ArgumentParser:
-    """Build the corpus filter CLI parser.
-
-    If *parent* is given the filter arguments are added to it directly (useful
-    when embedding this parser as a sub-command).  Otherwise a standalone
-    top-level parser is returned.
-    """
-    if parent is None:
-        parser = argparse.ArgumentParser(
-            description="Filter a generated ship graph corpus by applying rule-based checks."
-        )
-    else:
-        parser = parent
+def build_parser() -> argparse.ArgumentParser:
+    """Build the corpus filter CLI parser."""
+    parser = argparse.ArgumentParser(
+        description="Filter a generated ship graph corpus by applying rule-based checks."
+    )
 
     parser.add_argument(
         "--input-dir",
@@ -106,9 +98,6 @@ def _build_active_ruleset(args: argparse.Namespace) -> list:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the corpus filter pipeline."""
     parser = build_parser()
-
-    # Support being called as "corpus filter ..." from the root CLI.
-    # The root CLI may pass a top-level Namespace; strip the leading subcommand.
     args = parser.parse_args(argv)
 
     logging.basicConfig(

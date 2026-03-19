@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 import shutil
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -11,6 +13,7 @@ import orjson
 
 from corpus.context import CorpusContext
 from corpus.rules.base import CorpusRule, RuleResult
+from graph_expansion.context import EXPANSION_GRAPH_NAME
 
 __all__ = [
     "FilterResult",
@@ -28,41 +31,25 @@ def _is_graph_json(path: Path) -> bool:
     return path.suffix == ".json" and path.name not in _SKIP_FILENAMES
 
 
+@dataclass(slots=True)
 class RejectionRecord:
     """Record of a single rejected ship."""
 
-    __slots__ = ("file", "ship_name", "author", "reasons")
-
-    def __init__(
-        self,
-        file: str,
-        ship_name: str,
-        author: str,
-        reasons: list[dict[str, str]],
-    ) -> None:
-        self.file = file
-        self.ship_name = ship_name
-        self.author = author
-        self.reasons = reasons
+    file: str
+    ship_name: str
+    author: str
+    reasons: list[dict[str, str]]
 
 
+@dataclass(slots=True)
 class FilterResult:
     """Summary of a completed filter run."""
 
-    __slots__ = (
-        "ships_scanned",
-        "ships_kept",
-        "ships_rejected",
-        "rejections_by_rule",
-        "rejections",
-    )
-
-    def __init__(self) -> None:
-        self.ships_scanned: int = 0
-        self.ships_kept: int = 0
-        self.ships_rejected: int = 0
-        self.rejections_by_rule: dict[str, int] = {}
-        self.rejections: list[RejectionRecord] = []
+    ships_scanned: int = 0
+    ships_kept: int = 0
+    ships_rejected: int = 0
+    rejections_by_rule: dict[str, int] = field(default_factory=dict)
+    rejections: list[RejectionRecord] = field(default_factory=list)
 
 
 def validate_corpus_has_expansion(
@@ -75,8 +62,12 @@ def validate_corpus_has_expansion(
     Called at startup when ``require_reachable_reactor`` is enabled so that the
     error surfaces before any work is done.
     """
-    json_files = sorted(p for p in input_dir.iterdir() if _is_graph_json(p))
-    sample = json_files[:sample_size]
+    sample = list(
+        itertools.islice(
+            (p for p in input_dir.iterdir() if _is_graph_json(p)),
+            sample_size,
+        )
+    )
     if not sample:
         raise RuntimeError(
             "require_reachable_reactor rule is enabled but the input directory "
@@ -88,7 +79,7 @@ def validate_corpus_has_expansion(
             payload = orjson.loads(path.read_bytes())
         except Exception:
             continue
-        if "X_expansion_structural" not in payload.get("graphs", {}):
+        if EXPANSION_GRAPH_NAME not in payload.get("graphs", {}):
             missing.append(path.name)
     if missing:
         raise RuntimeError(
@@ -108,8 +99,8 @@ def run_filter(
     """Apply *rules* to every graph JSON file in *input_dir*.
 
     Accepted files are copied verbatim to *output_dir*.  A ``manifest.json`` is
-    always written.  An optional ``rejections.jsonl`` is written when
-    *write_rejections_log* is True.
+    always written.  ``rejections.jsonl`` is written when *write_rejections_log*
+    is True and at least one ship was rejected.
 
     Returns a :class:`FilterResult` summarising the run.
     """
@@ -137,9 +128,7 @@ def run_filter(
                 failures.append(
                     {"rule": rule.name, "message": rule_result.message or ""}
                 )
-                result.rejections_by_rule[rule.name] = (
-                    result.rejections_by_rule.get(rule.name, 0) + 1
-                )
+                result.rejections_by_rule[rule.name] += 1
 
         if failures:
             result.ships_rejected += 1
@@ -172,18 +161,17 @@ def run_filter(
     )
 
     if write_rejections_log and result.rejections:
-        lines = []
-        for rec in result.rejections:
-            lines.append(
-                orjson.dumps(
-                    {
-                        "file": rec.file,
-                        "ship_name": rec.ship_name,
-                        "author": rec.author,
-                        "reasons": rec.reasons,
-                    }
-                )
+        lines = [
+            orjson.dumps(
+                {
+                    "file": rec.file,
+                    "ship_name": rec.ship_name,
+                    "author": rec.author,
+                    "reasons": rec.reasons,
+                }
             )
+            for rec in result.rejections
+        ]
         (output_dir / "rejections.jsonl").write_bytes(b"\n".join(lines) + b"\n")
 
     return result

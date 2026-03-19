@@ -6,15 +6,10 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
+from graph_expansion.context import EXPANSION_GRAPH_NAME, STRUCTURAL_GRAPH_NAME
+from graph_expansion.passes.travel_support import detect_part_role
+
 __all__ = ["CorpusContext"]
-
-# Graph name constants (mirrors graph_expansion.context)
-_STRUCTURAL_GRAPH_NAME = "A_structural_part_graph"
-_EXPANSION_GRAPH_NAME = "X_expansion_structural"
-
-# Crew-room part-ID substrings (must stay aligned with
-# graph_expansion/passes/travel_support.py _CREW_ROOM_SUBSTRINGS)
-_CREW_ROOM_SUBSTRINGS: tuple[str, ...] = ("crew_quarters", "quarters")
 
 
 class CorpusContext:
@@ -49,8 +44,12 @@ class CorpusContext:
     # ------------------------------------------------------------------
 
     @cached_property
+    def _graphs(self) -> dict[str, Any]:
+        return self._payload.get("graphs", {})
+
+    @cached_property
     def _structural_graph(self) -> dict[str, Any]:
-        return self._payload.get("graphs", {}).get(_STRUCTURAL_GRAPH_NAME, {})
+        return self._graphs.get(STRUCTURAL_GRAPH_NAME, {})
 
     @cached_property
     def _structural_summary(self) -> dict[str, Any]:
@@ -82,13 +81,12 @@ class CorpusContext:
 
     @cached_property
     def crew_room_count(self) -> int:
-        """Number of structural nodes whose part_id matches crew-room substrings."""
-        count = 0
-        for node in self.part_nodes:
-            part_id = str(node.get("part_id", "")).lower()
-            if any(token in part_id for token in _CREW_ROOM_SUBSTRINGS):
-                count += 1
-        return count
+        """Number of structural part nodes identified as crew rooms."""
+        return sum(
+            1
+            for node in self.part_nodes
+            if detect_part_role(str(node.get("part_id", ""))) == "crew_room"
+        )
 
     # ------------------------------------------------------------------
     # Expansion graph helpers
@@ -97,15 +95,11 @@ class CorpusContext:
     @cached_property
     def has_expansion_graph(self) -> bool:
         """True when the expansion graph is present in the payload."""
-        return _EXPANSION_GRAPH_NAME in self._payload.get("graphs", {})
+        return EXPANSION_GRAPH_NAME in self._graphs
 
     @cached_property
     def _expansion_summary(self) -> dict[str, Any]:
-        return (
-            self._payload.get("graphs", {})
-            .get(_EXPANSION_GRAPH_NAME, {})
-            .get("summary", {})
-        )
+        return self._graphs.get(EXPANSION_GRAPH_NAME, {}).get("summary", {})
 
     @cached_property
     def crew_access_reactor_edges(self) -> int:
