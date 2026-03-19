@@ -79,6 +79,18 @@ python main.py graph-expansion expand \
   --output-dir expanded_ship_graphs
 ```
 
+**Filter graph corpus** (optional rule-based accept/reject pass):
+```bash
+python main.py corpus \
+  --input-dir generated_ship_graphs_canonical \
+  --output-dir filtered_ship_graphs_canonical \
+  --max-parts 300 \
+  --require-crew-rooms \
+  --require-reachable-reactor
+```
+
+Available filter flags: `--max-parts N`, `--max-occupied-cells N`, `--require-crew-rooms`, `--require-reachable-reactor` (needs expanded graphs), `--no-rejections-log`. Writes `manifest.json` and (when ships are rejected) `rejections.jsonl` to the output directory.
+
 The package-level CLIs remain supported:
 
 ```bash
@@ -86,6 +98,7 @@ python -m preprocessing.cli ...
 python -m training.cli ...
 python -m generator.cli ...
 python -m graph_expansion.cli ...
+python -m corpus.cli ...
 ```
 
 The `extract`, `canonicalize`, and `graphs` stages also accept:
@@ -159,12 +172,13 @@ The codebase is split into purpose-specific packages:
 - **`markov/`** - shared Markov internals used by both training and generation: `model.py`, `generation.py`, `inputs.py`, and related helpers. `symmetry.py` is a backward-compat shim; mirror computation lives in `ship_layout/symmetry.py`.
 - **`ship_layout/`** - shared structural geometry, connectivity, mirror symmetry (`symmetry.py`), and the `PlacementValidator` API (`validator.py`) used by generation and analysis.
 - **`visualizer/`** - generation event capture, icon loading, frame rendering, and MP4 export; also hosts a static visualization system (`cli.py`, `router.py`, `static_render.py`, `backends/`) that renders expanded graph data as static PNGs tinted by zone, cluster, or hull membership.
+- **`corpus/`** - rule-based corpus filtering. `filter.py` scans a graph JSON directory, applies an ordered list of `CorpusRule` objects, copies accepted files to an output directory, and writes `manifest.json` / `rejections.jsonl`. Rules live under `corpus/rules/` (`MaxSizeRule`, `RequireCrewRoomsRule`, `RequireReachableReactorRule`). `context.py` provides `CorpusContext` (lazy accessors over the parsed graph payload). The flat CLI (`corpus/cli.py`) is registered in `main.py` as the `corpus` domain.
 - **`common/`** - geometry metadata (`geometry.py`), file helpers, logging, and `common/cosmoteer/` (parser and encoder for `.ship.png` LSB payloads). `common/data/vanilla_parts_full_geometry.json` is the authoritative part geometry source.
 
 ### Key data flow
 
 ```text
-.ship.png -> parser -> raw JSON -> centered 2x extracted JSON -> canonical JSON -> graph JSON -> (optional) expanded graph JSON -> Markov model -> generated JSON -> encoder -> .ship.png
+.ship.png -> parser -> raw JSON -> centered 2x extracted JSON -> canonical JSON -> graph JSON -> (optional) expanded graph JSON -> (optional) corpus filter -> Markov model -> generated JSON -> encoder -> .ship.png
 ```
 
 ### Adding a new backend

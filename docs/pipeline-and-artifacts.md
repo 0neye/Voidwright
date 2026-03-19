@@ -160,7 +160,7 @@ directory, and writes a `manifest.json` summary.
 **Typical invocation:**
 
 ```bash
-python main.py corpus filter \
+python main.py corpus \
   --input-dir generated_ship_graphs_canonical \
   --output-dir filtered_ship_graphs_canonical \
   --max-parts 300 \
