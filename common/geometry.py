@@ -115,6 +115,7 @@ __all__ = [
     "PartMeta",
     "PartRect",
     "RotationGeometry",
+    "ThermalPort",
     "TRAVERSABLE_HINTS",
     "VANILLA_NAMESPACE",
     "VANILLA_PARTS_PATH",
@@ -143,6 +144,15 @@ class PartRect:
 
 
 @dataclass(frozen=True)
+class ThermalPort:
+    """One thermal network port on a vanilla part at a specific rotation."""
+
+    location: Coord  # part-local tile coord (NOT 2x-scaled)
+    direction: str   # "Up", "Down", "Left", or "Right"
+    overclock_conditional: bool  # True = only active when part is overclocked
+
+
+@dataclass(frozen=True)
 class RotationGeometry:
     """Geometry for one rotated vanilla part footprint.
 
@@ -168,6 +178,7 @@ class RotationGeometry:
     crew_speed_by_direction: Mapping[str, float] | None = None
     crew_congested_speed_factor: float | None = None
     crew_congested_speed_by_direction: Mapping[str, float] | None = None
+    thermal_ports: Tuple[ThermalPort, ...] = ()
 
     def crew_speed_for_direction(self, direction: str, default: float | None = None) -> float | None:
         """Return the travel speed for a world-cardinal movement direction."""
@@ -445,6 +456,18 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
                 ),
                 crew_congested_speed_by_direction=_normalize_directional_speed_map(
                     rotation_congested_speed
+                ),
+                thermal_ports=tuple(
+                    ThermalPort(
+                        location=(int(tp["location"][0]), int(tp["location"][1])),
+                        direction=str(tp["direction"]),
+                        overclock_conditional=bool(tp.get("overclock_conditional", False)),
+                    )
+                    for tp in rotation_payload.get("thermal_ports", [])
+                    if isinstance(tp, dict)
+                       and isinstance(tp.get("location"), list)
+                       and len(tp["location"]) == 2
+                       and isinstance(tp.get("direction"), str)
                 ),
             )
 

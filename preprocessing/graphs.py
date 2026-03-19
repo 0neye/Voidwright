@@ -12,12 +12,13 @@ import orjson
 
 from common.files import inputs_needing_regeneration, iter_json_files, prune_stale_json_outputs, write_output_version
 from common.geometry import PartMeta, infer_meta, load_vanilla_part_geometry, normalize_part_id
+from common.save_rect import stored_location_to_origin
 from ship_layout.geometry import attachment_segments_2x
 from ship_layout.types import PlacedPart, Segment2x
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
 from .layout_helpers import door_adjacent_cells
 
-_GRAPH_SCHEMA_VERSION = 5
+_GRAPH_SCHEMA_VERSION = 6
 _GRAPH_SCHEMA_VERSION_KEY = "graph_schema_version"
 
 __all__ = [
@@ -402,6 +403,46 @@ def structural_door_edges(
     )
 
 
+def _build_overclocked_set(data: dict) -> set[tuple[str, int, int]]:
+    """Return the set of (normalized_part_id, norm_x, norm_y) for overclocked parts.
+
+    Reads ``PartUIToggleStates`` entries with ``Key[1] == "thermal_overclock"``
+    and ``Value == 1``, converting the stored location to a footprint-origin
+    coordinate via :func:`common.save_rect.stored_location_to_origin` so the
+    result matches the footprint-origin ``Location`` field on normalized parts.
+
+    Args:
+        data: Parsed canonical or extracted ship JSON payload.
+
+    Returns:
+        A set of ``(part_id, norm_x, norm_y)`` tuples identifying overclocked
+        part placements using normalized footprint-origin coordinates.
+    """
+
+    result: set[tuple[str, int, int]] = set()
+    for entry in data.get("PartUIToggleStates") or []:
+        key = entry.get("Key")
+        value = entry.get("Value")
+        if not isinstance(key, list) or len(key) < 2:
+            continue
+        if key[1] != "thermal_overclock" or value != 1:
+            continue
+        part_ref = key[0]
+        if not isinstance(part_ref, dict):
+            continue
+        loc = part_ref.get("Location")
+        rotation = int(part_ref.get("Rotation", 0))
+        if not isinstance(loc, list) or len(loc) != 2:
+            continue
+        raw_id = part_ref.get("ID") or part_ref.get("IDString", "")
+        part_id = normalize_part_id(part_ref)
+        if not part_id:
+            continue
+        norm_x, norm_y = stored_location_to_origin(raw_id, rotation, loc)
+        result.add((part_id, norm_x, norm_y))
+    return result
+
+
 def process_ship(ship_path: Path) -> dict:
     """Generate graph artifacts for one extracted or canonical ship JSON file."""
 
@@ -414,6 +455,7 @@ def process_ship(ship_path: Path) -> dict:
     raw_parts = data.get("Parts", [])
     parts = normalize_parts(raw_parts, center_2x=center_2x)
     doors = normalize_doors(data.get("Doors", []), center_2x=center_2x)
+    overclocked_set = _build_overclocked_set(data)
 
     part_records = []
     cell_to_parts: Dict[Coord, Set[int]] = defaultdict(set)
@@ -426,16 +468,19 @@ def process_ship(ship_path: Path) -> dict:
             unknown_part_ids[part["ID"]] += 1
         cells = part_cells(part, meta)
         walkable_cells = part_walkable_cells(part, meta)
+        loc = list(map(int, part["Location"]))
+        overclocked = (part["ID"], loc[0], loc[1]) in overclocked_set
         record = {
             "index": index,
             "part_id": part["ID"],
-            "location": list(map(int, part["Location"])),
+            "location": loc,
             "location_2x": part["Location2x"],
             "rotation": rotation,
             "width": meta.width,
             "height": meta.height,
             "traversable": meta.traversable,
             "meta_note": meta.note,
+            "overclocked": overclocked,
             "cells": cells,
             "walkable_cells": walkable_cells,
         }
@@ -457,6 +502,7 @@ def process_ship(ship_path: Path) -> dict:
             "traversable": record["traversable"],
             "walkable_cells_2x": _sorted_local_2x_cells(record["walkable_cells"], center_2x),
             "meta_note": record["meta_note"],
+            "overclocked": record["overclocked"],
         }
         for record in part_records
     ]

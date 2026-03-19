@@ -1,0 +1,407 @@
+"""Focused tests for ThermalNetworksPass graph expansion pass.
+
+These tests use unittest.mock.patch to inject synthetic thermal port geometry
+into the vanilla part geometry cache, since the ``thermal_ports`` attribute on
+``RotationGeometry`` is being added by a parallel workstream and may not yet
+be present in the live geometry database.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import patch
+
+from graph_expansion.context import EXPANSION_GRAPH_NAME, STRUCTURAL_GRAPH_NAME, ExpansionContext
+from graph_expansion.passes.base_indexes import BaseIndexesPass
+from graph_expansion.passes.thermal_networks import ThermalNetworksPass
+
+__all__: list[str] = []
+
+_STRUCTURAL_GRAPH_NAME = STRUCTURAL_GRAPH_NAME
+_EXPANSION_GRAPH_NAME = EXPANSION_GRAPH_NAME
+
+# Stable part IDs used across tests.
+_HEAT_PIPE_ID = "cosmoteer.heat_pipe"
+_RADIATOR_ID = "cosmoteer.radiator"
+_OVERCLOCK_PART_ID = "cosmoteer.ion_beam_emitter"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_thermal_port(
+    location: tuple[int, int],
+    direction: str,
+    *,
+    overclock_conditional: bool = False,
+) -> SimpleNamespace:
+    """Build a minimal thermal port descriptor matching the expected API."""
+
+    return SimpleNamespace(
+        location=location,
+        direction=direction,
+        overclock_conditional=overclock_conditional,
+    )
+
+
+def _make_rotation_geometry(thermal_ports: tuple[SimpleNamespace, ...]) -> SimpleNamespace:
+    """Build a minimal RotationGeometry-like object with thermal_ports."""
+
+    return SimpleNamespace(thermal_ports=thermal_ports)
+
+
+def _make_vanilla_geo(thermal_ports: tuple[SimpleNamespace, ...]) -> SimpleNamespace:
+    """Build a minimal VanillaPartGeometry-like object with one rotation."""
+
+    rot_geo = _make_rotation_geometry(thermal_ports)
+
+    def rotation_geometry(rotation: int) -> SimpleNamespace:
+        return rot_geo
+
+    return SimpleNamespace(rotation_geometry=rotation_geometry)
+
+
+def make_node(
+    node_id: int,
+    location_2x: list[int],
+    part_id: str,
+    *,
+    rotation: int = 0,
+    overclocked: bool = False,
+) -> dict[str, Any]:
+    """Build a minimal structural node dict with location_2x and overclocked fields."""
+
+    return {
+        "id": node_id,
+        "part_id": part_id,
+        "location_2x": location_2x,
+        "rotation": rotation,
+        "overclocked": overclocked,
+    }
+
+
+def make_graph_payload(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Build a minimal graph JSON payload for use with ExpansionContext."""
+
+    return {
+        "graphs": {
+            _STRUCTURAL_GRAPH_NAME: {
+                "nodes": nodes,
+                "edges": edges if edges is not None else [],
+            }
+        }
+    }
+
+
+def _run_thermal_pass(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]] | None = None,
+    *,
+    fake_geometry: dict[str, SimpleNamespace] | None = None,
+) -> tuple[ExpansionContext, dict[str, Any]]:
+    """Run BaseIndexesPass then ThermalNetworksPass and return the context and summary.
+
+    Args:
+        nodes: Structural nodes for the test graph.
+        edges: Optional structural edges (defaults to empty list).
+        fake_geometry: Optional mapping of part_id → fake VanillaPartGeometry.
+            When provided, ``load_vanilla_part_geometry`` is patched to return it.
+
+    Returns:
+        A tuple of ``(context, summary)`` after both passes have run.
+    """
+
+    payload = make_graph_payload(nodes, edges)
+    context = ExpansionContext(payload, expansion_name="structural", expansion_version=1)
+    BaseIndexesPass().run(context)
+
+    if fake_geometry is not None:
+        with patch(
+            "graph_expansion.passes.thermal_networks.load_vanilla_part_geometry",
+            return_value=fake_geometry,
+        ):
+            summary = ThermalNetworksPass().run(context)
+    else:
+        summary = ThermalNetworksPass().run(context)
+
+    return context, summary
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+def test_thermal_networks_two_adjacent_heat_pipes_form_one_network() -> None:
+    """Two heat pipes with complementary adjacent ports should form one thermal network of 2."""
+
+    # Part 0 at location_2x=[0, 0]: port facing Right at tile (0, 0) → 2x pos (0, 0, Right)
+    # Part 1 at location_2x=[2, 0]: port facing Left  at tile (0, 0) → 2x pos (2, 0, Left)
+    # Right port at (0,0) + delta(2,0) = (2, 0) matches Left port at (2, 0) ✓
+    # Each part has only its own facing port, forming a complementary pair.
+    nodes = [
+        make_node(0, [0, 0], _HEAT_PIPE_ID),
+        make_node(1, [2, 0], _HEAT_PIPE_ID + "_receiver"),
+    ]
+    fake_geo = {
+        _HEAT_PIPE_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Right"),)
+        ),
+        _HEAT_PIPE_ID + "_receiver": _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Left"),)
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["networks"] == 1
+    assert summary["thermal_edges"] == 1
+    assert summary["network_sizes"] == [2]
+    assert summary["parts_with_ports"] == 2
+
+    clusters = context.get_annotation("thermal_networks")
+    assert clusters == [[0, 1]]
+
+    network_by_part_id = context.get_annotation("thermal_network_by_part_id")
+    assert network_by_part_id[0] == "thermal_network_0"
+    assert network_by_part_id[1] == "thermal_network_0"
+
+    expansion_graph = context.emitted_graphs[_EXPANSION_GRAPH_NAME]
+    node_ids = [n["id"] for n in expansion_graph["nodes"]]
+    assert "thermal_network_0" in node_ids
+
+    thermal_node = next(n for n in expansion_graph["nodes"] if n["id"] == "thermal_network_0")
+    assert thermal_node["kind"] == "thermal_network"
+    assert thermal_node["member_count"] == 2
+
+    cross_edge_targets = {
+        (e["kind"], e["target"])
+        for e in expansion_graph["cross_edges"]
+        if e.get("source") == "thermal_network_0"
+    }
+    assert cross_edge_targets == {("thermal_member", 0), ("thermal_member", 1)}
+
+
+def test_thermal_networks_radiator_adjacent_to_heat_pipe_connects() -> None:
+    """A radiator adjacent to a heat pipe on a matching side should connect."""
+
+    # Radiator at [0, 0] has a Down port at tile offset (0, 0) → 2x pos (0, 0)
+    # Heat pipe at [0, 2] has an Up port at tile offset (0, 0) → 2x pos (0, 2)
+    # Down port at (0, 0) + delta(0, 2) = (0, 2) matches Up port at (0, 2) ✓
+    nodes = [
+        make_node(0, [0, 0], _RADIATOR_ID),
+        make_node(1, [0, 2], _HEAT_PIPE_ID),
+    ]
+    fake_geo = {
+        _RADIATOR_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Down"),)),
+        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["networks"] == 1
+    assert summary["thermal_edges"] == 1
+    assert summary["network_sizes"] == [2]
+
+    clusters = context.get_annotation("thermal_networks")
+    assert clusters == [[0, 1]]
+
+
+def test_thermal_networks_overclock_conditional_port_inactive_when_not_overclocked() -> None:
+    """An overclock-conditional port on a non-overclocked part must not form a thermal edge."""
+
+    # Part 0 has a normal port facing Right → active regardless of overclocked
+    # Part 1 has an overclock_conditional port facing Left, but overclocked=False → inactive
+    nodes = [
+        make_node(0, [0, 0], _HEAT_PIPE_ID, overclocked=False),
+        make_node(1, [2, 0], _OVERCLOCK_PART_ID, overclocked=False),
+    ]
+    # Part 0: normal Right port at (0, 0)
+    # Part 1: overclock-conditional Left port at (0, 0) in local tile → 2x (2, 0)
+    fake_geo = {
+        _HEAT_PIPE_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Right", overclock_conditional=False),)
+        ),
+        _OVERCLOCK_PART_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Left", overclock_conditional=True),)
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    # The overclock-conditional port on part 1 is inactive → no thermal edge
+    assert summary["thermal_edges"] == 0
+    assert summary["networks"] == 0
+    assert summary["network_sizes"] == []
+
+    clusters = context.get_annotation("thermal_networks")
+    assert clusters == []
+
+    # Part 0 still has an active port, but part 1's port is inactive
+    assert summary["parts_with_ports"] == 1
+
+
+def test_thermal_networks_overclock_conditional_port_active_when_overclocked() -> None:
+    """An overclock-conditional port on an overclocked part SHOULD form a thermal edge."""
+
+    # Part 0 at [0, 0]: normal Right port → active
+    # Part 1 at [2, 0]: overclock-conditional Left port, overclocked=True → active
+    nodes = [
+        make_node(0, [0, 0], _HEAT_PIPE_ID, overclocked=False),
+        make_node(1, [2, 0], _OVERCLOCK_PART_ID, overclocked=True),
+    ]
+    fake_geo = {
+        _HEAT_PIPE_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Right", overclock_conditional=False),)
+        ),
+        _OVERCLOCK_PART_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Left", overclock_conditional=True),)
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 1
+    assert summary["networks"] == 1
+    assert summary["network_sizes"] == [2]
+
+    clusters = context.get_annotation("thermal_networks")
+    assert clusters == [[0, 1]]
+
+    expansion_graph = context.emitted_graphs[_EXPANSION_GRAPH_NAME]
+    assert any(n["id"] == "thermal_network_0" for n in expansion_graph["nodes"])
+    cross_edge_targets = {
+        (e["kind"], e["target"])
+        for e in expansion_graph["cross_edges"]
+        if e.get("source") == "thermal_network_0"
+    }
+    assert cross_edge_targets == {("thermal_member", 0), ("thermal_member", 1)}
+
+
+def test_thermal_networks_no_ports_yields_empty_result() -> None:
+    """Parts with no thermal ports in the geometry database produce no networks."""
+
+    nodes = [
+        make_node(0, [0, 0], "cosmoteer.armor_1x1"),
+        make_node(1, [2, 0], "cosmoteer.armor_1x1"),
+    ]
+    # Empty geometry → no thermal ports
+    fake_geo: dict[str, Any] = {}
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 0
+    assert summary["networks"] == 0
+    assert summary["parts_with_ports"] == 0
+
+    assert context.get_annotation("thermal_networks") == []
+    assert context.get_annotation("thermal_network_by_part_id") == {}
+
+    assert _EXPANSION_GRAPH_NAME not in context.emitted_graphs
+
+
+def test_thermal_networks_non_adjacent_ports_do_not_connect() -> None:
+    """Ports that face the right direction but are not adjacent must not connect."""
+
+    # Part 0 at [0, 0] facing Right → 2x port at (0, 0)
+    # Part 1 at [4, 0] facing Left  → 2x port at (4, 0)
+    # Gap of 4 units (not the expected 2 units for one tile) → no connection
+    nodes = [
+        make_node(0, [0, 0], _HEAT_PIPE_ID),
+        make_node(1, [4, 0], _HEAT_PIPE_ID),
+    ]
+    fake_geo = {
+        _HEAT_PIPE_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Right"),)
+        )
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 0
+    assert summary["networks"] == 0
+
+
+def test_thermal_networks_three_parts_chain_forms_one_network() -> None:
+    """A chain of three thermally linked parts should form a single network."""
+
+    # Part 0 ←Right→ Part 1 ←Right→ Part 2
+    # 0 at [0,0], 1 at [2,0], 2 at [4,0]
+    nodes = [
+        make_node(0, [0, 0], _HEAT_PIPE_ID),
+        make_node(1, [2, 0], _HEAT_PIPE_ID),
+        make_node(2, [4, 0], _HEAT_PIPE_ID),
+    ]
+    # Each heat pipe has a Right port at (0,0) and a Left port at (0,0) in local tile,
+    # mapping to 2x positions matching their location_2x.
+    fake_geo = {
+        _HEAT_PIPE_ID: _make_vanilla_geo(
+            (
+                _make_thermal_port((0, 0), "Right"),
+                _make_thermal_port((0, 0), "Left"),
+            )
+        )
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["networks"] == 1
+    assert summary["thermal_edges"] == 2
+    assert summary["network_sizes"] == [3]
+
+    clusters = context.get_annotation("thermal_networks")
+    assert clusters == [[0, 1, 2]]
+
+
+def test_thermal_networks_two_isolated_pairs_form_two_networks() -> None:
+    """Two disconnected thermal pairs should each form their own network."""
+
+    # Pair A: part 0 (Right) ↔ part 1 (Left) at [0,0] and [2,0]
+    # Pair B: part 2 (Right) ↔ part 3 (Left) at [100,0] and [102,0] (far from pair A)
+    _HEAT_PIPE_R = _HEAT_PIPE_ID + "_R"
+    _HEAT_PIPE_L = _HEAT_PIPE_ID + "_L"
+    nodes = [
+        make_node(0, [0, 0], _HEAT_PIPE_R),
+        make_node(1, [2, 0], _HEAT_PIPE_L),
+        make_node(2, [100, 0], _RADIATOR_ID),
+        make_node(3, [102, 0], _HEAT_PIPE_ID),
+    ]
+    fake_geo = {
+        _HEAT_PIPE_R: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        _HEAT_PIPE_L: _make_vanilla_geo((_make_thermal_port((0, 0), "Left"),)),
+        _RADIATOR_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Left"),)),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["networks"] == 2
+    assert summary["thermal_edges"] == 2
+    assert sorted(summary["network_sizes"]) == [2, 2]
+
+    clusters = context.get_annotation("thermal_networks")
+    assert len(clusters) == 2
+    assert [0, 1] in clusters
+    assert [2, 3] in clusters
+
+
+def test_thermal_networks_summary_increments_in_expansion_graph() -> None:
+    """The expansion graph summary should record thermal_network_nodes and thermal_member_edges."""
+
+    nodes = [
+        make_node(0, [0, 0], _HEAT_PIPE_ID),
+        make_node(1, [2, 0], _RADIATOR_ID),
+    ]
+    fake_geo = {
+        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        _RADIATOR_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Left"),)),
+    }
+
+    context, _ = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+    expansion_graph = context.emitted_graphs[_EXPANSION_GRAPH_NAME]
+
+    assert expansion_graph["summary"]["thermal_network_nodes"] == 1
+    assert expansion_graph["summary"]["thermal_member_edges"] == 2
