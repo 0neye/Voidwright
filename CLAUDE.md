@@ -139,6 +139,15 @@ Icons are auto-discovered (Steam on Windows; Linux Steam paths and WSL2 `/mnt/*/
 python scripts/download_ship_images.py --output-dir downloaded_ships --verbose
 ```
 
+**Patch blank Author fields in donated ships:**
+
+Used when a donor forgot to set their author name in the ship file. The author
+name to patch in should be looked up from the opt-in form CSV.
+
+```bash
+python scripts/patch_ship_author.py <input.ship.png> <output.ship.png> <author>
+```
+
 ## Module architecture
 
 The codebase is split into purpose-specific packages:
