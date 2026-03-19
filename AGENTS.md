@@ -285,7 +285,12 @@ Structural passes (in pipeline order):
   `common.geometry`); overclock-conditional ports are only active when the
   owning part has `overclocked=True`; connected components form
   `thermal_network_N` virtual nodes with `thermal_member` cross-edges;
-  isolated parts (no matching opposite port) receive no node
+  isolated parts (no matching opposite port) receive no node; overclocked
+  engine rooms force all directly connected thrusters to be overclocked too
+  (already reflected in graph data; a future generator verification step should
+  confirm this invariant) and act as heat conduits — any thruster tile-adjacent
+  to an overclocked engine room gets an implicit thermal edge regardless of
+  explicit port alignment
 - `HullPerimeterPass` classifies each part as perimeter or interior using 2x
   footprint cell neighbor checks; emits `hull_perimeter` / `interior` virtual
   nodes with `hull_member` / `interior_member` cross-edges

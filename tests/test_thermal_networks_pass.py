@@ -4,6 +4,10 @@ These tests use unittest.mock.patch to inject synthetic thermal port geometry
 into the vanilla part geometry cache, since the ``thermal_ports`` attribute on
 ``RotationGeometry`` is being added by a parallel workstream and may not yet
 be present in the live geometry database.
+
+Engine-room special-case tests use real part IDs (``cosmoteer.engine_room`` /
+``cosmoteer.thruster_*``) and include a ``footprint`` field on each node so that
+``_build_engine_room_thruster_edges`` can compute 2x-space adjacency.
 """
 
 from __future__ import annotations
@@ -25,6 +29,9 @@ _EXPANSION_GRAPH_NAME = EXPANSION_GRAPH_NAME
 _HEAT_PIPE_ID = "cosmoteer.heat_pipe"
 _RADIATOR_ID = "cosmoteer.radiator"
 _OVERCLOCK_PART_ID = "cosmoteer.ion_beam_emitter"
+_ENGINE_ROOM_ID = "cosmoteer.engine_room"
+_THRUSTER_SMALL_ID = "cosmoteer.thruster_small"
+_ARMOR_ID = "cosmoteer.armor_1x1"
 
 
 # ---------------------------------------------------------------------------
@@ -71,16 +78,30 @@ def make_node(
     *,
     rotation: int = 0,
     overclocked: bool = False,
+    footprint: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    """Build a minimal structural node dict with location_2x and overclocked fields."""
+    """Build a minimal structural node dict with location_2x and overclocked fields.
 
-    return {
+    Args:
+        node_id: Integer node ID.
+        location_2x: ``[x, y]`` position in the centered-2x frame.
+        part_id: Part identifier string.
+        rotation: Part rotation (0–3, default 0).
+        overclocked: Whether the part is overclocked (default False).
+        footprint: Optional ``{"width": w, "height": h}`` in tile units.  Required
+            for engine-room proximity edge detection; omit for port-matching-only tests.
+    """
+
+    node: dict[str, Any] = {
         "id": node_id,
         "part_id": part_id,
         "location_2x": location_2x,
         "rotation": rotation,
         "overclocked": overclocked,
     }
+    if footprint is not None:
+        node["footprint"] = footprint
+    return node
 
 
 def make_graph_payload(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -405,3 +426,122 @@ def test_thermal_networks_summary_increments_in_expansion_graph() -> None:
 
     assert expansion_graph["summary"]["thermal_network_nodes"] == 1
     assert expansion_graph["summary"]["thermal_member_edges"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Engine-room special-case tests
+# ---------------------------------------------------------------------------
+# These tests use real part IDs so that _build_engine_room_thruster_edges picks
+# them up by the _ENGINE_ROOM_PART_ID / _THRUSTER_PART_ID_SUBSTRING constants.
+# Nodes carry a ``footprint`` field for 2x-cell adjacency computation.
+# The geometry patch is still applied so that no real thermal ports are returned
+# for these parts (keeping the tests focused on the proximity-edge path).
+
+
+def test_overclocked_engine_room_adjacent_thruster_forms_network() -> None:
+    """An overclocked engine room touching a thruster creates an implicit thermal network."""
+
+    # Engine room (3x3) at location_2x=[0, 0]: occupies 2x cells (0,0)..(4,4).
+    # Thruster (1x1) at location_2x=[6, 0]: cell (6, 0) is tile-adjacent to (4, 0) ✓.
+    nodes = [
+        make_node(0, [0, 0], _ENGINE_ROOM_ID, overclocked=True,  footprint={"width": 3, "height": 3}),
+        make_node(1, [6, 0], _THRUSTER_SMALL_ID, overclocked=True, footprint={"width": 1, "height": 1}),
+    ]
+    # No thermal ports → proximity edge is the only mechanism.
+    fake_geo: dict[str, Any] = {}
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["engine_room_thruster_edges"] == 1
+    assert summary["networks"] == 1
+    assert summary["network_sizes"] == [2]
+
+    clusters = context.get_annotation("thermal_networks")
+    assert clusters == [[0, 1]]
+
+    network_by_part_id = context.get_annotation("thermal_network_by_part_id")
+    assert network_by_part_id[0] == "thermal_network_0"
+    assert network_by_part_id[1] == "thermal_network_0"
+
+
+def test_non_overclocked_engine_room_does_not_create_proximity_edge() -> None:
+    """A non-overclocked engine room must not create implicit edges to adjacent thrusters."""
+
+    nodes = [
+        make_node(0, [0, 0], _ENGINE_ROOM_ID, overclocked=False, footprint={"width": 3, "height": 3}),
+        make_node(1, [6, 0], _THRUSTER_SMALL_ID, overclocked=False, footprint={"width": 1, "height": 1}),
+    ]
+    fake_geo: dict[str, Any] = {}
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["engine_room_thruster_edges"] == 0
+    assert summary["networks"] == 0
+    assert context.get_annotation("thermal_networks") == []
+
+
+def test_overclocked_engine_room_non_thruster_neighbour_no_proximity_edge() -> None:
+    """An overclocked engine room must not create implicit edges to non-thruster neighbours."""
+
+    nodes = [
+        make_node(0, [0, 0], _ENGINE_ROOM_ID, overclocked=True, footprint={"width": 3, "height": 3}),
+        make_node(1, [6, 0], _ARMOR_ID,        overclocked=False, footprint={"width": 1, "height": 1}),
+    ]
+    fake_geo: dict[str, Any] = {}
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["engine_room_thruster_edges"] == 0
+    assert summary["networks"] == 0
+
+
+def test_overclocked_engine_room_pulls_thruster_into_heat_pipe_network() -> None:
+    """A thruster touching an overclocked engine room joins the ER's heat-pipe network."""
+
+    # Heat pipe at [0, 0] ↔ engine room at [2, 0] via port match.
+    # Thruster at [8, 0]: tile-adjacent to the engine room's right edge (cell x=6).
+    # Expected: all three in one network.
+    #
+    # Engine room (3x3) at [2, 0]: 2x cells (2,0)..(6,4).  Right edge cells: (6,0),(6,2),(6,4).
+    # Thruster (1x1) at [8, 0]: cell (8, 0). Delta from (6,0) → (8,0) is (+2,0) ✓.
+    nodes = [
+        make_node(0, [0, 0], _HEAT_PIPE_ID,      overclocked=False, footprint={"width": 1, "height": 1}),
+        make_node(1, [2, 0], _ENGINE_ROOM_ID,     overclocked=True,  footprint={"width": 3, "height": 3}),
+        make_node(2, [8, 0], _THRUSTER_SMALL_ID,  overclocked=True,  footprint={"width": 1, "height": 1}),
+    ]
+    # Heat pipe has a Right port at tile (0,0) → 2x (0,0).
+    # Engine room has a Left port at tile (0,0) → 2x (2,0).  Right port at (2,0) → 2x (6,0).
+    # But thruster has no port facing Left at (8,0), so no port match for ER↔thruster.
+    # Only the heat pipe ↔ engine room port match fires; thruster joins via proximity edge.
+    fake_geo = {
+        _HEAT_PIPE_ID:    _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        _ENGINE_ROOM_ID:  _make_vanilla_geo((_make_thermal_port((0, 0), "Left"),)),
+        _THRUSTER_SMALL_ID: _make_vanilla_geo(()),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 1           # heat pipe ↔ engine room
+    assert summary["engine_room_thruster_edges"] == 1  # engine room → thruster
+    assert summary["networks"] == 1
+    assert summary["network_sizes"] == [3]
+
+    clusters = context.get_annotation("thermal_networks")
+    assert clusters == [[0, 1, 2]]
+
+
+def test_overclocked_engine_room_not_adjacent_no_proximity_edge() -> None:
+    """A thruster not tile-adjacent to an overclocked engine room must not get a proximity edge."""
+
+    # Engine room (3x3) at [0, 0]: right edge at x=4 (2x-space).
+    # Thruster at [8, 0]: leftmost cell at x=8.  Gap of 4 units, not 2 → not adjacent.
+    nodes = [
+        make_node(0, [0, 0], _ENGINE_ROOM_ID,    overclocked=True, footprint={"width": 3, "height": 3}),
+        make_node(1, [8, 0], _THRUSTER_SMALL_ID, overclocked=True, footprint={"width": 1, "height": 1}),
+    ]
+    fake_geo: dict[str, Any] = {}
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["engine_room_thruster_edges"] == 0
+    assert summary["networks"] == 0
