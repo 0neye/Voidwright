@@ -35,7 +35,7 @@ voidwright-generate = "generator.cli:main"
 voidwright-graph-expansion = "graph_expansion.cli:main"
 
 [tool.pytest.ini_options]
-addopts = "--cov=common --cov=generator --cov=graph_expansion --cov=markov --cov=preprocessing --cov=training --cov=main --cov-report=term-missing"
+addopts = "--cov=common --cov=corpus --cov=generator --cov=graph_expansion --cov=markov --cov=preprocessing --cov=training --cov=main --cov-report=term-missing"
 norecursedirs = [
   "tmp*",
   "review_tmp",
@@ -46,6 +46,7 @@ branch = true
 relative_files = true
 source = [
   "common",
+  "corpus",
   "ship_layout",
   "generator",
   "graph_expansion",
@@ -94,6 +95,8 @@ include = [
   "training.*",
   "visualizer",
   "visualizer.*",
+  "corpus",
+  "corpus.*",
 ]
 
 [tool.setuptools.package-data]
