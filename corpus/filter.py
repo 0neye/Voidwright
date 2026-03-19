@@ -28,7 +28,7 @@ _SKIP_FILENAMES = frozenset({"manifest.json", "rejections.jsonl"})
 
 
 def _is_graph_json(path: Path) -> bool:
-    return path.suffix == ".json" and path.name not in _SKIP_FILENAMES
+    return path.suffix == ".json" and path.name not in _SKIP_FILENAMES and not path.name.startswith(".")
 
 
 @dataclass(slots=True)
