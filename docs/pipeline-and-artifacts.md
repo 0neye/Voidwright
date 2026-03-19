@@ -7,8 +7,9 @@ The main workflow is:
 
 1. Optionally download visible ship attachments with a standalone Discord script
 2. Run the preprocessing module on local `.ship.png` inputs
-3. Train a backend-specific model from preprocessing outputs
-4. Generate finished encoded ship files from a trained model
+3. Optionally filter the graph corpus with the corpus filter (`corpus/cli.py`)
+4. Train a backend-specific model from preprocessing outputs
+5. Generate finished encoded ship files from a trained model
 
 ## Key entrypoints
 
@@ -20,6 +21,8 @@ The main workflow is:
   - Backend-agnostic training router
 - `generator/cli.py`
   - Backend-agnostic generation router
+- `corpus/cli.py`
+  - Optional corpus filtering stage (rule-based accept/reject on graph JSON files)
 
 ## Download step
 
@@ -145,3 +148,59 @@ The shared and backend-specific implementation now lives primarily under:
 - `generator/backends/markov/export.py`
 - `common/cosmoteer/`
 - `common/data/`
+
+## Corpus filtering stage (optional)
+
+`corpus/cli.py` is a shared, backend-agnostic filtering stage that sits between
+graph preprocessing (or graph expansion) and model training.  It reads a
+directory of generated ship graph JSON files, evaluates each ship against an
+ordered set of pluggable rules, copies accepted ships verbatim to a new output
+directory, and writes a `manifest.json` summary.
+
+**Typical invocation:**
+
+```bash
+python main.py corpus filter \
+  --input-dir generated_ship_graphs_canonical \
+  --output-dir filtered_ship_graphs_canonical \
+  --max-parts 300 \
+  --require-crew-rooms \
+  --require-reachable-reactor
+```
+
+Or directly:
+
+```bash
+python -m corpus.cli \
+  --input-dir generated_ship_graphs_canonical \
+  --output-dir filtered_ship_graphs_canonical \
+  --max-parts 300 \
+  --require-crew-rooms \
+  --require-reachable-reactor
+```
+
+**Output artifacts:**
+
+- `filtered_ship_graphs_canonical/` — accepted graph JSON files copied verbatim
+- `filtered_ship_graphs_canonical/manifest.json` — counts, active rules, and
+  per-rule rejection totals
+- `filtered_ship_graphs_canonical/rejections.jsonl` — one record per rejected
+  ship (suppressed with `--no-rejections-log`)
+
+**Built-in rules:**
+
+| Flag | Rule | Notes |
+|---|---|---|
+| `--max-parts N` | `max_size` | Reject ships with more than N parts |
+| `--max-occupied-cells N` | `max_size` | Reject ships whose occupied 2x-cell count exceeds N |
+| `--require-crew-rooms` | `require_crew_rooms` | Reject ships with no crew rooms |
+| `--require-reachable-reactor` | `require_reachable_reactor` | Reject ships whose crew cannot reach any reactor; requires expansion graphs |
+
+No rules are enabled by default.  The `require_reachable_reactor` rule requires
+that the input corpus contains expansion graph data
+(`X_expansion_structural`); the CLI will fail fast with a clear error if
+expansion data is absent.
+
+New rules can be added by creating a module under `corpus/rules/` that
+implements `CorpusRule` from `corpus/rules/base.py` and wiring a CLI flag in
+`corpus/cli.py`.

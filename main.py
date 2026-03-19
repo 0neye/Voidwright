@@ -10,6 +10,7 @@ import sys
 from dataclasses import dataclass
 from typing import Callable, Iterable, Sequence, TextIO
 
+from corpus import cli as corpus_cli
 from generator import cli as generator_cli
 from graph_expansion import cli as graph_expansion_cli
 from preprocessing import cli as preprocessing_cli
@@ -67,6 +68,12 @@ def build_domain_registry() -> dict[str, CommandDomain]:
             help_text="Render static visualizations of ship graph structures",
             build_parser=visualizer_cli.build_parser,
             run=visualizer_cli.main,
+        ),
+        CommandDomain(
+            name="corpus",
+            help_text="Filter a generated ship graph corpus with rule-based checks",
+            build_parser=corpus_cli.build_parser,
+            run=corpus_cli.main,
         ),
     )
     return {command_domain.name: command_domain for command_domain in command_domains}

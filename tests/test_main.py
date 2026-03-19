@@ -31,7 +31,7 @@ def test_build_domain_registry_exposes_current_top_level_domains() -> None:
     """The root registry should include the current pipeline domains."""
 
     command_registry = main.build_domain_registry()
-    assert set(command_registry) == {"generator", "graph-expansion", "preprocessing", "training"}
+    assert set(command_registry) == {"corpus", "generator", "graph-expansion", "preprocessing", "training", "visualizer"}
 
 
 def test_run_cli_delegates_to_selected_domain() -> None:
