@@ -262,8 +262,6 @@ Structural passes (in pipeline order):
 
 - `BaseIndexesPass` builds common structural graph indexes and stores them in
   `ExpansionContext.caches`
-- `GlobalShipInfoPass` emits the global ship-info node and `global_member`
-  cross-edges
 - `TraversableClustersPass` computes traversable clusters, stores cluster
   annotations, and emits traversable-cluster super-nodes with `super_member`
   cross-edges; single-part clusters and small clusters (combined walkable-cell
@@ -323,9 +321,10 @@ Structural passes (in pipeline order):
 - `WeaponGroupsPass` detects weapon parts by `part_id` substring matching,
   groups them by type, and emits `weapon_group_<type>` virtual nodes with
   `weapon_member` cross-edges
-- `GlobalVirtualLinkerPass` emits `global_virtual_member` cross-edges from the
-  `global_ship` node to every other virtual node in the expansion graph, linking
-  the global anchor to all zone, cluster, hull, thermal-network, and weapon-group nodes
+- `GlobalVirtualLinkerPass` emits the `global_ship_info` node and
+  `global_virtual_member` cross-edges from it to every other virtual node in the
+  expansion graph; runs last so all zone, cluster, hull, thermal-network, and
+  weapon-group nodes are present
 
 Contributor guidelines for graph expansion:
 

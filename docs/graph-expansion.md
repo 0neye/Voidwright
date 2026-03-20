@@ -71,7 +71,6 @@ graph_expansion/
     ├── base_indexes.py
     ├── core_support_layer2.py
     ├── crew_access_layer1.py
-    ├── global_ship_info.py
     ├── global_virtual_linker.py
     ├── hull_perimeter.py
     ├── spatial_zones.py
@@ -112,10 +111,6 @@ Current structural passes:
 - `BaseIndexesPass`
   - builds common structural graph lookups once
   - populates caches like `node_by_id`, `walkable_part_ids`, `door_edges`, and `touching_edges`
-
-- `GlobalShipInfoPass`
-  - emits a single global ship-info node
-  - emits `global_member` cross-edges from that node to every structural node
 
 - `TraversableClustersPass`
   - computes crew-traversable clusters conservatively from doors plus corridor-like adjacency
@@ -175,8 +170,9 @@ Current structural passes:
   - emits `weapon_group_<type>` virtual nodes with `weapon_member` cross-edges
 
 - `GlobalVirtualLinkerPass`
-  - emits `global_virtual_member` cross-edges from the `global_ship` node to every other virtual node in the expansion graph
-  - links the global anchor to all zone, cluster, hull, thermal-network, and weapon-group nodes
+  - emits the single `global_ship_info` node containing the top-level `ship` metadata
+  - emits `global_virtual_member` cross-edges from that node to every other virtual node in the expansion graph
+  - runs last so that all zone, cluster, hull, thermal-network, and weapon-group nodes are present when the linker edges are built
 
 ## Expansion flow
 
@@ -186,7 +182,6 @@ At a high level:
 source graph JSON
   -> ExpansionContext
   -> BaseIndexesPass
-  -> GlobalShipInfoPass
   -> TraversableClustersPass
   -> Layer1CrewAccessPass
   -> Layer2CoreSupportPass
@@ -220,7 +215,6 @@ That graph contains:
   - zero or more `spatial_zone` nodes using the 22.5°-rotated sector layout (one per populated rotated zone, IDs use `zone_ene` / `zone_nne` / … naming)
   - zero or more `weapon_group` nodes (one per detected weapon type)
 - `cross_edges`
-  - `global_member` edges from the global node to every structural node
   - `super_member` edges from cluster nodes to their member structural nodes
   - direct structural-to-structural `crew_access_reactor` / `crew_access_factory` edges with weighted `travel_distance`
   - downstream structural support edges such as `reactor_supports_power_storage`, `reactor_supports_shield`, `reactor_supports_engine_room`, `reactor_supports_thruster`, `reactor_supports_energy_weapon`, `factory_supports_storage`, `factory_supports_ammo_weapon`, and `factory_supports_missile_weapon`
@@ -240,11 +234,10 @@ The top-level payload also gets an `expansion` metadata block like:
 {
   "expansion": {
     "backend": "structural",
-    "version": 10,
+    "version": 11,
     "graphs_added": ["X_expansion_structural"],
     "passes": [
       {"name": "base_indexes", "version": 1},
-      {"name": "global_ship_info", "version": 1},
       {"name": "traversable_clusters", "version": 2},
       {"name": "crew_access_layer1", "version": 2},
       {"name": "core_support_layer2", "version": 1},
@@ -253,7 +246,7 @@ The top-level payload also gets an `expansion` metadata block like:
       {"name": "spatial_zones", "version": 2},
       {"name": "spatial_zones_rotated", "version": 2},
       {"name": "weapon_groups", "version": 1},
-      {"name": "global_virtual_linker", "version": 1}
+      {"name": "global_virtual_linker", "version": 2}
     ]
   }
 }

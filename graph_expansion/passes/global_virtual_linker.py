@@ -1,37 +1,52 @@
-"""Global virtual-node linker pass.
+"""Global ship-info node and virtual-node linker pass.
 
-This pass connects the ``global_ship`` node to every other virtual node
-emitted into the expansion graph by prior passes, using
-``global_virtual_member`` cross-edges.
+This pass emits the single global ship-info node (containing the top-level
+``ship`` metadata) and then connects it to every other virtual node in the
+expansion graph via ``global_virtual_member`` cross-edges.
 
-It must run after all virtual-node-emitting passes so that the expansion
-graph's node list is complete when this pass executes.
+It must run last so that all virtual nodes from prior passes are present when
+it builds the linker edges.
 """
 
 from __future__ import annotations
 
-from typing import Any, List, Mapping, MutableMapping
+from typing import Any, Dict, List, Mapping, MutableMapping
 
 from graph_expansion.context import EXPANSION_GRAPH_NAME, ExpansionContext
 from graph_expansion.passes.base import ExpansionPass
-from graph_expansion.passes.global_ship_info import GLOBAL_SHIP_NODE_ID
 
-__all__ = ["GlobalVirtualLinkerPass"]
+__all__ = ["GlobalVirtualLinkerPass", "GLOBAL_SHIP_NODE_ID"]
+
+GLOBAL_SHIP_NODE_ID = "global_ship"
 
 
 class GlobalVirtualLinkerPass(ExpansionPass):
-    """Connect ``global_ship`` to every other virtual node in the expansion graph."""
+    """Emit the global ship-info node and connect it to every other virtual node."""
 
     name = "global_virtual_linker"
-    version = 1
-    requires = ("global_ship_info",)
+    version = 2
+    requires = ("base_indexes",)
 
     def run(self, context: ExpansionContext) -> Mapping[str, Any]:
-        """Emit ``global_virtual_member`` edges from ``global_ship`` to all other virtual nodes."""
+        """Emit the ``global_ship`` node and ``global_virtual_member`` edges."""
+
+        ship_info = context.source.get("ship", {}) or {}
 
         expansion_graph = context.ensure_emitted_graph(EXPANSION_GRAPH_NAME)
         nodes: List[MutableMapping[str, Any]] = expansion_graph["nodes"]
         cross_edges: List[MutableMapping[str, Any]] = expansion_graph["cross_edges"]
+
+        # Snapshot the virtual nodes emitted by prior passes before appending
+        # the global node, so we can link to exactly those nodes without a
+        # self-edge filter.
+        prior_virtual_nodes = list(nodes)
+
+        global_node: Dict[str, Any] = {
+            "id": GLOBAL_SHIP_NODE_ID,
+            "kind": "global_ship_info",
+            "ship": ship_info,
+        }
+        nodes.append(global_node)
 
         new_edges = [
             {
@@ -41,9 +56,8 @@ class GlobalVirtualLinkerPass(ExpansionPass):
                 "target_graph": EXPANSION_GRAPH_NAME,
                 "kind": "global_virtual_member",
             }
-            for node in nodes
-            if node["id"] != GLOBAL_SHIP_NODE_ID
-            and node.get("member_count", 1) > 0
+            for node in prior_virtual_nodes
+            if node.get("member_count", 1) > 0
         ]
 
         cross_edges.extend(new_edges)
@@ -51,7 +65,8 @@ class GlobalVirtualLinkerPass(ExpansionPass):
         edge_count = len(new_edges)
         context.increment_summary(
             EXPANSION_GRAPH_NAME,
+            global_ship_nodes=1,
             global_virtual_member_edges=edge_count,
         )
 
-        return {"global_virtual_member_edges": edge_count}
+        return {"global_nodes": 1, "global_virtual_member_edges": edge_count}
