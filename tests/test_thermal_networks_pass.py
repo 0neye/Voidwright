@@ -38,6 +38,11 @@ _OVERCLOCK_PART_ID = "cosmoteer.ion_beam_emitter"
 _ENGINE_ROOM_ID = "cosmoteer.engine_room"
 _THRUSTER_SMALL_ID = "cosmoteer.thruster_small"
 _ARMOR_ID = "cosmoteer.armor_1x1"
+_RAILGUN_LAUNCHER_ID = "cosmoteer.railgun_launcher"
+_RAILGUN_ACCELERATOR_ID = "cosmoteer.railgun_accelerator"
+_RAILGUN_LOADER_ID = "cosmoteer.railgun_loader"
+_RESONANCE_BEAM_ID = "cosmoteer.resonance_beam_turret"
+_POWER_STORAGE_ID = "cosmoteer.power_storage"
 
 
 # ---------------------------------------------------------------------------
@@ -767,3 +772,306 @@ def test_overclocked_engine_room_not_adjacent_no_proximity_edge() -> None:
 
     assert summary["engine_room_thruster_edges"] == 0
     assert summary["networks"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Overclocked heat-pipe restriction tests
+# ---------------------------------------------------------------------------
+
+
+def test_two_adjacent_overclocked_parts_do_not_connect_via_ports() -> None:
+    """Two overclocked non-exempt parts with matching ports must NOT form an edge."""
+
+    # Part 0 (overclocked ion_beam_emitter) at [0, 0]: Right port.
+    # Part 1 (overclocked ion_beam_emitter) at [2, 0]: Left port.
+    # Both overclocked, neither is engine room or railgun → edge suppressed.
+    nodes = [
+        make_node(0, [0, 0], _OVERCLOCK_PART_ID, overclocked=True),
+        make_node(1, [2, 0], _OVERCLOCK_PART_ID, overclocked=True),
+    ]
+    fake_geo = {
+        _OVERCLOCK_PART_ID: _make_vanilla_geo(
+            (
+                _make_thermal_port((0, 0), "Right"),
+                _make_thermal_port((0, 0), "Left"),
+            )
+        )
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 0
+    assert summary["networks"] == 0
+    assert context.get_annotation("thermal_networks") == []
+
+
+def test_overclocked_part_connects_to_non_overclocked_heat_pipe() -> None:
+    """An overclocked part next to a non-overclocked heat pipe must still connect."""
+
+    # Heat pipe (not overclocked) at [0, 0]: Right port.
+    # Overclocked part at [2, 0]: Left port (overclock_conditional).
+    # Only one side is overclocked → edge is allowed.
+    nodes = [
+        make_node(0, [0, 0], _HEAT_PIPE_ID, overclocked=False),
+        make_node(1, [2, 0], _OVERCLOCK_PART_ID, overclocked=True),
+    ]
+    fake_geo = {
+        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        _OVERCLOCK_PART_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Left", overclock_conditional=True),)
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 1
+    assert summary["networks"] == 1
+    assert context.get_annotation("thermal_networks") == [[0, 1]]
+
+
+def test_overclocked_parts_do_not_chain_through_each_other() -> None:
+    """Overclocked part A must not join B's heat-pipe network via overclocked intermediary B."""
+
+    # Heat pipe at [0, 0] — Right port.
+    # Overclocked part 1 at [2, 0] — Left and Right ports.
+    # Overclocked part 2 at [4, 0] — Left port.
+    # heat_pipe ↔ part1 is allowed (one side not overclocked).
+    # part1 ↔ part2 is suppressed (both overclocked, not exempt).
+    # Result: two separate networks — {0,1} and nothing for part 2.
+    nodes = [
+        make_node(0, [0, 0], _HEAT_PIPE_ID, overclocked=False),
+        make_node(1, [2, 0], _OVERCLOCK_PART_ID, overclocked=True),
+        make_node(2, [4, 0], _OVERCLOCK_PART_ID, overclocked=True),
+    ]
+    fake_geo = {
+        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        _OVERCLOCK_PART_ID: _make_vanilla_geo(
+            (
+                _make_thermal_port((0, 0), "Left", overclock_conditional=True),
+                _make_thermal_port((0, 0), "Right", overclock_conditional=True),
+            )
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    # heat_pipe ↔ part1 produces one thermal edge; part1 ↔ part2 is blocked.
+    assert summary["thermal_edges"] == 1
+    assert summary["networks"] == 1
+    assert summary["network_sizes"] == [2]
+    clusters = context.get_annotation("thermal_networks")
+    assert clusters == [[0, 1]]
+
+
+def test_overclocked_railgun_lateral_port_connection_is_blocked() -> None:
+    """Two overclocked railgun parts with matching side ports must NOT connect via ports."""
+
+    # Launcher (2×4) at [0, 0] — Right port at tile (1, 0) → 2x pos (2, 0) facing Right.
+    # Accelerator (2×3) at [4, 0] — Left port at tile (0, 0) → 2x pos (4, 0) facing Left.
+    # Right port at (2,0) + delta(2,0) = (4,0) facing Left → port match exists.
+    # Both overclocked → port edge is suppressed.
+    # Parts are side-by-side (X-axis gap), not barrel-stacked (Y-axis for rotation 0)
+    # → no barrel-axis virtual edge fires either.
+    nodes = [
+        make_node(0, [0, 0], _RAILGUN_LAUNCHER_ID,    overclocked=True, footprint={"width": 2, "height": 4}),
+        make_node(1, [4, 0], _RAILGUN_ACCELERATOR_ID, overclocked=True, footprint={"width": 2, "height": 3}),
+    ]
+    fake_geo = {
+        _RAILGUN_LAUNCHER_ID: _make_vanilla_geo(
+            (_make_thermal_port((1, 0), "Right", overclock_conditional=True),)
+        ),
+        _RAILGUN_ACCELERATOR_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Left"),)
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 0
+    assert summary["railgun_assembly_edges"] == 0
+    assert summary["networks"] == 0
+    assert context.get_annotation("thermal_networks") == []
+
+
+def test_barrel_stacked_railgun_parts_form_virtual_thermal_edge() -> None:
+    """Railgun parts stacked end-to-end along the barrel axis form a virtual thermal edge."""
+
+    # Launcher (2×4) at [0, 0], rotation 0 → occupies 2x cells y=0..6.
+    # Accelerator (2×3) at [0, 8], rotation 0 → top cells at y=8, barrel-adjacent to y=6.
+    # No ports needed — the virtual edge comes from physical barrel adjacency.
+    nodes = [
+        make_node(0, [0, 0], _RAILGUN_LAUNCHER_ID, overclocked=True, footprint={"width": 2, "height": 4}),
+        make_node(1, [0, 8], _RAILGUN_ACCELERATOR_ID, overclocked=True, footprint={"width": 2, "height": 3}),
+    ]
+    fake_geo: dict[str, Any] = {}
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["railgun_assembly_edges"] == 1
+    assert summary["thermal_edges"] == 0
+    assert summary["networks"] == 1
+    assert summary["network_sizes"] == [2]
+    assert context.get_annotation("thermal_networks") == [[0, 1]]
+
+
+def test_barrel_stacked_railgun_non_overclocked_also_connects() -> None:
+    """Barrel-axis virtual edges apply regardless of overclocked status."""
+
+    nodes = [
+        make_node(0, [0, 0], _RAILGUN_LOADER_ID, overclocked=False, footprint={"width": 2, "height": 3}),
+        make_node(1, [0, 6], _RAILGUN_LAUNCHER_ID, overclocked=False, footprint={"width": 2, "height": 4}),
+    ]
+    fake_geo: dict[str, Any] = {}
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["railgun_assembly_edges"] == 1
+    assert summary["networks"] == 1
+    assert context.get_annotation("thermal_networks") == [[0, 1]]
+
+
+def test_overclocked_railgun_does_not_extend_to_non_railgun_overclocked_part() -> None:
+    """An overclocked railgun barrel-adjacent to an overclocked non-railgun part must not connect."""
+
+    # Railgun launcher (2×4) at [0, 0], rotation 0.
+    # Overclocked non-railgun part at [0, 8] — barrel-adjacent but not a railgun component.
+    # No port connections (both overclocked, blocked).
+    # No railgun virtual edge (other part is not railgun).
+    nodes = [
+        make_node(0, [0, 0], _RAILGUN_LAUNCHER_ID, overclocked=True, footprint={"width": 2, "height": 4}),
+        make_node(1, [0, 8], _OVERCLOCK_PART_ID, overclocked=True, footprint={"width": 1, "height": 1}),
+    ]
+    fake_geo: dict[str, Any] = {}
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["railgun_assembly_edges"] == 0
+    assert summary["thermal_edges"] == 0
+    assert summary["networks"] == 0
+    assert context.get_annotation("thermal_networks") == []
+
+
+def test_overclocked_engine_room_port_connects_to_overclocked_part() -> None:
+    """An overclocked engine room's port-based connection to another overclocked part is allowed."""
+
+    # Engine room at [0, 0] — Right port (overclock_conditional).
+    # Overclocked part at [2, 0] — Left port (overclock_conditional).
+    # Engine room is exempt → edge allowed.
+    nodes = [
+        make_node(0, [0, 0], _ENGINE_ROOM_ID, overclocked=True),
+        make_node(1, [2, 0], _OVERCLOCK_PART_ID, overclocked=True),
+    ]
+    fake_geo = {
+        _ENGINE_ROOM_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Right", overclock_conditional=True),)
+        ),
+        _OVERCLOCK_PART_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Left", overclock_conditional=True),)
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 1
+    assert summary["networks"] == 1
+    assert context.get_annotation("thermal_networks") == [[0, 1]]
+
+# ---------------------------------------------------------------------------
+# Thermal-conduit restriction tests (OC part <-> non-OC non-conduit blocked)
+# ---------------------------------------------------------------------------
+
+
+def test_overclocked_part_does_not_connect_to_non_thermal_conduit() -> None:
+    """An overclocked part must NOT form a thermal edge with a non-conduit non-OC part.
+
+    A railgun accelerator has thermal ports for weapon-assembly purposes; those
+    ports must not bridge into the ship's overclocked thermal network.
+    """
+
+    nodes = [
+        make_node(0, [0, 0], _POWER_STORAGE_ID, overclocked=True),
+        make_node(1, [2, 0], _RAILGUN_ACCELERATOR_ID, overclocked=False),
+    ]
+    fake_geo = {
+        _POWER_STORAGE_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Right", overclock_conditional=True),)
+        ),
+        _RAILGUN_ACCELERATOR_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Left", overclock_conditional=False),)
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 0
+    assert summary["networks"] == 0
+    assert context.get_annotation("thermal_networks") == []
+
+
+def test_overclocked_part_connects_to_resonance_beam_turret() -> None:
+    """An overclocked part MUST connect to a resonance beam turret (thermal lance).
+
+    The resonance beam turret is a first-class thermal conduit; it must be able
+    to form port-based edges with overclocked parts despite the non-OC side
+    being a weapon.
+    """
+
+    nodes = [
+        make_node(0, [0, 0], _POWER_STORAGE_ID, overclocked=True),
+        make_node(1, [2, 0], _RESONANCE_BEAM_ID, overclocked=False),
+    ]
+    fake_geo = {
+        _POWER_STORAGE_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Right", overclock_conditional=True),)
+        ),
+        _RESONANCE_BEAM_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Left", overclock_conditional=False),)
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 1
+    assert summary["networks"] == 1
+    assert context.get_annotation("thermal_networks") == [[0, 1]]
+
+
+def test_railgun_isolation_from_overclocked_capacitor_network() -> None:
+    """Railguns must not merge into the thermal network of an overclocked capacitor.
+
+    The capacitor's ports physically face both the resonance beam and the railgun
+    accelerator, but only the resonance beam is a thermal conduit.
+    """
+
+    nodes = [
+        # Overclocked capacitor at centre
+        make_node(0, [0, 0], _POWER_STORAGE_ID, overclocked=True),
+        # Resonance beam turret on the right (thermal conduit — should connect)
+        make_node(1, [2, 0], _RESONANCE_BEAM_ID, overclocked=False),
+        # Railgun accelerator on the left (not a thermal conduit — must NOT connect)
+        make_node(2, [-2, 0], _RAILGUN_ACCELERATOR_ID, overclocked=False),
+    ]
+    fake_geo = {
+        # Capacitor: Left port faces railgun, Right port faces resonance beam
+        _POWER_STORAGE_ID: _make_vanilla_geo(
+            (
+                _make_thermal_port((0, 0), "Right", overclock_conditional=True),
+                _make_thermal_port((0, 0), "Left", overclock_conditional=True),
+            )
+        ),
+        _RESONANCE_BEAM_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Left", overclock_conditional=False),)
+        ),
+        _RAILGUN_ACCELERATOR_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Right", overclock_conditional=False),)
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    # Only capacitor <-> resonance_beam is allowed; capacitor <-> railgun is blocked.
+    assert summary["thermal_edges"] == 1
+    assert summary["networks"] == 1
+    assert summary["network_sizes"] == [2]
+    clusters = context.get_annotation("thermal_networks")
+    assert clusters == [[0, 1]]  # railgun (2) is excluded
