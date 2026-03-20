@@ -39,6 +39,11 @@ def _network_color(network_index: int) -> tuple[int, int, int, int]:
     return (int(r * 255), int(g * 255), int(b * 255), 255)
 
 
+def _parse_network_index(node_id: object) -> int:
+    """Extract the numeric suffix N from a virtual node ID like ``thermal_network_N``."""
+    return int(str(node_id).split("_")[-1])
+
+
 def _tile_boundary_segments_1x(
     tiles: set[tuple[int, int]],
 ) -> set[tuple[tuple[int, int], tuple[int, int]]]:
@@ -140,14 +145,26 @@ class ThermalNetworksBackend(StaticVisualizationBackend):
 
         # Build network_by_part_id from cross_edges with kind=="thermal_member".
         # source is "thermal_network_N" (N is int), target is part_id (int).
+        # Multi-network leaf members appear in multiple edges; resolve to the
+        # largest network (by member_count), breaking ties by smallest index.
         expansion_graph = expanded_data["graphs"].get("X_expansion_structural", {})
-        network_by_part_id: dict[int, int] = {}
+
+        network_size: dict[int, int] = {}
+        for vnode in expansion_graph.get("nodes", []):
+            if vnode.get("kind") == "thermal_network":
+                network_size[_parse_network_index(vnode["id"])] = int(vnode.get("member_count", 0))
+
+        part_networks: dict[int, list[int]] = {}
         for edge in expansion_graph.get("cross_edges", []):
             if edge.get("kind") == "thermal_member":
                 part_id = int(edge["target"])
-                source = str(edge["source"])  # e.g. "thermal_network_3"
-                network_index = int(source.split("_")[-1])
-                network_by_part_id[part_id] = network_index
+                network_index = _parse_network_index(edge["source"])  # e.g. "thermal_network_3"
+                part_networks.setdefault(part_id, []).append(network_index)
+
+        network_by_part_id: dict[int, int] = {
+            part_id: max(indices, key=lambda i: (network_size.get(i, 0), -i))
+            for part_id, indices in part_networks.items()
+        }
 
         network_count = len(set(network_by_part_id.values()))
         connected_count = len(network_by_part_id)
