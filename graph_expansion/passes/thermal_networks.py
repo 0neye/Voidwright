@@ -51,6 +51,15 @@ An overclocked part can join a thermal network by being port-connected to a
 thermal conduit, or by falling within the absorption radius of a connected heat
 exchanger.
 
+Thermal canister missile launcher special case
+----------------------------------------------
+A missile launcher set to thermal canister mode (``toggle_values["missile_type"]
+== 4``) participates in the thermal network as a backbone part.  Its thermal
+ports are treated as active conduit ports: port-based edges are built the same
+way as for any other conduit, and ``_is_backbone`` returns ``True`` for the
+node.  In all other missile-type modes the launcher's thermal ports are
+suppressed entirely — the node cannot join any thermal network.
+
 Railgun assembly special case
 ------------------------------
 Railgun components (loaders, launchers, accelerators) form a single logical
@@ -108,7 +117,7 @@ from common.heat_exchanger import (
 from common.geometry import load_vanilla_part_geometry, resolve_geometry_part_id_and_rotation
 from graph_expansion.context import EXPANSION_GRAPH_NAME, STRUCTURAL_GRAPH_NAME, ExpansionContext
 from graph_expansion.passes.base import ExpansionPass
-from graph_expansion.passes.travel_support import _OPPOSITE_DIRECTION, is_engine_room, is_railgun, is_thermal_conduit, is_thruster
+from graph_expansion.passes.travel_support import _OPPOSITE_DIRECTION, is_engine_room, is_missile_weapon, is_railgun, is_thermal_conduit, is_thermal_missile_launcher, is_thruster
 
 __all__ = ["ThermalNetworksPass"]
 
@@ -182,6 +191,12 @@ def _build_port_index(
         rot_geo = vanilla_geo.rotation_geometry(geo_rotation)
         thermal_ports = rot_geo.thermal_ports
         if not thermal_ports:
+            continue
+
+        # Missile launchers expose thermal ports only when configured for thermal
+        # canister mode (missile_type == 4).  In any other mode the launcher has
+        # no thermal connectivity and its ports must not appear in the index.
+        if is_missile_weapon(part_id) and not is_thermal_missile_launcher(node):
             continue
 
         has_active_port = False
@@ -372,10 +387,10 @@ def _build_two_phase_clusters(
 
     def _is_backbone(node_id: int) -> bool:
         node = node_by_id.get(node_id, {})
-        return (
-            is_thermal_conduit(str(node.get("part_id", "")))
-            and not node.get("overclocked", False)
-        )
+        if node.get("overclocked", False):
+            return False
+        part_id = str(node.get("part_id", ""))
+        return is_thermal_conduit(part_id) or is_thermal_missile_launcher(node)
 
     all_node_ids = sorted({nid for edge in all_edges for nid in edge})
     backbone_ids: Set[int] = {nid for nid in all_node_ids if _is_backbone(nid)}
@@ -668,10 +683,16 @@ class ThermalNetworksPass(ExpansionPass):
     thermal edge with every physically adjacent thruster (any cell of the
     thruster is tile-adjacent to any cell of the engine room), regardless of
     explicit thermal port alignment.  See module docstring for the full rules.
+
+    Thermal canister missile launcher special case: a missile launcher whose
+    ``toggle_values["missile_type"]`` equals 4 (thermal canister mode) exposes
+    its thermal ports and participates in the thermal network as a backbone
+    part — exactly like a thermal conduit.  In any other mode the launcher has
+    no thermal ports and is fully excluded from all thermal networks.
     """
 
     name = "thermal_networks"
-    version = 7
+    version = 8
     requires = ("base_indexes",)
     provides = ("thermal_networks", "thermal_network_by_part_id")
 

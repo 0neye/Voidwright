@@ -43,6 +43,11 @@ _RAILGUN_ACCELERATOR_ID = "cosmoteer.railgun_accelerator"
 _RAILGUN_LOADER_ID = "cosmoteer.railgun_loader"
 _RESONANCE_BEAM_ID = "cosmoteer.resonance_beam_turret"
 _POWER_STORAGE_ID = "cosmoteer.power_storage"
+_MISSILE_LAUNCHER_ID = "cosmoteer.missile_launcher"
+_MISSILE_LAUNCHER_THERMAL_ID = "cosmoteer.missile_launcher_thermal_variant"
+_MISSILE_LAUNCHER_HE_ID = "cosmoteer.missile_launcher_he_variant"
+_MISSILE_TYPE_HE = 0       # default — HE rockets
+_MISSILE_TYPE_THERMAL = 4  # thermal canister mode
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +95,7 @@ def make_node(
     rotation: int = 0,
     overclocked: bool = False,
     footprint: dict[str, int] | None = None,
+    toggle_values: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Build a minimal structural node dict with location_2x and overclocked fields.
 
@@ -101,6 +107,8 @@ def make_node(
         overclocked: Whether the part is overclocked (default False).
         footprint: Optional ``{"width": w, "height": h}`` in tile units.  Required
             for engine-room proximity edge detection; omit for port-matching-only tests.
+        toggle_values: Optional mapping of toggle_id → int value (e.g.
+            ``{"missile_type": 4}`` for a thermal canister launcher).
     """
 
     node: dict[str, Any] = {
@@ -112,6 +120,8 @@ def make_node(
     }
     if footprint is not None:
         node["footprint"] = footprint
+    if toggle_values is not None:
+        node["toggle_values"] = toggle_values
     return node
 
 
@@ -1075,3 +1085,138 @@ def test_railgun_isolation_from_overclocked_capacitor_network() -> None:
     assert summary["network_sizes"] == [2]
     clusters = context.get_annotation("thermal_networks")
     assert clusters == [[0, 1]]  # railgun (2) is excluded
+
+
+# ---------------------------------------------------------------------------
+# Thermal canister missile launcher tests
+# ---------------------------------------------------------------------------
+
+
+def test_missile_launcher_in_non_thermal_mode_has_no_thermal_ports() -> None:
+    """A missile launcher not in thermal mode must not join any thermal network."""
+
+    # Missile launcher (HE mode, default) sits adjacent to a heat pipe.
+    # Even though its geometry might define thermal ports, they must be suppressed.
+    nodes = [
+        make_node(0, [0, 0], _MISSILE_LAUNCHER_ID, toggle_values={"missile_type": _MISSILE_TYPE_HE}),
+        make_node(1, [2, 0], _HEAT_PIPE_ID),
+    ]
+    fake_geo = {
+        _MISSILE_LAUNCHER_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Right"),)
+        ),
+        _HEAT_PIPE_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Left"),)
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    # Missile launcher ports are suppressed; heat pipe has no matching partner.
+    assert summary["thermal_edges"] == 0
+    assert summary["networks"] == 0
+
+
+def test_missile_launcher_with_no_toggle_values_has_no_thermal_ports() -> None:
+    """A missile launcher with missing toggle_values (default mode) must not join any thermal network."""
+
+    nodes = [
+        make_node(0, [0, 0], _MISSILE_LAUNCHER_ID),  # no toggle_values → default HE mode
+        make_node(1, [2, 0], _HEAT_PIPE_ID),
+    ]
+    fake_geo = {
+        _MISSILE_LAUNCHER_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Right"),)
+        ),
+        _HEAT_PIPE_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Left"),)
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 0
+    assert summary["networks"] == 0
+
+
+def test_missile_launcher_in_thermal_mode_joins_network_as_backbone() -> None:
+    """A thermal canister missile launcher must form a thermal edge and act as backbone."""
+
+    # Launcher (thermal mode) ↔ heat pipe: both are backbone; should form one network.
+    nodes = [
+        make_node(0, [0, 0], _MISSILE_LAUNCHER_ID, toggle_values={"missile_type": _MISSILE_TYPE_THERMAL}),
+        make_node(1, [2, 0], _HEAT_PIPE_ID),
+    ]
+    fake_geo = {
+        _MISSILE_LAUNCHER_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Right"),)
+        ),
+        _HEAT_PIPE_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Left"),)
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 1
+    assert summary["networks"] == 1
+    assert summary["network_sizes"] == [2]
+    clusters = context.get_annotation("thermal_networks")
+    assert clusters == [[0, 1]]
+
+
+def test_two_thermal_missile_launchers_connect_directly() -> None:
+    """Two thermal canister launchers with complementary ports form one backbone cluster."""
+
+    nodes = [
+        make_node(0, [0, 0], _MISSILE_LAUNCHER_ID, toggle_values={"missile_type": _MISSILE_TYPE_THERMAL}),
+        make_node(1, [2, 0], _MISSILE_LAUNCHER_THERMAL_ID, toggle_values={"missile_type": _MISSILE_TYPE_THERMAL}),
+    ]
+    fake_geo = {
+        _MISSILE_LAUNCHER_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Right"),)
+        ),
+        _MISSILE_LAUNCHER_THERMAL_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Left"),)
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 1
+    assert summary["networks"] == 1
+    clusters = context.get_annotation("thermal_networks")
+    assert clusters == [[0, 1]]
+
+
+def test_thermal_missile_launcher_separated_from_non_thermal_one() -> None:
+    """A thermal canister launcher must not share a network with a non-thermal launcher."""
+
+    nodes = [
+        make_node(0, [0, 0], _MISSILE_LAUNCHER_ID, toggle_values={"missile_type": _MISSILE_TYPE_THERMAL}),
+        make_node(1, [2, 0], _MISSILE_LAUNCHER_HE_ID, toggle_values={"missile_type": _MISSILE_TYPE_HE}),
+        make_node(2, [4, 0], _HEAT_PIPE_ID),
+    ]
+    # Launcher 0 → right port; Launcher 1 → left+right ports; Heat pipe → left port.
+    # Launcher 1 is in HE mode so its ports are suppressed entirely.
+    fake_geo = {
+        _MISSILE_LAUNCHER_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Right"),)
+        ),
+        _MISSILE_LAUNCHER_HE_ID: _make_vanilla_geo(
+            (
+                _make_thermal_port((0, 0), "Left"),
+                _make_thermal_port((0, 0), "Right"),
+            )
+        ),
+        _HEAT_PIPE_ID: _make_vanilla_geo(
+            (_make_thermal_port((0, 0), "Left"),)
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    # Launcher 1's ports are suppressed; no edges can span across it.
+    # Launcher 0 has no matching partner → 0 edges, 0 networks.
+    assert summary["thermal_edges"] == 0
+    assert summary["networks"] == 0

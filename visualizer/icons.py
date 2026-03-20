@@ -31,6 +31,21 @@ _PRE_FLIP_ROTATION_REMAP_PART_IDS = frozenset(
 )
 _FLIP_X_ROTATION_REMAP = {0: 1, 1: 0, 2: 3, 3: 2}
 
+_MISSILE_LAUNCHER_ID = "cosmoteer.missile_launcher"
+
+# Maps missile_type UIToggle value to the per-variant blueprints filename used in
+# game data. Missile launchers expose five ammo types; each has a separate
+# blueprints_<variant>.png rather than the single blueprints.png used by most
+# parts. Value 4 (thermal) is also the thermal-network backbone mode tracked by
+# graph_expansion.passes.travel_support.is_thermal_missile_launcher.
+_MISSILE_TYPE_BLUEPRINT_SUFFIX: dict[int, str] = {
+    0: "blueprints_he.png",       # High-Explosive (default)
+    1: "blueprints_emp.png",      # Electromagnetic Pulse
+    2: "blueprints_nuke.png",     # Nuclear
+    3: "blueprints_mine.png",     # Mine
+    4: "blueprints_thermal.png",  # Thermal Canister
+}
+
 
 def _require_pillow():
     """Import Pillow lazily so visualization stays optional until used."""
@@ -82,12 +97,26 @@ class PartIconLibrary:
         self.icons_root = Path(icons_root)
         self.cell_size = cell_size
         self.geometry_cache = load_vanilla_part_geometry()
-        self._base_icon_cache: dict[str, object] = {}
-        self._transformed_icon_cache: dict[tuple[str, int, bool, bool], object] = {}
+        # Cache keys include (part_id, missile_type_key) where missile_type_key is
+        # None for parts that have no missile_type toggle.
+        self._base_icon_cache: dict[tuple[str, int | None], object] = {}
+        self._transformed_icon_cache: dict[tuple[str, int, bool, bool, int | None], object] = {}
 
-    def _load_base_icon(self, part_id: str):
+    def _load_base_icon(self, part_id: str, missile_type: int | None = None):
         Image, ImageDraw = _require_pillow()
         part_dir = self.icons_root / part_id.removeprefix("cosmoteer.")
+
+        # Missile launchers store per-variant artwork as blueprints_<variant>.png.
+        # Try the variant-specific file before falling back to the generic names.
+        if part_id == _MISSILE_LAUNCHER_ID and missile_type is not None:
+            variant_file = _MISSILE_TYPE_BLUEPRINT_SUFFIX.get(missile_type)
+            if variant_file is not None:
+                try:
+                    with Image.open(part_dir / variant_file) as icon_image:
+                        return icon_image.convert("RGBA")
+                except FileNotFoundError:
+                    pass
+
         for icon_name in ("blueprints.png", "icon.png"):
             try:
                 with Image.open(part_dir / icon_name) as icon_image:
@@ -129,8 +158,17 @@ class PartIconLibrary:
         *,
         flip_x: bool = False,
         flip_y: bool = False,
+        toggle_values: dict[str, int] | None = None,
     ):
-        """Return a transformed RGBA icon for one placed part."""
+        """Return a transformed RGBA icon for one placed part.
+
+        Parameters
+        ----------
+        toggle_values:
+            Per-part UIToggle state dict from the graph JSON node.  Used to
+            select the correct variant blueprint for parts that store separate
+            artwork per toggle state (currently only ``missile_launcher``).
+        """
 
         Image, _ImageDraw = _require_pillow()
         (
@@ -144,21 +182,30 @@ class PartIconLibrary:
             flip_x=flip_x,
             flip_y=flip_y,
         )
+
+        # Resolve the missile_type key for variant-aware caching and loading.
+        # Treat None and {} identically — both default to missile_type 0 (HE).
+        missile_type_key: int | None = None
+        if resolved_part_id == _MISSILE_LAUNCHER_ID:
+            missile_type_key = int((toggle_values or {}).get("missile_type", 0))
+
         cache_key = (
             resolved_part_id,
             resolved_rotation,
             resolved_flip_x,
             resolved_flip_y,
+            missile_type_key,
         )
         if cache_key in self._transformed_icon_cache:
-            return self._transformed_icon_cache[cache_key].copy()
+            return self._transformed_icon_cache[cache_key].copy()  # type: ignore[union-attr]
 
-        base_icon = self._base_icon_cache.get(resolved_part_id)
+        base_icon_key = (resolved_part_id, missile_type_key)
+        base_icon = self._base_icon_cache.get(base_icon_key)
         if base_icon is None:
-            base_icon = self._load_base_icon(resolved_part_id)
-            self._base_icon_cache[resolved_part_id] = base_icon
+            base_icon = self._load_base_icon(resolved_part_id, missile_type_key)
+            self._base_icon_cache[base_icon_key] = base_icon
 
-        transformed_icon = base_icon.copy()
+        transformed_icon = base_icon.copy()  # type: ignore[union-attr]
         use_post_rotation_flip_x = resolved_part_id in _POST_ROTATION_FLIP_PART_IDS
         if (
             not use_post_rotation_flip_x
@@ -196,7 +243,7 @@ class PartIconLibrary:
             transformed_icon = transformed_icon.resize(target_size, Image.Resampling.LANCZOS)
 
         self._transformed_icon_cache[cache_key] = transformed_icon
-        return transformed_icon.copy()
+        return transformed_icon.copy()  # type: ignore[union-attr]
 
 
 def load_part_icon_library(

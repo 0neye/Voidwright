@@ -32,6 +32,7 @@ __all__ = [
     "is_engine_room",
     "is_generic_storage",
     "is_missile_weapon",
+    "is_thermal_missile_launcher",
     "is_power_storage",
     "is_railgun",
     "is_shield",
@@ -76,6 +77,7 @@ _AMMO_WEAPON_SUBSTRINGS: tuple[str, ...] = (
     "railgun",
 )
 _MISSILE_WEAPON_SUBSTRINGS: tuple[str, ...] = ("missile_launcher",)
+_MISSILE_TYPE_THERMAL = 4  # MissileType UIToggle value for thermal canister missiles
 _FACTORY_AMMO_SOURCE_SUBSTRINGS: tuple[str, ...] = ("factory_ammo",)
 _FACTORY_MISSILE_SOURCE_SUBSTRINGS: tuple[str, ...] = (
     "factory_emp",
@@ -209,6 +211,30 @@ def is_ammo_weapon(part_id: str) -> bool:
 def is_missile_weapon(part_id: str) -> bool:
     lower_id = part_id.lower()
     return any(token in lower_id for token in _MISSILE_WEAPON_SUBSTRINGS)
+
+
+def _is_missile_type_thermal(node: Mapping[str, Any]) -> bool:
+    """Return True when *node*'s missile_type toggle is set to thermal canister mode.
+
+    Does not check the part type — callers are responsible for ensuring the node
+    is actually a missile launcher.  Use :func:`is_thermal_missile_launcher` for
+    the combined part-type + toggle check.
+    """
+    toggle_values = node.get("toggle_values") or {}
+    return int(toggle_values.get("missile_type", 0)) == _MISSILE_TYPE_THERMAL
+
+
+def is_thermal_missile_launcher(node: Mapping[str, Any]) -> bool:
+    """Return True when *node* is a missile launcher configured for thermal canister mode.
+
+    A missile launcher is in thermal mode when its ``toggle_values`` dict has
+    ``missile_type == _MISSILE_TYPE_THERMAL`` (value 4).  In this configuration
+    the launcher participates in the thermal network as a backbone part — its
+    thermal ports are active and it forms conduit-level edges rather than leaf
+    attachments.
+    """
+    part_id = str(node.get("part_id", ""))
+    return is_missile_weapon(part_id) and _is_missile_type_thermal(node)
 
 
 def factory_support_mode(part_id: str) -> str | None:
