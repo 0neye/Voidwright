@@ -240,7 +240,7 @@ The top-level payload also gets an `expansion` metadata block like:
 {
   "expansion": {
     "backend": "structural",
-    "version": 7,
+    "version": 10,
     "graphs_added": ["X_expansion_structural"],
     "passes": [
       {"name": "base_indexes", "version": 1},
@@ -250,8 +250,10 @@ The top-level payload also gets an `expansion` metadata block like:
       {"name": "core_support_layer2", "version": 1},
       {"name": "thermal_networks", "version": 10},
       {"name": "hull_perimeter", "version": 1},
-      {"name": "spatial_zones", "version": 1},
-      {"name": "weapon_groups", "version": 1}
+      {"name": "spatial_zones", "version": 2},
+      {"name": "spatial_zones_rotated", "version": 2},
+      {"name": "weapon_groups", "version": 1},
+      {"name": "global_virtual_linker", "version": 1}
     ]
   }
 }
