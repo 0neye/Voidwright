@@ -508,14 +508,16 @@ def test_enrich_graph_thermal_tester_regression_counts(tmp_path: Path) -> None:
     cross_edges = expansion_graph["cross_edges"]
 
     assert node_kinds.count("thermal_network") == 4
-    assert sum(e["kind"] == "thermal_member" for e in cross_edges) == 22
+    # 24 edges: railgun parts connected to two bottom networks each get two thermal_member
+    # edges (multi-network leaf membership), adding 2 extra edges vs the pre-feature count.
+    assert sum(e["kind"] == "thermal_member" for e in cross_edges) == 24
 
     thermal_nodes = [n for n in expansion_graph["nodes"] if n["kind"] == "thermal_network"]
     sizes = sorted(
         sum(1 for e in cross_edges if e["kind"] == "thermal_member" and e["source"] == tn["id"])
         for tn in thermal_nodes
     )
-    assert sizes == [1, 2, 2, 17]
+    assert sizes == [2, 2, 3, 17]
 
 
 def test_enrich_graph_expansion_metadata() -> None:

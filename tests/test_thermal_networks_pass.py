@@ -208,8 +208,8 @@ def test_thermal_networks_two_adjacent_heat_pipes_form_one_network() -> None:
     assert clusters == [[0, 1]]
 
     network_by_part_id = context.get_annotation("thermal_network_by_part_id")
-    assert network_by_part_id[0] == "thermal_network_0"
-    assert network_by_part_id[1] == "thermal_network_0"
+    assert network_by_part_id[0] == ["thermal_network_0"]
+    assert network_by_part_id[1] == ["thermal_network_0"]
 
     expansion_graph = context.emitted_graphs[_EXPANSION_GRAPH_NAME]
     node_ids = [n["id"] for n in expansion_graph["nodes"]]
@@ -697,8 +697,8 @@ def test_overclocked_engine_room_adjacent_thruster_forms_network() -> None:
     assert clusters == [[0, 1]]
 
     network_by_part_id = context.get_annotation("thermal_network_by_part_id")
-    assert network_by_part_id[0] == "thermal_network_0"
-    assert network_by_part_id[1] == "thermal_network_0"
+    assert network_by_part_id[0] == ["thermal_network_0"]
+    assert network_by_part_id[1] == ["thermal_network_0"]
 
 
 def test_non_overclocked_engine_room_does_not_create_proximity_edge() -> None:
@@ -1220,3 +1220,147 @@ def test_thermal_missile_launcher_separated_from_non_thermal_one() -> None:
     # Launcher 0 has no matching partner → 0 edges, 0 networks.
     assert summary["thermal_edges"] == 0
     assert summary["networks"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Railgun multi-network membership tests
+# ---------------------------------------------------------------------------
+
+
+def test_railgun_assembly_joined_to_single_network_stays_disjoint() -> None:
+    """A railgun assembly connected to only one backbone network is a normal leaf member."""
+
+    # Heat pipe A (backbone) at [0, 0] with a Right port.
+    # Railgun launcher at [2, 0] with a Left port that matches pipe A.
+    # Only one backbone cluster → railgun ends up in exactly one network.
+    nodes = [
+        make_node(0, [0, 0], _HEAT_PIPE_ID),
+        make_node(1, [2, 0], _RAILGUN_LAUNCHER_ID, footprint={"width": 2, "height": 4}),
+    ]
+    fake_geo = {
+        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        _RAILGUN_LAUNCHER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Left"),)),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["networks"] == 1
+    assert summary["network_sizes"] == [2]
+    clusters = context.get_annotation("thermal_networks")
+    assert clusters == [[0, 1]]
+
+    network_by_part_id = context.get_annotation("thermal_network_by_part_id")
+    assert network_by_part_id[0] == ["thermal_network_0"]
+    assert network_by_part_id[1] == ["thermal_network_0"]
+
+
+def test_railgun_assembly_spanning_two_backbone_networks_joins_both() -> None:
+    """A railgun assembly connected to two separate backbone networks is a member of both.
+
+    Two independent heat-pipe networks each connect via thermal ports to the
+    same railgun launcher.  The railgun must appear in both networks without
+    merging them — the backbone clusters remain separate.
+
+    Layout (2x space):
+      Pipe A at [0, 0]  — Right port at 2x (0, 0)
+      Pipe B at [0, 4]  — Right port at 2x (0, 4)
+      Railgun at [2, 0] — Left ports at tile offsets (0,0) and (0,2), i.e.
+                          2x positions (2, 0) and (2, 4), both facing Left.
+    """
+
+    nodes = [
+        make_node(0, [0, 0], _HEAT_PIPE_ID),                                       # backbone A
+        make_node(1, [0, 4], _HEAT_PIPE_ID + "_b"),                                 # backbone B
+        make_node(2, [2, 0], _RAILGUN_LAUNCHER_ID, footprint={"width": 2, "height": 4}),  # railgun
+    ]
+    fake_geo = {
+        # Pipe A: Right port at tile (0, 0) → 2x (0, 0)
+        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        # Pipe B: Right port at tile (0, 0) → 2x (0, 4)
+        _HEAT_PIPE_ID + "_b": _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        # Railgun: Left port at tile (0, 0) → 2x (2, 0) matches Pipe A;
+        #          Left port at tile (0, 2) → 2x (2, 4) matches Pipe B.
+        _RAILGUN_LAUNCHER_ID: _make_vanilla_geo(
+            (
+                _make_thermal_port((0, 0), "Left"),
+                _make_thermal_port((0, 2), "Left"),
+            )
+        ),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    # Two backbone networks remain separate; railgun is a leaf in each.
+    assert summary["networks"] == 2
+    clusters = context.get_annotation("thermal_networks")
+    # Network 0 contains pipe A (0) + railgun (2); network 1 contains pipe B (1) + railgun (2).
+    assert len(clusters) == 2
+    assert 0 in clusters[0] and 2 in clusters[0]
+    assert 1 in clusters[1] and 2 in clusters[1]
+
+    # The railgun belongs to both networks.
+    network_by_part_id = context.get_annotation("thermal_network_by_part_id")
+    assert sorted(network_by_part_id[2]) == ["thermal_network_0", "thermal_network_1"]
+
+    # Each pipe belongs to exactly one network.
+    assert len(network_by_part_id[0]) == 1
+    assert len(network_by_part_id[1]) == 1
+    assert network_by_part_id[0] != network_by_part_id[1]
+
+    # Two thermal_member cross-edges must be emitted for the railgun (one per network).
+    expansion_graph = context.emitted_graphs[_EXPANSION_GRAPH_NAME]
+    railgun_edges = [
+        e for e in expansion_graph["cross_edges"]
+        if e.get("kind") == "thermal_member" and e.get("target") == 2
+    ]
+    assert len(railgun_edges) == 2
+    railgun_source_networks = {e["source"] for e in railgun_edges}
+    assert railgun_source_networks == {"thermal_network_0", "thermal_network_1"}
+
+
+def test_railgun_assembly_multi_part_spanning_two_networks() -> None:
+    """A railgun assembly of multiple stacked parts is a member of all touched networks.
+
+    Barrel-axis edges join loader → launcher into one non-backbone sub-group.
+    The sub-group touches two backbone clusters so both parts are added to
+    both networks (multi-network leaf exception).
+
+    Layout (2x space, rotation 0 — barrel along Y):
+      Pipe A   at [0, 0]  — Right port at tile (0,0) → 2x (0, 0); target (2, 0, Left)
+      Pipe B   at [0, 6]  — Right port at tile (0,0) → 2x (0, 6); target (2, 6, Left)
+      Loader   at [2, 0]  — Left port at tile (0,0) → 2x (2, 0); matches Pipe A
+                            footprint 2×3 tiles → 2x cells y = 0, 2, 4
+      Launcher at [2, 6]  — Left port at tile (0,0) → 2x (2, 6); matches Pipe B
+                            barrel-adjacent: Loader's bottom 2x cell y=4, delta 2 → 6 ✓
+    """
+
+    nodes = [
+        make_node(0, [0, 0], _HEAT_PIPE_ID),
+        make_node(1, [0, 6], _HEAT_PIPE_ID + "_b"),
+        make_node(2, [2, 0], _RAILGUN_LOADER_ID,    rotation=0, footprint={"width": 2, "height": 3}),
+        make_node(3, [2, 6], _RAILGUN_LAUNCHER_ID,  rotation=0, footprint={"width": 2, "height": 4}),
+    ]
+    fake_geo = {
+        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        _HEAT_PIPE_ID + "_b": _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        # Loader: Left port at tile (0, 0) → 2x (2, 0) matches Pipe A.
+        _RAILGUN_LOADER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Left"),)),
+        # Launcher: Left port at tile (0, 0) → 2x (2, 6) matches Pipe B.
+        _RAILGUN_LAUNCHER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Left"),)),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    # Two separate backbone networks; the full railgun assembly is in both.
+    assert summary["networks"] == 2
+    clusters = context.get_annotation("thermal_networks")
+    assert len(clusters) == 2
+
+    all_members_flat = [m for cluster in clusters for m in cluster]
+    # Both railgun parts should appear in both clusters.
+    assert all_members_flat.count(2) == 2  # loader in both
+    assert all_members_flat.count(3) == 2  # launcher in both
+
+    network_by_part_id = context.get_annotation("thermal_network_by_part_id")
+    assert sorted(network_by_part_id[2]) == ["thermal_network_0", "thermal_network_1"]
+    assert sorted(network_by_part_id[3]) == ["thermal_network_0", "thermal_network_1"]

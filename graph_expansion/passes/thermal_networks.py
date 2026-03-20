@@ -86,6 +86,16 @@ via a cross-edge (first-assignment wins, sorted-edge order).  A sub-group that
 touches multiple backbone clusters is assigned to only one of them, preserving
 the separation of the underlying conduit spines.
 
+**Multi-network leaf exception**: any non-backbone sub-group (OC parts, railgun
+assemblies, thrusters, etc.) that touches more than one backbone cluster is
+added to *all* of them instead of just one.  Each node in the sub-group is a
+leaf member in every network it touches and does not act as a conduit between
+those networks — the backbone clusters remain independent.  As a result the
+``thermal_networks`` annotation and the cross-edge list may contain the same
+node IDs in multiple cluster entries.  The ``thermal_network_by_part_id``
+annotation maps each node ID to the list of all network IDs it belongs to (a
+list of length > 1 for nodes that span multiple networks).
+
 Sub-groups with no backbone attachment form their own isolated clusters.
 
 Heat exchanger radius special case
@@ -377,12 +387,19 @@ def _build_two_phase_clusters(
     only one of them, preserving conduit-network separation.  Sub-groups with no
     backbone attachment form their own isolated clusters.
 
+    **Multi-network leaf exception**: any non-backbone sub-group that touches
+    more than one backbone cluster is added to *all* of them.  Each member is
+    a leaf in every touched network and does not bridge them.  The returned
+    cluster lists may therefore be non-disjoint (the same node ID can appear
+    in more than one cluster).
+
     Args:
         all_edges: Sorted list of ``(min_id, max_id)`` node-ID pairs.
         node_by_id: Mapping of node ID to structural node data.
 
     Returns:
-        Sorted list of sorted member-ID lists, one per cluster.
+        Sorted list of sorted member-ID lists, one per cluster.  Lists are
+        disjoint except for railgun assembly nodes that span multiple networks.
     """
 
     def _is_backbone(node_id: int) -> bool:
@@ -423,22 +440,19 @@ def _build_two_phase_clusters(
         nb_group = nb_cluster_by_node[nb_node]
         nb_group_bb_candidates.setdefault(nb_group, set()).add(backbone_cluster_by_node[bb_node])
 
-    nb_group_to_backbone: Dict[int, int] = {
-        nb_group: max(
-            bb_cluster_set,
-            key=lambda idx: (len(backbone_clusters[idx]), -idx),
-        )
-        for nb_group, bb_cluster_set in nb_group_bb_candidates.items()
-    }
-
     # Build final cluster member lists.
     result: Dict[int, List[int]] = {
         idx: list(members) for idx, members in enumerate(backbone_clusters)
     }
     for nb_group_idx, nb_members in enumerate(nb_clusters):
-        bb_cluster = nb_group_to_backbone.get(nb_group_idx)
-        if bb_cluster is not None:
-            result[bb_cluster].extend(nb_members)
+        bb_candidates = nb_group_bb_candidates.get(nb_group_idx, set())
+        if len(bb_candidates) > 1:
+            # Sub-group touches multiple backbone clusters: add to ALL of them as leaves.
+            # Each member participates in every touched network without merging them.
+            for bb_cluster in sorted(bb_candidates):
+                result[bb_cluster].extend(nb_members)
+        elif bb_candidates:
+            result[next(iter(bb_candidates))].extend(nb_members)
         else:
             own_key = len(backbone_clusters) + nb_group_idx
             result[own_key] = list(nb_members)
@@ -679,6 +693,15 @@ class ThermalNetworksPass(ExpansionPass):
     virtual thermal edges regardless of overclocked status so the whole assembly
     always forms one thermal unit.
 
+    Multi-network leaf membership: any non-backbone sub-group (OC parts, railgun
+    assemblies, thrusters, etc.) that touches more than one backbone cluster is
+    added as a leaf member of *all* those networks.  The backbone networks remain
+    independent — non-backbone parts do not merge them.  As a result the same
+    node may receive ``thermal_member`` cross-edges to more than one
+    ``thermal_network_N`` virtual node.  The ``thermal_network_by_part_id``
+    annotation maps each node ID to a list of network ID strings; nodes spanning
+    multiple networks have lists longer than one element.
+
     Engine room special case: an overclocked engine room implicitly forms a
     thermal edge with every physically adjacent thruster (any cell of the
     thruster is tile-adjacent to any cell of the engine room), regardless of
@@ -692,7 +715,7 @@ class ThermalNetworksPass(ExpansionPass):
     """
 
     name = "thermal_networks"
-    version = 8
+    version = 9
     requires = ("base_indexes",)
     provides = ("thermal_networks", "thermal_network_by_part_id")
 
@@ -749,7 +772,10 @@ class ThermalNetworksPass(ExpansionPass):
         )
 
         # Build annotations and emit virtual nodes and cross-edges in one pass.
-        network_by_part_id: Dict[int, str] = {}
+        # thermal_network_by_part_id maps node_id -> list of network IDs.  Most
+        # nodes belong to exactly one network (list length 1), but railgun assembly
+        # nodes that span multiple thermal networks appear in each network's list.
+        network_by_part_id: Dict[int, List[str]] = {}
         expansion_graph = context.ensure_emitted_graph(EXPANSION_GRAPH_NAME)
         nodes: List[Dict[str, Any]] = expansion_graph["nodes"]
         cross_edges: List[Dict[str, Any]] = expansion_graph["cross_edges"]
@@ -760,15 +786,7 @@ class ThermalNetworksPass(ExpansionPass):
         for cluster_index, members in enumerate(clusters):
             network_id = f"thermal_network_{cluster_index}"
             for member_id in members:
-                network_by_part_id[member_id] = network_id
-            thermal_nodes.append(
-                {
-                    "id": network_id,
-                    "kind": "thermal_network",
-                    "member_count": len(members),
-                }
-            )
-            for member_id in members:
+                network_by_part_id.setdefault(member_id, []).append(network_id)
                 thermal_member_edges.append(
                     {
                         "source": network_id,
@@ -778,6 +796,13 @@ class ThermalNetworksPass(ExpansionPass):
                         "kind": "thermal_member",
                     }
                 )
+            thermal_nodes.append(
+                {
+                    "id": network_id,
+                    "kind": "thermal_network",
+                    "member_count": len(members),
+                }
+            )
 
         context.set_annotation("thermal_networks", clusters)
         context.set_annotation("thermal_network_by_part_id", network_by_part_id)
