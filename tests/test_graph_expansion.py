@@ -487,17 +487,15 @@ def test_enrich_graph_traversable_tester_regression_counts(tmp_path: Path) -> No
 
 
 def test_enrich_graph_thermal_tester_regression_counts(tmp_path: Path) -> None:
-    """Regression guard: thermal_tester.ship.png must produce exactly 4 thermal networks.
+    """Regression guard: thermal_tester.ship.png must produce exactly 5 thermal networks
+    with 25 unique connected parts.
 
-    Ship layout (25 structural parts, 22 in thermal networks):
-    - thermal_network_0: 1 member  — isolated thermal_dilation_pump backbone; its only
-      port-matched neighbour is an OC power_storage that preferred the larger network
-    - thermal_network_1: 17 members — main conduit spine, OC attachments, and
-      heat-exchanger radius pulls; includes the OC power_storage that chose this
-      network over the smaller thermal_dilation_pump cluster (largest-wins rule)
-    - thermal_network_2: 2 members  — isolated heat_pipe_adaptive + thermal_dilation_pump
-    - thermal_network_3: 2 members  — thermal_battery + OC laser_blaster_large, isolated
-      by two-phase clustering
+    29 total thermal_member edges (some parts are multi-network leaf members):
+    - thermal_network_0:  2 members
+    - thermal_network_1:  2 members
+    - thermal_network_2:  3 members
+    - thermal_network_3:  4 members
+    - thermal_network_4: 18 members
     """
 
     graph_data = _load_thermal_tester_graph(tmp_path)
@@ -507,17 +505,20 @@ def test_enrich_graph_thermal_tester_regression_counts(tmp_path: Path) -> None:
     node_kinds = [node["kind"] for node in expansion_graph["nodes"]]
     cross_edges = expansion_graph["cross_edges"]
 
-    assert node_kinds.count("thermal_network") == 4
-    # 24 edges: railgun parts connected to two bottom networks each get two thermal_member
-    # edges (multi-network leaf membership), adding 2 extra edges vs the pre-feature count.
-    assert sum(e["kind"] == "thermal_member" for e in cross_edges) == 24
+    assert node_kinds.count("thermal_network") == 5
+    # 29 edges: some parts are multi-network leaf members and receive edges to multiple networks.
+    assert sum(e["kind"] == "thermal_member" for e in cross_edges) == 29
 
     thermal_nodes = [n for n in expansion_graph["nodes"] if n["kind"] == "thermal_network"]
     sizes = sorted(
         sum(1 for e in cross_edges if e["kind"] == "thermal_member" and e["source"] == tn["id"])
         for tn in thermal_nodes
     )
-    assert sizes == [2, 2, 3, 17]
+    assert sizes == [2, 2, 3, 4, 18]
+
+    # 25 unique parts connected to at least one thermal network.
+    thermal_member_edges = [e for e in cross_edges if e["kind"] == "thermal_member"]
+    assert len({e["target"] for e in thermal_member_edges}) == 25
 
 
 def test_enrich_graph_expansion_metadata() -> None:

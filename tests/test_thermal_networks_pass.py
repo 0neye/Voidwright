@@ -961,12 +961,17 @@ def test_overclocked_railgun_does_not_extend_to_non_railgun_overclocked_part() -
     assert context.get_annotation("thermal_networks") == []
 
 
-def test_overclocked_engine_room_port_connects_to_overclocked_part() -> None:
-    """An overclocked engine room's port-based connection to another overclocked part is allowed."""
+def test_overclocked_engine_room_port_does_not_connect_to_overclocked_non_thruster() -> None:
+    """An overclocked engine room must NOT form a port edge with an overclocked non-thruster part.
+
+    Engine rooms are only exempt from the OC-OC suppression rule when the other
+    part is a thruster.  Any other overclocked neighbour (e.g. ion beam emitter)
+    must be blocked.
+    """
 
     # Engine room at [0, 0] — Right port (overclock_conditional).
-    # Overclocked part at [2, 0] — Left port (overclock_conditional).
-    # Engine room is exempt → edge allowed.
+    # Overclocked ion_beam_emitter at [2, 0] — Left port (overclock_conditional).
+    # Engine room is NOT exempt for non-thruster parts → edge suppressed.
     nodes = [
         make_node(0, [0, 0], _ENGINE_ROOM_ID, overclocked=True),
         make_node(1, [2, 0], _OVERCLOCK_PART_ID, overclocked=True),
@@ -982,9 +987,9 @@ def test_overclocked_engine_room_port_connects_to_overclocked_part() -> None:
 
     context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
 
-    assert summary["thermal_edges"] == 1
-    assert summary["networks"] == 1
-    assert context.get_annotation("thermal_networks") == [[0, 1]]
+    assert summary["thermal_edges"] == 0
+    assert summary["networks"] == 0
+    assert context.get_annotation("thermal_networks") == []
 
 # ---------------------------------------------------------------------------
 # Thermal-conduit restriction tests (OC part <-> non-OC non-conduit blocked)
@@ -1364,3 +1369,33 @@ def test_railgun_assembly_multi_part_spanning_two_networks() -> None:
     network_by_part_id = context.get_annotation("thermal_network_by_part_id")
     assert sorted(network_by_part_id[2]) == ["thermal_network_0", "thermal_network_1"]
     assert sorted(network_by_part_id[3]) == ["thermal_network_0", "thermal_network_1"]
+
+
+def test_perpendicular_railgun_parts_do_not_form_assembly_edge() -> None:
+    """Two railgun parts with different barrel axes must NOT be joined by a virtual assembly edge.
+
+    A vertical launcher (rotation 0) placed beside a horizontal launcher
+    (rotation 1) may share an adjacent 2x cell along the vertical launcher's
+    barrel delta, but the neighbor has a perpendicular axis and must not be
+    treated as part of the same assembly.
+    """
+
+    # Vertical launcher (2×4) at [0, 0], rotation 0.
+    #   Barrel deltas for rotation 0: (0, -2) and (0, +2).
+    #   2x footprint cells cover y=0..7; barrel-adjacent below: (0,8),(1,8).
+    # Horizontal launcher (4×2) at [0, 8], rotation 1.
+    #   Barrel deltas for rotation 1: (-2, 0) and (+2, 0) — horizontal axis.
+    #   Its 2x footprint starts at y=8, adjacent to the vertical launcher's
+    #   bottom cells — but rotation 0 % 2 == 0 and rotation 1 % 2 == 1, so
+    #   the axes differ and no assembly edge should be created.
+    nodes = [
+        make_node(0, [0, 0], _RAILGUN_LAUNCHER_ID, rotation=0, footprint={"width": 2, "height": 4}),
+        make_node(1, [0, 8], _RAILGUN_LAUNCHER_ID, rotation=1, footprint={"width": 4, "height": 2}),
+    ]
+    fake_geo: dict[str, Any] = {}
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["railgun_assembly_edges"] == 0
+    assert summary["networks"] == 0
+    assert context.get_annotation("thermal_networks") == []

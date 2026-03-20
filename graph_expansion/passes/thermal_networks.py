@@ -30,8 +30,9 @@ Overclocked-part thermal-conduit restriction
 Overclocked parts must not relay thermal connectivity to arbitrary non-overclocked
 parts.  Two restrictions apply:
 
-1. A port-matched edge between two overclocked parts is suppressed unless at
-   least one side is an engine room.
+1. A port-matched edge between two overclocked parts is suppressed unless one
+   side is an engine room and the other is a thruster.  Engine rooms are not
+   broadly exempt; only the engine-room ↔ thruster pairing is allowed.
 
 2. A port-matched edge between one overclocked part and one non-overclocked part
    is only permitted when the non-overclocked part is a *thermal conduit* — a
@@ -242,28 +243,28 @@ def _can_form_thermal_edge(pa: _ActivePort, pb: _ActivePort) -> bool:
     Three cases:
 
     1. Neither side overclocked → always allowed.
-    2. Both sides overclocked → only allowed when at least one is an engine
-       room.  Railgun components are NOT exempt here; their barrel-axis
-       connectivity is handled separately by ``_build_railgun_assembly_edges``.
+    2. Both sides overclocked → only allowed when one side is an engine room
+       and the other is a thruster.  Railgun components are NOT exempt here;
+       their barrel-axis connectivity is handled separately by
+       ``_build_railgun_assembly_edges``.
     3. Exactly one side overclocked → the non-overclocked side must be a
        *thermal conduit* (heat pipe, radiator, heat exchanger, resonance beam
        turret, etc. — see ``travel_support.is_thermal_conduit``).  This
        prevents railguns and other weapons whose thermal ports exist for weapon-
        assembly purposes from accidentally bridging into the ship's overclocked
-       thermal network.  OC engine rooms are exempt from this restriction and
-       may connect via ports to any adjacent part.
+       thermal network.
     """
     if not pa.overclocked and not pb.overclocked:
         return True  # neither side overclocked — always allowed
 
     if pa.overclocked and pb.overclocked:
-        # Both overclocked: only engine rooms are exempt.
-        return is_engine_room(pa.part_id) or is_engine_room(pb.part_id)
+        # Both overclocked: only engine-room ↔ thruster is exempt.
+        er_side = is_engine_room(pa.part_id) or is_engine_room(pb.part_id)
+        thr_side = is_thruster(pa.part_id) or is_thruster(pb.part_id)
+        return er_side and thr_side
 
-    # Exactly one side is overclocked.
+    # Exactly one side is overclocked — non-OC side must be a thermal conduit.
     oc_port, non_oc_port = (pa, pb) if pa.overclocked else (pb, pa)
-    if is_engine_room(oc_port.part_id):
-        return True  # OC engine rooms connect freely via ports
     return is_thermal_conduit(non_oc_port.part_id)
 
 
@@ -625,6 +626,10 @@ def _build_railgun_assembly_edges(
                 neighbor_id = railgun_cell_to_node.get(neighbor_cell)
                 if neighbor_id is None or neighbor_id == node_id:
                     continue
+                neighbor_node = node_by_id[neighbor_id]
+                neighbor_rotation = int(neighbor_node.get("rotation", 0)) % 4
+                if rotation % 2 != neighbor_rotation % 2:
+                    continue  # different barrel axis — not part of the same assembly
                 pair = (min(node_id, neighbor_id), max(node_id, neighbor_id))
                 if pair not in seen:
                     seen.add(pair)
@@ -705,7 +710,10 @@ class ThermalNetworksPass(ExpansionPass):
     Engine room special case: an overclocked engine room implicitly forms a
     thermal edge with every physically adjacent thruster (any cell of the
     thruster is tile-adjacent to any cell of the engine room), regardless of
-    explicit thermal port alignment.  See module docstring for the full rules.
+    explicit thermal port alignment.  For port-based edges, the engine room is
+    only exempt from the OC-OC suppression rule when the other port also belongs
+    to a thruster; all other OC-OC port pairs involving an engine room are
+    suppressed.  See module docstring for the full rules.
 
     Thermal canister missile launcher special case: a missile launcher whose
     ``toggle_values["missile_type"]`` equals 4 (thermal canister mode) exposes
@@ -715,7 +723,7 @@ class ThermalNetworksPass(ExpansionPass):
     """
 
     name = "thermal_networks"
-    version = 9
+    version = 10
     requires = ("base_indexes",)
     provides = ("thermal_networks", "thermal_network_by_part_id")
 
