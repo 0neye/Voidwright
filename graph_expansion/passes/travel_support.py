@@ -33,7 +33,9 @@ __all__ = [
     "is_generic_storage",
     "is_missile_weapon",
     "is_power_storage",
+    "is_railgun",
     "is_shield",
+    "is_thermal_conduit",
     "is_thruster",
     "layer1_part_sets",
     "min_distance_for_part",
@@ -55,6 +57,16 @@ _ENERGY_WEAPON_SUBSTRINGS: tuple[str, ...] = (
     "disruptor",
     "ion_beam_emitter",
     "resonance_beam",
+)
+_RAILGUN_SUBSTRINGS: tuple[str, ...] = ("railgun",)
+_THERMAL_CONDUIT_SUBSTRINGS: tuple[str, ...] = (
+    "heat_exchanger",
+    "heat_pipe",
+    "radiator",
+    "resonance_beam",
+    "thermal_amplification",
+    "thermal_battery",
+    "thermal_dilation",
 )
 _AMMO_WEAPON_SUBSTRINGS: tuple[str, ...] = (
     "cannon",
@@ -158,6 +170,25 @@ def is_shield(part_id: str) -> bool:
 def is_engine_room(part_id: str) -> bool:
     lower_id = part_id.lower()
     return any(token in lower_id for token in _ENGINE_ROOM_SUBSTRINGS)
+
+
+def is_railgun(part_id: str) -> bool:
+    lower_id = part_id.lower()
+    return any(token in lower_id for token in _RAILGUN_SUBSTRINGS)
+
+
+def is_thermal_conduit(part_id: str) -> bool:
+    """Return True when *part_id* is a dedicated thermal conduit.
+
+    Thermal conduits are non-overclocked parts whose primary role is to relay
+    or absorb heat in the ship's thermal network: heat pipes, radiators, heat
+    exchangers, resonance beam turrets (thermal lances), and thermal pumps /
+    batteries.  They are treated as first-class thermal participants and are
+    the only non-overclocked parts permitted to form edges with overclocked
+    parts via port matching.
+    """
+    lower_id = part_id.lower()
+    return any(token in lower_id for token in _THERMAL_CONDUIT_SUBSTRINGS)
 
 
 def is_thruster(part_id: str) -> bool:
