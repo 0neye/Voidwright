@@ -75,6 +75,7 @@ graph_expansion/
     ├── travel_support.py
     ├── hull_perimeter.py
     ├── spatial_zones.py
+    ├── thermal_networks.py
     ├── traversable_clusters.py
     └── weapon_groups.py
 ```
@@ -137,6 +138,13 @@ Current structural passes:
   - factory edges currently include `factory_supports_storage`, `factory_supports_ammo_weapon`, and `factory_supports_missile_weapon`
   - reuses the same shared weighted Dijkstra travel helpers as Layer 1, but does not use classic-ship proxy fallback
 
+- `ThermalNetworksPass`
+  - builds thermal edges by matching facing thermal ports between adjacent structural nodes (ports from `common.geometry`)
+  - overclock-conditional ports are only active when the owning node has `overclocked=True`
+  - overclocked engine rooms add implicit thermal edges to every tile-adjacent thruster regardless of port alignment
+  - connected heat exchangers expand their network by pulling in nearby overclocked parts using a fixed 101-tile corner-cutout stencil (11×11 square with 5 cells removed from each corner), centered on each exchanger tile; stencil helpers live in `common.heat_exchanger` and are memoized
+  - connected components form `thermal_network_N` virtual nodes with `thermal_member` cross-edges; parts with no matching port receive no node
+
 - `HullPerimeterPass`
   - classifies each part as `perimeter` (has at least one unoccupied 2x neighbor cell) or `interior`
   - stores `hull_role_by_part_id` annotation
@@ -167,6 +175,7 @@ source graph JSON
   -> TraversableClustersPass
   -> Layer1CrewAccessPass
   -> Layer2CoreSupportPass
+  -> ThermalNetworksPass
   -> HullPerimeterPass
   -> SpatialZonesPass
   -> WeaponGroupsPass
@@ -188,6 +197,7 @@ That graph contains:
 - `nodes`
   - one `global_ship_info` node
   - zero or more `traversable_cluster` nodes
+  - zero or more `thermal_network` nodes (one per connected thermal component)
   - one `hull_perimeter` node and one `interior` node
   - zero or more `spatial_zone` nodes (one per populated compass-direction zone)
   - zero or more `weapon_group` nodes (one per detected weapon type)
@@ -196,6 +206,7 @@ That graph contains:
   - `super_member` edges from cluster nodes to their member structural nodes
   - direct structural-to-structural `crew_access_reactor` / `crew_access_factory` edges with weighted `travel_distance`
   - downstream structural support edges such as `reactor_supports_power_storage`, `reactor_supports_shield`, `reactor_supports_engine_room`, `reactor_supports_thruster`, `reactor_supports_energy_weapon`, `factory_supports_storage`, `factory_supports_ammo_weapon`, and `factory_supports_missile_weapon`
+  - `thermal_member` edges from each thermal-network node to its member structural nodes
   - `hull_member` edges from the `hull_perimeter` node to perimeter parts
   - `interior_member` edges from the `interior` node to interior parts
   - `zone_member` edges from each zone node to its member structural nodes
@@ -217,6 +228,7 @@ The top-level payload also gets an `expansion` metadata block like:
       {"name": "traversable_clusters", "version": 2},
       {"name": "crew_access_layer1", "version": 2},
       {"name": "core_support_layer2", "version": 1},
+      {"name": "thermal_networks", "version": 3},
       {"name": "hull_perimeter", "version": 1},
       {"name": "spatial_zones", "version": 1},
       {"name": "weapon_groups", "version": 1}
@@ -291,6 +303,11 @@ Focused test coverage currently lives in:
   - `ExpansionContext` behavior
   - direct pass behavior
   - targeted cache / annotation / emitted-output checks
+
+- `tests/test_thermal_networks_pass.py`
+  - port matching, overclock-conditional behavior, connected components
+  - engine room heat-conduit edges
+  - heat-exchanger radius stencil shape, parity preservation, inclusion/exclusion boundaries
 
 When changing graph expansion, prefer exact behavior assertions over loose smoke tests.
 

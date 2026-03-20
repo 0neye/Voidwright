@@ -171,9 +171,9 @@ The codebase is split into purpose-specific packages:
 - **`generator/`** - backend-agnostic generation router. `generator/backends/markov/backend.py` wires CLI options; `generator/backends/markov/export.py` handles `.ship.png` encoding and roundtrip validation.
 - **`markov/`** - shared Markov internals used by both training and generation: `model.py`, `generation.py`, `inputs.py`, and related helpers. `symmetry.py` is a backward-compat shim; mirror computation lives in `ship_layout/symmetry.py`.
 - **`ship_layout/`** - shared structural geometry, connectivity, mirror symmetry (`symmetry.py`), and the `PlacementValidator` API (`validator.py`) used by generation and analysis.
-- **`visualizer/`** - generation event capture, icon loading, frame rendering, and MP4 export; also hosts a static visualization system (`cli.py`, `router.py`, `static_render.py`, `backends/`) that renders expanded graph data as static PNGs tinted by zone, cluster, or hull membership.
+- **`visualizer/`** - generation event capture, icon loading, frame rendering, and MP4 export; also hosts a static visualization system (`cli.py`, `router.py`, `static_render.py`, `backends/`) that renders expanded graph data as static PNGs tinted by zone, cluster, hull membership, or thermal-network membership; the thermal-networks backend also draws heat-exchanger absorption-radius overlays as stroke-only stencil outlines.
 - **`corpus/`** - rule-based corpus filtering. `filter.py` scans a graph JSON directory, applies an ordered list of `CorpusRule` objects, copies accepted files to an output directory, and writes `manifest.json` / `rejections.jsonl`. Rules live under `corpus/rules/` (`MaxSizeRule`, `RequireCrewRoomsRule`, `RequireReachableReactorRule`). `context.py` provides `CorpusContext` (lazy accessors over the parsed graph payload). The flat CLI (`corpus/cli.py`) is registered in `main.py` as the `corpus` domain.
-- **`common/`** - geometry metadata (`geometry.py`), file helpers, logging, and `common/cosmoteer/` (parser and encoder for `.ship.png` LSB payloads). `common/data/vanilla_parts_full_geometry.json` is the authoritative part geometry source.
+- **`common/`** - geometry metadata (`geometry.py`), heat-exchanger radius helpers (`heat_exchanger.py`), file helpers, logging, and `common/cosmoteer/` (parser and encoder for `.ship.png` LSB payloads). `common/data/vanilla_parts_full_geometry.json` is the authoritative part geometry source.
 
 ### Key data flow
 
@@ -290,7 +290,10 @@ Structural passes (in pipeline order):
   (already reflected in graph data; a future generator verification step should
   confirm this invariant) and act as heat conduits — any thruster tile-adjacent
   to an overclocked engine room gets an implicit thermal edge regardless of
-  explicit port alignment
+  explicit port alignment; connected heat exchangers expand their network by
+  pulling in nearby overclocked parts using a fixed 101-tile corner-cutout
+  stencil (11×11 square with 5 cells removed from each corner) centered on each
+  exchanger tile — helpers live in `common.heat_exchanger` and are memoized
 - `HullPerimeterPass` classifies each part as perimeter or interior using 2x
   footprint cell neighbor checks; emits `hull_perimeter` / `interior` virtual
   nodes with `hull_member` / `interior_member` cross-edges
