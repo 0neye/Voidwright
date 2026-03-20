@@ -96,6 +96,17 @@ def _load_traversable_tester_graph(tmp_path: Path) -> dict:
     return process_ship(source_path)
 
 
+def _load_thermal_tester_graph(tmp_path: Path) -> dict:
+    """Parse the checked-in Thermal Tester PNG and build its structural graph."""
+
+    ship_payload = apply_relative_coords_transform(
+        parse_ship_png(Path(__file__).resolve().parent / "data" / "thermal_tester.ship.png")
+    )
+    source_path = tmp_path / "thermal_tester.ship.json"
+    source_path.write_text(json.dumps(ship_payload) + "\n", encoding="utf-8")
+    return process_ship(source_path)
+
+
 # ---------------------------------------------------------------------------
 # _is_corridor_like
 # ---------------------------------------------------------------------------
@@ -473,6 +484,38 @@ def test_enrich_graph_traversable_tester_regression_counts(tmp_path: Path) -> No
     assert sum(edge["kind"] == "reactor_supports_thruster" for edge in cross_edges) == 1
     assert sum(edge["kind"] == "factory_supports_ammo_weapon" for edge in cross_edges) == 2
     assert sum(edge["kind"] == "factory_supports_storage" for edge in cross_edges) == 1
+
+
+def test_enrich_graph_thermal_tester_regression_counts(tmp_path: Path) -> None:
+    """Regression guard: thermal_tester.ship.png must produce exactly 4 thermal networks.
+
+    Ship layout (25 structural parts, 22 in thermal networks):
+    - thermal_network_0: 1 member  — isolated thermal_dilation_pump backbone; its only
+      port-matched neighbour is an OC power_storage that preferred the larger network
+    - thermal_network_1: 17 members — main conduit spine, OC attachments, and
+      heat-exchanger radius pulls; includes the OC power_storage that chose this
+      network over the smaller thermal_dilation_pump cluster (largest-wins rule)
+    - thermal_network_2: 2 members  — isolated heat_pipe_adaptive + thermal_dilation_pump
+    - thermal_network_3: 2 members  — thermal_battery + OC laser_blaster_large, isolated
+      by two-phase clustering
+    """
+
+    graph_data = _load_thermal_tester_graph(tmp_path)
+    result = _enrich_graph(graph_data)
+
+    expansion_graph = result["graphs"]["X_expansion_structural"]
+    node_kinds = [node["kind"] for node in expansion_graph["nodes"]]
+    cross_edges = expansion_graph["cross_edges"]
+
+    assert node_kinds.count("thermal_network") == 4
+    assert sum(e["kind"] == "thermal_member" for e in cross_edges) == 22
+
+    thermal_nodes = [n for n in expansion_graph["nodes"] if n["kind"] == "thermal_network"]
+    sizes = sorted(
+        sum(1 for e in cross_edges if e["kind"] == "thermal_member" and e["source"] == tn["id"])
+        for tn in thermal_nodes
+    )
+    assert sizes == [1, 2, 2, 17]
 
 
 def test_enrich_graph_expansion_metadata() -> None:
