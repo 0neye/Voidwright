@@ -31,6 +31,11 @@ After direct thermal connectivity is constructed, each connected heat exchanger
 acts as an inclusion source for overclocked parts inside its absorption radius.
 Overclocked parts that are not already in that thermal network are attached to
 it when any occupied tile is within the heat exchanger's configured radius.
+
+Radius computation is performed in 1x tile space from the heat exchanger
+part's geometric center (middle of its footprint), not its top-left tile.
+Candidates are included when any occupied candidate tile is within the
+configured radius from that center point.
 """
 
 from __future__ import annotations
@@ -38,6 +43,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Set, Tuple
 
+from common.heat_exchanger import (
+    HEAT_EXCHANGER_ABSORPTION_RADIUS_TILES,
+    footprint_tile_origins_2x,
+    is_heat_exchanger,
+    tile_set_within_heat_exchanger_radius_2x,
+)
 from common.geometry import load_vanilla_part_geometry, resolve_geometry_part_id_and_rotation
 from graph_expansion.context import EXPANSION_GRAPH_NAME, STRUCTURAL_GRAPH_NAME, ExpansionContext
 from graph_expansion.passes.base import ExpansionPass
@@ -57,11 +68,6 @@ _DIRECTION_DELTA: Dict[str, Tuple[int, int]] = {
 # Heat exchanger absorption rules are defined in:
 # Data/ships/terran/heat_exchanger/heat_exchanger.rules
 #   Region { Type = EdgeDistance; Distance = 5 }
-# Distances here are in tile units.  One tile = 2 units in this pass's 2x-space.
-_HEAT_EXCHANGER_ABSORPTION_RADIUS_TILES = 5.0
-_HEAT_EXCHANGER_PART_ID = "cosmoteer.heat_exchanger"
-
-
 @dataclass(frozen=True)
 class _ActivePort:
     """One resolved thermal port in ship-space 2x coordinates.
@@ -73,12 +79,6 @@ class _ActivePort:
 
     node_id: int
     direction: str
-
-
-def _is_heat_exchanger(part_id: str) -> bool:
-    return part_id.lower() == _HEAT_EXCHANGER_PART_ID
-
-
 def _build_port_index(
     context: ExpansionContext,
 ) -> Tuple[Dict[Tuple[int, int, str], List[_ActivePort]], int]:
@@ -183,49 +183,6 @@ def _find_thermal_edges(
     return sorted(edges)
 
 
-def _footprint_cells_2x(node: Mapping[str, Any]) -> Set[Tuple[int, int]]:
-    """Return the set of 2x-space grid cells occupied by *node*.
-
-    Uses ``location_2x`` and ``footprint`` width/height stored on the node by
-    preprocessing.  Returns an empty set when required attributes are absent or
-    malformed.
-    """
-
-    location_2x = node.get("location_2x")
-    footprint = node.get("footprint")
-    if not isinstance(location_2x, (list, tuple)) or len(location_2x) != 2:
-        return set()
-    lx, ly = int(location_2x[0]), int(location_2x[1])
-    if not isinstance(footprint, dict):
-        # Fall back to a single 1x1 occupied tile at the part origin.
-        # This keeps heuristics available for synthetic/minimal test nodes.
-        return {(lx, ly)}
-    w = int(footprint.get("width", 0))
-    h = int(footprint.get("height", 0))
-    if w <= 0 or h <= 0:
-        return {(lx, ly)}
-    return {(lx + 2 * col, ly + 2 * row) for row in range(h) for col in range(w)}
-
-
-def _cells_within_distance_2x(
-    cells_a: Set[Tuple[int, int]],
-    cells_b: Set[Tuple[int, int]],
-    max_distance_2x: float,
-) -> bool:
-    """Return True when any cell pair is within *max_distance_2x* (euclidean)."""
-
-    if not cells_a or not cells_b:
-        return False
-    max_sq = max_distance_2x * max_distance_2x
-    for ax, ay in cells_a:
-        for bx, by in cells_b:
-            dx = float(ax - bx)
-            dy = float(ay - by)
-            if (dx * dx) + (dy * dy) <= max_sq:
-                return True
-    return False
-
-
 def _build_engine_room_thruster_edges(
     context: ExpansionContext,
 ) -> List[Tuple[int, int]]:
@@ -254,7 +211,7 @@ def _build_engine_room_thruster_edges(
         node_id = node.get("id")
         if not isinstance(node_id, int):
             continue
-        cells = _footprint_cells_2x(node)
+        cells = footprint_tile_origins_2x(node)
         for cell in cells:
             cell_to_node[cell] = node_id
         if is_engine_room(node.get("part_id", "")) and node.get("overclocked"):
@@ -301,8 +258,8 @@ def _build_heat_exchanger_radius_edges(
     """
 
     node_by_id: Dict[int, Mapping[str, Any]] = context.caches.get("node_by_id") or {}
-    cells_by_id: Dict[int, Set[Tuple[int, int]]] = {
-        node_id: _footprint_cells_2x(node)
+    tiles_by_id: Dict[int, Set[Tuple[int, int]]] = {
+        node_id: footprint_tile_origins_2x(node)
         for node_id, node in node_by_id.items()
     }
 
@@ -312,7 +269,6 @@ def _build_heat_exchanger_radius_edges(
         if node.get("overclocked")
     ]
 
-    max_distance_2x = _HEAT_EXCHANGER_ABSORPTION_RADIUS_TILES * 2.0
     edges: Set[Tuple[int, int]] = set()
 
     for members in clusters:
@@ -320,26 +276,29 @@ def _build_heat_exchanger_radius_edges(
         exchanger_ids = [
             node_id
             for node_id in members
-            if _is_heat_exchanger((node_by_id.get(node_id) or {}).get("part_id", ""))
+            if is_heat_exchanger((node_by_id.get(node_id) or {}).get("part_id", ""))
         ]
         if not exchanger_ids:
             continue
 
         for exchanger_id in exchanger_ids:
-            exchanger_cells = cells_by_id.get(exchanger_id) or set()
-            if not exchanger_cells:
+            exchanger_node = node_by_id.get(exchanger_id)
+            if exchanger_node is None:
+                continue
+            exchanger_tiles = tiles_by_id.get(exchanger_id) or set()
+            if not exchanger_tiles:
                 continue
 
             for candidate_id in candidates_overclocked:
                 if candidate_id in member_set:
                     continue
-                candidate_cells = cells_by_id.get(candidate_id) or set()
-                if not candidate_cells:
+                candidate_tiles = tiles_by_id.get(candidate_id) or set()
+                if not candidate_tiles:
                     continue
-                if not _cells_within_distance_2x(
-                    exchanger_cells,
-                    candidate_cells,
-                    max_distance_2x,
+                if not tile_set_within_heat_exchanger_radius_2x(
+                    exchanger_tiles,
+                    candidate_tiles,
+                    HEAT_EXCHANGER_ABSORPTION_RADIUS_TILES,
                 ):
                     continue
                 edges.add((min(exchanger_id, candidate_id), max(exchanger_id, candidate_id)))

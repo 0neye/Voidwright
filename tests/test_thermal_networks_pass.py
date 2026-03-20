@@ -16,6 +16,11 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+from common.heat_exchanger import (
+    HEAT_EXCHANGER_ABSORPTION_RADIUS_TILES,
+    footprint_tile_origins_2x,
+    heat_exchanger_radius_region_tile_origins_2x,
+)
 from graph_expansion.context import EXPANSION_GRAPH_NAME, STRUCTURAL_GRAPH_NAME, ExpansionContext
 from graph_expansion.passes.base_indexes import BaseIndexesPass
 from graph_expansion.passes.thermal_networks import ThermalNetworksPass
@@ -457,12 +462,85 @@ def test_connected_heat_exchanger_pulls_in_overclocked_part_within_radius() -> N
     assert context.get_annotation("thermal_networks") == [[0, 1, 2]]
 
 
+def test_heat_exchanger_radius_mask_matches_fixed_101_cell_stencil() -> None:
+    """The stencil should be exact and anchored on local 2x tile origins."""
+
+    exchanger_tiles = footprint_tile_origins_2x(
+        make_node(0, [0, 0], _HEAT_EXCHANGER_ID, footprint={"width": 1, "height": 1})
+    )
+    assert exchanger_tiles == {(0, 0)}
+
+    region = heat_exchanger_radius_region_tile_origins_2x(
+        (0, 0),
+        HEAT_EXCHANGER_ABSORPTION_RADIUS_TILES,
+    )
+    assert len(region) == 101
+    row_spans = {
+        tile_y: (min(xs), max(xs), len(xs))
+        for tile_y in sorted({tile_y for _, tile_y in region})
+        for xs in [[tile_x for tile_x, y in region if y == tile_y]]
+    }
+
+    assert row_spans == {
+        -10: (-4, 4, 5),
+        -8: (-8, 8, 9),
+        -6: (-8, 8, 9),
+        -4: (-10, 10, 11),
+        -2: (-10, 10, 11),
+        0: (-10, 10, 11),
+        2: (-10, 10, 11),
+        4: (-10, 10, 11),
+        6: (-8, 8, 9),
+        8: (-8, 8, 9),
+        10: (-4, 4, 5),
+    }
+
+
+def test_heat_exchanger_radius_mask_preserves_odd_local_anchor() -> None:
+    """Odd local 2x anchors must keep the same odd parity throughout the stencil."""
+
+    region = heat_exchanger_radius_region_tile_origins_2x(
+        (-45, -49),
+        HEAT_EXCHANGER_ABSORPTION_RADIUS_TILES,
+    )
+
+    assert len(region) == 101
+    assert all((x % 2) == 1 for x, _ in region)
+    assert all((y % 2) == 1 for _, y in region)
+    assert (-45, -49) in region
+
+
+def test_connected_heat_exchanger_includes_part_near_center_radius_boundary() -> None:
+    """A part near the center-based radius boundary should be included."""
+
+    nodes = [
+        make_node(0, [0, 0], _HEAT_EXCHANGER_ID, overclocked=False, footprint={"width": 1, "height": 1}),
+        make_node(1, [0, 2], _HEAT_PIPE_ID,      overclocked=False, footprint={"width": 1, "height": 1}),
+        # 5 tiles right from exchanger origin in 2x-space.
+        make_node(2, [10, 0], _ARMOR_ID,         overclocked=True,  footprint={"width": 1, "height": 1}),
+    ]
+    fake_geo = {
+        _HEAT_EXCHANGER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Down"),)),
+        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
+        _ARMOR_ID: _make_vanilla_geo(()),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 1
+    assert summary["heat_exchanger_radius_edges"] == 1
+    assert summary["networks"] == 1
+    assert summary["network_sizes"] == [3]
+    assert context.get_annotation("thermal_networks") == [[0, 1, 2]]
+
+
 def test_connected_heat_exchanger_does_not_pull_in_overclocked_part_outside_radius() -> None:
     """Overclocked parts outside the heat exchanger radius must stay excluded."""
 
     nodes = [
         make_node(0, [0, 0], _HEAT_EXCHANGER_ID, overclocked=False, footprint={"width": 1, "height": 1}),
         make_node(1, [0, 2], _HEAT_PIPE_ID,      overclocked=False, footprint={"width": 1, "height": 1}),
+        # 6 tiles right from exchanger origin in 2x-space.
         make_node(2, [12, 0], _ARMOR_ID,         overclocked=True,  footprint={"width": 1, "height": 1}),
     ]
     fake_geo = {
@@ -478,6 +556,55 @@ def test_connected_heat_exchanger_does_not_pull_in_overclocked_part_outside_radi
     assert summary["networks"] == 1
     assert summary["network_sizes"] == [2]
     assert context.get_annotation("thermal_networks") == [[0, 1]]
+
+
+def test_connected_heat_exchanger_excludes_far_diagonal_outside_radius() -> None:
+    """Diagonal offset (5,5) should remain outside center-based radius 5."""
+
+    nodes = [
+        make_node(0, [0, 0], _HEAT_EXCHANGER_ID, overclocked=False, footprint={"width": 1, "height": 1}),
+        make_node(1, [0, 2], _HEAT_PIPE_ID,      overclocked=False, footprint={"width": 1, "height": 1}),
+        # 5 tiles right + 5 tiles down from exchanger origin in 2x-space.
+        # This remains outside center-based radius 5.
+        make_node(2, [10, 10], _ARMOR_ID,        overclocked=True,  footprint={"width": 1, "height": 1}),
+    ]
+    fake_geo = {
+        _HEAT_EXCHANGER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Down"),)),
+        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
+        _ARMOR_ID: _make_vanilla_geo(()),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 1
+    assert summary["heat_exchanger_radius_edges"] == 0
+    assert summary["networks"] == 1
+    assert summary["network_sizes"] == [2]
+    assert context.get_annotation("thermal_networks") == [[0, 1]]
+
+
+def test_connected_heat_exchanger_includes_3_4_offset_within_radius() -> None:
+    """Offset (3,4) should be included by center-based radius 5."""
+
+    nodes = [
+        make_node(0, [0, 0], _HEAT_EXCHANGER_ID, overclocked=False, footprint={"width": 1, "height": 1}),
+        make_node(1, [0, 2], _HEAT_PIPE_ID,      overclocked=False, footprint={"width": 1, "height": 1}),
+        # 3 tiles right + 4 tiles down in 2x-space.
+        make_node(2, [6, 8], _ARMOR_ID,          overclocked=True,  footprint={"width": 1, "height": 1}),
+    ]
+    fake_geo = {
+        _HEAT_EXCHANGER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Down"),)),
+        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
+        _ARMOR_ID: _make_vanilla_geo(()),
+    }
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
+    assert summary["thermal_edges"] == 1
+    assert summary["heat_exchanger_radius_edges"] == 1
+    assert summary["networks"] == 1
+    assert summary["network_sizes"] == [3]
+    assert context.get_annotation("thermal_networks") == [[0, 1, 2]]
 
 
 def test_connected_heat_exchanger_ignores_non_overclocked_parts_within_radius() -> None:
