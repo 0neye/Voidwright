@@ -124,7 +124,11 @@ def generated_parts_to_toggle_states(parts: list[dict]) -> list[dict]:
         stored_x, stored_y = origin_to_stored_location(
             part_id, rotation, (int(part["x"]), int(part["y"]))
         )
-        part_key = {"ID": part_id, "Location": [stored_x, stored_y], "Rotation": rotation}
+        part_key: dict = {"ID": part_id, "Location": [stored_x, stored_y], "Rotation": rotation}
+        if "flip_x" in part:
+            part_key["FlipX"] = bool(part["flip_x"])
+        if "flip_y" in part:
+            part_key["FlipY"] = bool(part["flip_y"])
 
         if overclocked:
             toggle_states.append({"Key": [part_key, _THERMAL_OVERCLOCK_TOGGLE], "Value": 1})

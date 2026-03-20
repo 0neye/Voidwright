@@ -453,3 +453,54 @@ def test_graph_replay_carries_overclocked_flag_and_exports_toggle_states() -> No
     assert extracted_toggle["Key"][1] == "thermal_overclock"
     assert extracted_toggle["Value"] == 1
     assert extracted_toggle["Key"][0]["ID"] == "cosmoteer.corridor"
+
+
+def test_toggle_state_key_includes_flip_flags() -> None:
+    """generated_parts_to_toggle_states must include FlipX/FlipY in the part key.
+
+    A flipped overclocked part must produce a PartUIToggleStates key that
+    carries the same FlipX/FlipY flags as the real part record, otherwise
+    the game cannot match the toggle state to the part and drops it on load.
+    """
+
+    parts = [
+        {
+            "part_id": "cosmoteer.corridor",
+            "rotation": 0,
+            "x": 0,
+            "y": 0,
+            "overclocked": True,
+            "flip_x": True,
+        },
+        {
+            "part_id": "cosmoteer.corridor",
+            "rotation": 0,
+            "x": 2,
+            "y": 0,
+            "overclocked": True,
+            "flip_y": True,
+        },
+        {
+            "part_id": "cosmoteer.corridor",
+            "rotation": 0,
+            "x": 4,
+            "y": 0,
+            "overclocked": True,
+            # no flip flags — key must not include FlipX or FlipY
+        },
+    ]
+
+    toggle_states = generated_parts_to_toggle_states(parts)
+    assert len(toggle_states) == 3
+
+    key_flip_x = toggle_states[0]["Key"][0]
+    assert key_flip_x.get("FlipX") is True
+    assert "FlipY" not in key_flip_x
+
+    key_flip_y = toggle_states[1]["Key"][0]
+    assert key_flip_y.get("FlipY") is True
+    assert "FlipX" not in key_flip_y
+
+    key_no_flip = toggle_states[2]["Key"][0]
+    assert "FlipX" not in key_no_flip
+    assert "FlipY" not in key_no_flip
