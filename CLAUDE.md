@@ -204,6 +204,8 @@ Co-Authored-By: Model Name <noreply@lab.com>
 
 After making a major change or refactor and running appropriate tests, please update the AGENTS.md and CLAUDE.md as well as any applicable docs, when you deem it appropriate. If unsure, prompt the user.
 
+This includes files under `docs/`. For example: update `docs/graph-expansion.md` whenever passes, their behavior, output schema, or the expansion flow changes; update `docs/pipeline-and-artifacts.md` when preprocessing stages or artifact schemas change.
+
 ## Temp files
 
 If you need to write a temporary script or generate a temp output of some kind, the file name should start with either "TEMP" or ".tmp".
@@ -283,17 +285,29 @@ Structural passes (in pipeline order):
 - `ThermalNetworksPass` identifies thermal connections between structural parts
   by matching thermal port geometry in ship space (ports loaded from
   `common.geometry`); overclock-conditional ports are only active when the
-  owning part has `overclocked=True`; connected components form
-  `thermal_network_N` virtual nodes with `thermal_member` cross-edges;
-  isolated parts (no matching opposite port) receive no node; overclocked
-  engine rooms force all directly connected thrusters to be overclocked too
-  (already reflected in graph data; a future generator verification step should
-  confirm this invariant) and act as heat conduits — any thruster tile-adjacent
-  to an overclocked engine room gets an implicit thermal edge regardless of
-  explicit port alignment; connected heat exchangers expand their network by
-  pulling in nearby overclocked parts using a fixed 101-tile corner-cutout
-  stencil (11×11 square with 5 cells removed from each corner) centered on each
-  exchanger tile — helpers live in `common.heat_exchanger` and are memoized
+  owning part has `overclocked=True`; overclocked engine rooms force all
+  directly connected thrusters to be overclocked too (already reflected in graph
+  data) and act as heat conduits — any thruster tile-adjacent to an overclocked
+  engine room gets an implicit thermal edge regardless of explicit port
+  alignment; railgun components (loaders, launchers, accelerators) receive
+  virtual barrel-axis thermal edges so the whole assembly always forms one
+  thermal unit; an OC conduit restriction suppresses port-matched edges between
+  an overclocked part and a non-overclocked non-conduit part (only dedicated
+  thermal conduits — heat pipes, radiators, exchangers, resonance beam turrets —
+  may bridge into an overclocked network via ports); connected components are
+  built via two-phase clustering: Phase 1 unions non-OC thermal conduits into
+  backbone spines, Phase 2 attaches non-backbone sub-groups as leaves without
+  merging separate backbones; non-backbone sub-groups that touch more than one
+  backbone cluster are added as leaves to all of them (multi-network leaf
+  membership — the same part may hold `thermal_member` edges to multiple
+  `thermal_network_N` virtual nodes); connected heat exchangers expand their
+  network by pulling in nearby overclocked non-conduit parts using a fixed
+  101-tile corner-cutout stencil (11×11 square with 5 cells removed from each
+  corner) centered on each exchanger tile — helpers live in
+  `common.heat_exchanger` and are memoized; isolated parts (no matching opposite
+  port) receive no node; the `thermal_network_by_part_id` annotation maps each
+  node ID to a list of network IDs (`Dict[int, List[str]]`; most nodes have a
+  single-element list, but multi-network leaf members have longer lists)
 - `HullPerimeterPass` classifies each part as perimeter or interior using 2x
   footprint cell neighbor checks; emits `hull_perimeter` / `interior` virtual
   nodes with `hull_member` / `interior_member` cross-edges
