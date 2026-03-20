@@ -1,6 +1,6 @@
 {
-  "agent_instructions": "This file contains full geometry, collision, pathing, and placement data extracted from Cosmoteer vanilla Terran part .rules files under Data/ships/terran.  All coordinates are in local tile space with the origin at the top-left corner of the unrotated part.  One tile = one grid cell = 64 in-game units.  Fields that are null were not defined in the rules file; see the per-field inline descriptions in each part record for the default behaviour when a field is absent.  Arithmetic expressions (e.g. 7/64, 400%) have been evaluated to their numeric results.  Angle values that had a 'd' suffix (degrees) are stored as plain numbers. FIELD REFERENCE — size=[w,h]: full tile footprint including decorative overhang (barrel, nozzle). physical_rect=[x,y,w,h]: core-body sub-rect; physics AABB when bounding_rect_type=Physical. save_rect=[x,y,w,h]: grid cells owned in save files; null=full size. bounding_rect_type: 'Physical'=use physical_rect for AABB, null=use full size. rect_collider_rect_type: 'Normal'=force full-size rect collider despite physical_rect. generate_rect_collider: false=no auto rect collider (part supplies polygon_colliders). allowed_door_locations: [[x,y],...] valid door-edge positions (may be outside footprint). external_walls_by_cell / internal_walls_by_cell: [{tile:[x,y],value:[sides...]},...] per-cell wall overrides; sides=TopLeft|Top|TopRight|Left|Right|BottomLeft|Bottom|BottomRight|None. external_walls / internal_walls: uniform wall specs for whole part; values=All|None|[sides...]. no_auto_doors: true=suppress automatic door graphics. generator_requires_door: false=part has no crew space and never needs a door. door_access_warning_level: 'Weak'=accessible but not recommended. blocked_travel_cells: [[x,y],...] tiles impassable to crew. blocked_travel_cell_directions: [{tile:[x,y],value:[dirs...]},...] one-way movement blocks; dirs=Up|Down|Left|Right. force_manhattan_path: true=cardinal-only pathfinding inside part. crew_speed_factor: movement speed multiplier (0=impassable, 1=normal). crew_congested_speed_factor: speed multiplier when cell is crowded. cell_occupancy_factor: affects pathing cost. is_rotateable: false=symmetric part, no rotation needed. selection_priority: higher=preferred for cursor selection. selection_type_id: editor multi-select group. selection_type_by_rotation: true=each facing is a distinct selection group. flip_h_rotate / flip_v_rotate: [r0,r1,r2,r3] rotation-index remapping when mirrored. create_part_per_tile_when_grabbed: non-null=split into per-tile parts on pickup. DEADZONE / PLACEMENT-PROHIBIT FIELDS — Three separate mechanisms are used; they may coexist on the same part. prohibit_above/below/left/right: integer tile counts; blocks placement within N tiles in that direction from this part's edge. null=0 (no prohibition). Used by all turret weapons (prohibit_above=barrel clearance, range 1–2) and standard thrusters (prohibit_below=exhaust length, range 3–18). prohibit_rects: [{category,rect:[x,y,w,h]},...] arbitrary no-build rectangles in local tile coords; x/y may be negative (zone outside footprint). category='default' (normal) or 'tall' (only blocks high-profile parts). Used by thruster_rocket_nozzle (wide exhaust column), thruster_small_2way/3way (one rect per exhaust nozzle), cannon_deck and resonance_beam_turret (tall-category rects for large turret ring overhang). circle_colliders and polygon_colliders also act as deadzones when their component name signals a build-blocking role: TurretCollider (turret ring, present on all turret weapons alongside prohibit_above), NozzleCollider/NozzleColliderBottom/ NozzleColliderRight/NozzleColliderLeft (thruster nozzle sub-tile shape, supplements prohibit_below or prohibit_rects), EmitterCollider / HighCollider (shield/sensor dome that protrudes above hull — no Prohibit* fields, collider is the sole deadzone). circle_colliders: [{component,location,location_ref,radius,density},...] circle physics colliders in local part space; location_ref set when position is a runtime &reference. polygon_colliders: [{component,vertices:[[x,y],...],density},...] convex-polygon physics colliders in local part space. turret_weapons: [{component,location:[x,y],rotation_deg},...] turret pivot points (centre of rotation) and default facing in degrees. BACKWARD-COMPAT FIELDS (same structure as vanilla_parts_geometry.json) — display_name: English display string from Data/strings/en.rules. price_resources: [{resource,amount},...] build cost from the Resources block. geometry: sub-object with size, selection_type_id, is_rotateable, collider_type (PolygonCollider|null), polygon_vertices (base rotation), footprint_tiles (base rotation), and per_rotation dict keyed '0'–'3'. Each per_rotation entry: rotation_index, size, polygon_vertices, allowed_door_locations, blocked_travel_cells, footprint_tiles, unblocked_footprint_tiles. doors: sub-object with allowed_locations (same as allowed_door_locations). travel: sub-object with blocked_travel_cells, crew_speed_factor, crew_congested_speed_factor, cell_occupancy_factor. inheritance_chain: list of rules file paths from root base to this part. thermal_ports (per_rotation): list of {location:[x,y], direction:Up|Down|Left|Right, overclock_conditional:bool}. location is in part-local tile coords at rotation 0, rotated for each rotation step. overclock_conditional=true means the port is only active when the part is overclocked (OperationalToggle=OverclockModeToggle). Parts that inherit from BASE_THERMAL_PORT (factory_thermal, engine_room, overclock-capable weapons) have overclock_conditional=true. heat_pipe, radiator, thermal_battery etc. have overclock_conditional=false. Absent (empty list) means the part has no thermal ports. ",
-  "exported_at": "2026-03-19T20:58:09.381683+00:00",
+  "agent_instructions": "This file contains full geometry, collision, pathing, and placement data extracted from Cosmoteer vanilla Terran part .rules files under Data/ships/terran.  All coordinates are in local tile space with the origin at the top-left corner of the unrotated part.  One tile = one grid cell = 64 in-game units.  Fields that are null were not defined in the rules file; see the per-field inline descriptions in each part record for the default behaviour when a field is absent.  Arithmetic expressions (e.g. 7/64, 400%) have been evaluated to their numeric results.  Angle values that had a 'd' suffix (degrees) are stored as plain numbers. FIELD REFERENCE — size=[w,h]: full tile footprint including decorative overhang (barrel, nozzle). physical_rect=[x,y,w,h]: core-body sub-rect; physics AABB when bounding_rect_type=Physical. save_rect=[x,y,w,h]: grid cells owned in save files; null=full size. bounding_rect_type: 'Physical'=use physical_rect for AABB, null=use full size. rect_collider_rect_type: 'Normal'=force full-size rect collider despite physical_rect. generate_rect_collider: false=no auto rect collider (part supplies polygon_colliders). allowed_door_locations: [[x,y],...] valid door-edge positions (may be outside footprint). external_walls_by_cell / internal_walls_by_cell: [{tile:[x,y],value:[sides...]},...] per-cell wall overrides; sides=TopLeft|Top|TopRight|Left|Right|BottomLeft|Bottom|BottomRight|None. external_walls / internal_walls: uniform wall specs for whole part; values=All|None|[sides...]. no_auto_doors: true=suppress automatic door graphics. generator_requires_door: false=part has no crew space and never needs a door. door_access_warning_level: 'Weak'=accessible but not recommended. blocked_travel_cells: [[x,y],...] tiles impassable to crew. blocked_travel_cell_directions: [{tile:[x,y],value:[dirs...]},...] one-way movement blocks; dirs=Up|Down|Left|Right. force_manhattan_path: true=cardinal-only pathfinding inside part. crew_speed_factor: movement speed multiplier (0=impassable, 1=normal). crew_congested_speed_factor: speed multiplier when cell is crowded. cell_occupancy_factor: affects pathing cost. is_rotateable: false=symmetric part, no rotation needed. selection_priority: higher=preferred for cursor selection. selection_type_id: editor multi-select group. selection_type_by_rotation: true=each facing is a distinct selection group. flip_h_rotate / flip_v_rotate: [r0,r1,r2,r3] rotation-index remapping when mirrored. create_part_per_tile_when_grabbed: non-null=split into per-tile parts on pickup. DEADZONE / PLACEMENT-PROHIBIT FIELDS — Three separate mechanisms are used; they may coexist on the same part. prohibit_above/below/left/right: integer tile counts; blocks placement within N tiles in that direction from this part's edge. null=0 (no prohibition). Used by all turret weapons (prohibit_above=barrel clearance, range 1–2) and standard thrusters (prohibit_below=exhaust length, range 3–18). prohibit_rects: [{category,rect:[x,y,w,h]},...] arbitrary no-build rectangles in local tile coords; x/y may be negative (zone outside footprint). category='default' (normal) or 'tall' (only blocks high-profile parts). Used by thruster_rocket_nozzle (wide exhaust column), thruster_small_2way/3way (one rect per exhaust nozzle), cannon_deck and resonance_beam_turret (tall-category rects for large turret ring overhang). circle_colliders and polygon_colliders also act as deadzones when their component name signals a build-blocking role: TurretCollider (turret ring, present on all turret weapons alongside prohibit_above), NozzleCollider/NozzleColliderBottom/ NozzleColliderRight/NozzleColliderLeft (thruster nozzle sub-tile shape, supplements prohibit_below or prohibit_rects), EmitterCollider / HighCollider (shield/sensor dome that protrudes above hull — no Prohibit* fields, collider is the sole deadzone). circle_colliders: [{component,location,location_ref,radius,density},...] circle physics colliders in local part space; location_ref set when position is a runtime &reference. polygon_colliders: [{component,vertices:[[x,y],...],density},...] convex-polygon physics colliders in local part space. turret_weapons: [{component,location:[x,y],rotation_deg},...] turret pivot points (centre of rotation) and default facing in degrees. BACKWARD-COMPAT FIELDS (same structure as vanilla_parts_geometry.json) — display_name: English display string from Data/strings/en.rules. price_resources: [{resource,amount},...] build cost from the Resources block. geometry: sub-object with size, selection_type_id, is_rotateable, collider_type (PolygonCollider|null), polygon_vertices (base rotation), footprint_tiles (base rotation), and per_rotation dict keyed '0'–'3'. Each per_rotation entry: rotation_index, size, polygon_vertices, allowed_door_locations, blocked_travel_cells, footprint_tiles, unblocked_footprint_tiles. doors: sub-object with allowed_locations (same as allowed_door_locations). travel: sub-object with blocked_travel_cells, crew_speed_factor, crew_congested_speed_factor, cell_occupancy_factor. inheritance_chain: list of rules file paths from root base to this part. thermal_ports (per_rotation): list of {location:[x,y], direction:Up|Down|Left|Right, overclock_conditional:bool}. location is in part-local tile coords at rotation 0, rotated for each rotation step. overclock_conditional=true means the port is only active when the part is overclocked (OperationalToggle=OverclockModeToggle). Parts that inherit from BASE_THERMAL_PORT (factory_thermal, engine_room, overclock-capable weapons) have overclock_conditional=true. heat_pipe, radiator, thermal_battery etc. have overclock_conditional=false. Absent (empty list) means the part has no thermal ports. ui_toggles: list of UIToggle component definitions whose state is persisted in ship save files under PartUIToggleStates.  Each entry: component (rules component name), toggle_id (ToggleID string used as the key in PartUIToggleStates), default (integer default value), choices (sorted list of all valid integer modes — [0,1] for binary toggles, [0..N] for multi-mode ones), always_allow_in_build_mode (true when settable in the editor, null otherwise).  Notable multi-mode parts: cosmoteer.missile_launcher has missile_type (0=HE, 1=EMP, 2=Nuke, 3=Mine, 4=Thermal) and fire_mode (0=manual, 1=auto-target, 2=auto-fire).  Empty list means the part has no UIToggle components. ",
+  "exported_at": "2026-03-20T05:08:22.375432+00:00",
   "source_root": "Data/ships/terran",
   "part_count": 96,
   "warnings": [],
@@ -63,6 +63,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           1,
@@ -278,6 +290,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -543,6 +556,7 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -929,6 +943,7 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -1266,6 +1281,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           2,
@@ -1531,6 +1547,7 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -1861,6 +1878,7 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -2247,6 +2265,7 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -2603,6 +2622,7 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -2887,6 +2907,7 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -3181,6 +3202,7 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -3653,6 +3675,39 @@
             1.90625
           ],
           "rotation_deg": -90
+        }
+      ],
+      "ui_toggles": [
+        {
+          "component": "FireAlternatingToggle",
+          "toggle_id": "fire_alternating",
+          "default": 0,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
         }
       ],
       "geometry": {
@@ -5764,6 +5819,29 @@
           "rotation_deg": -90
         }
       ],
+      "ui_toggles": [
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -6723,6 +6801,29 @@
           "rotation_deg": -90
         }
       ],
+      "ui_toggles": [
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -7446,6 +7547,39 @@
           "component": "Turret",
           "location": null,
           "rotation_deg": -90
+        }
+      ],
+      "ui_toggles": [
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "ForceFireToggle",
+          "toggle_id": "force_fire_chaingun",
+          "default": 0,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
         }
       ],
       "geometry": {
@@ -8877,6 +9011,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -9239,6 +9374,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           4,
@@ -10276,6 +10423,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -11009,6 +11168,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -11406,6 +11577,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -11646,6 +11818,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -11855,6 +12028,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           3,
@@ -12495,6 +12669,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           2,
@@ -12851,6 +13026,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -13188,6 +13364,29 @@
             0.390625
           ],
           "rotation_deg": -90
+        }
+      ],
+      "ui_toggles": [
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
         }
       ],
       "geometry": {
@@ -13663,6 +13862,28 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "DistributePowerUIToggle",
+          "toggle_id": "distribute_power",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -14543,6 +14764,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -14767,6 +14989,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -15350,6 +15584,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -16241,6 +16487,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           4,
@@ -17324,6 +17582,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -17866,6 +18136,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -18913,6 +19195,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -19852,6 +20146,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           4,
@@ -20975,6 +21281,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           4,
@@ -22213,6 +22531,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -23139,6 +23469,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           4,
@@ -24378,6 +24720,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -25317,6 +25671,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           4,
@@ -26547,6 +26913,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -27516,6 +27894,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -28020,6 +28399,40 @@
             1
           ],
           "rotation_deg": -90
+        }
+      ],
+      "ui_toggles": [
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "FirePrefToggle",
+          "toggle_id": "fire_pref",
+          "default": 2,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
         }
       ],
       "geometry": {
@@ -29127,6 +29540,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           1,
@@ -29357,6 +29782,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -29678,6 +30104,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -30011,6 +30438,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -30439,6 +30867,18 @@
       ],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           4,
@@ -31651,6 +32091,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           4,
@@ -32415,6 +32867,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -32906,6 +33370,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -33298,6 +33774,29 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -34075,6 +34574,29 @@
           "rotation_deg": -90
         }
       ],
+      "ui_toggles": [
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -34423,6 +34945,39 @@
             1
           ],
           "rotation_deg": -90
+        }
+      ],
+      "ui_toggles": [
+        {
+          "component": "FireAlternatingToggle",
+          "toggle_id": "fire_alternating",
+          "default": 0,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
         }
       ],
       "geometry": {
@@ -35201,6 +35756,29 @@
           "rotation_deg": -90
         }
       ],
+      "ui_toggles": [
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           1,
@@ -35642,6 +36220,18 @@
           "rotation_deg": -135
         }
       ],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -35972,6 +36562,29 @@
             2
           ],
           "rotation_deg": -90
+        }
+      ],
+      "ui_toggles": [
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
         }
       ],
       "geometry": {
@@ -36554,6 +37167,42 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "MissileType",
+          "toggle_id": "missile_type",
+          "default": 0,
+          "choices": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "always_allow_in_build_mode": true
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -37229,6 +37878,40 @@
           "rotation_deg": -90
         }
       ],
+      "ui_toggles": [
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "FirePrefToggle",
+          "toggle_id": "fire_pref",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           1,
@@ -37635,6 +38318,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -38212,6 +38907,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           1,
@@ -38658,6 +39365,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -39605,6 +40324,29 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -40538,6 +41280,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -41239,6 +41993,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           4,
@@ -42520,6 +43275,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           3,
@@ -43404,6 +44160,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           2,
@@ -44111,6 +44868,39 @@
             2
           ],
           "rotation_deg": -90
+        }
+      ],
+      "ui_toggles": [
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 1,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "SafetyToggle",
+          "toggle_id": "thermal_safety",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
         }
       ],
       "geometry": {
@@ -45378,6 +46168,29 @@
           "rotation_deg": -90
         }
       ],
+      "ui_toggles": [
+        {
+          "component": "LightStrength",
+          "toggle_id": "light_strength",
+          "default": 0,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           1,
@@ -45572,6 +46385,29 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "LightStrength",
+          "toggle_id": "light_strength",
+          "default": 0,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           1,
@@ -45803,6 +46639,18 @@
       ],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -46553,6 +47401,18 @@
       ],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -47651,6 +48511,27 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "Overclock_ShieldModeToggle",
+          "toggle_id": "overclock_shield",
+          "default": 0,
+          "choices": [
+            0
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -48239,6 +49120,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           2,
@@ -48547,6 +49429,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           3,
@@ -48917,6 +49800,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           3,
@@ -49405,6 +50289,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           4,
@@ -49991,6 +50876,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           4,
@@ -50725,6 +51611,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -50948,6 +51835,7 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -51272,6 +52160,7 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -51622,6 +52511,7 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -51910,6 +52800,7 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -52195,6 +53086,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           1,
@@ -52575,6 +53478,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           2,
@@ -52975,6 +53879,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -53508,6 +54424,28 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "BoostToggle",
+          "toggle_id": "thruster_boost",
+          "default": 0,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -54323,6 +55261,18 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -55358,6 +56308,18 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -55996,6 +56958,18 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           1,
@@ -56441,6 +57415,7 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [],
       "geometry": {
         "size": [
           1,
@@ -56774,6 +57749,18 @@
       "circle_colliders": [],
       "polygon_colliders": [],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -57677,6 +58664,18 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -58760,6 +59759,18 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           1,
@@ -59249,6 +60260,18 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           2,
@@ -59775,6 +60798,18 @@
         }
       ],
       "turret_weapons": [],
+      "ui_toggles": [
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        }
+      ],
       "geometry": {
         "size": [
           3,
@@ -60337,6 +61372,50 @@
             2.5
           ],
           "rotation_deg": -90
+        }
+      ],
+      "ui_toggles": [
+        {
+          "component": "FireModeToggle",
+          "toggle_id": "fire_mode",
+          "default": 0,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "Overclock_OverloadToggle",
+          "toggle_id": "tractor_overload",
+          "default": 0,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "PowerToggle",
+          "toggle_id": "on_off",
+          "default": 1,
+          "choices": [
+            0,
+            1
+          ],
+          "always_allow_in_build_mode": null
+        },
+        {
+          "component": "TractorModeToggle",
+          "toggle_id": "tractor_mode",
+          "default": 0,
+          "choices": [
+            0,
+            1,
+            2
+          ],
+          "always_allow_in_build_mode": null
         }
       ],
       "geometry": {

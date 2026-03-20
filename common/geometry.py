@@ -117,6 +117,7 @@ __all__ = [
     "RotationGeometry",
     "ThermalPort",
     "TRAVERSABLE_HINTS",
+    "UIToggleDef",
     "VANILLA_NAMESPACE",
     "VANILLA_PARTS_PATH",
     "VanillaPartGeometry",
@@ -221,6 +222,7 @@ class VanillaPartGeometry:
     crew_congested_speed_factor: float | None = None
     crew_congested_speed_by_direction: Mapping[str, float] | None = None
     cell_occupancy_factor: Optional[float] = None
+    ui_toggles: Tuple[UIToggleDef, ...] = ()
     note: str = "game-file geometry"
 
     def rotation_geometry(self, rotation: int) -> RotationGeometry:
@@ -252,6 +254,29 @@ class VanillaPartGeometry:
 
 
 @dataclass(frozen=True)
+class UIToggleDef:
+    """Definition of one UIToggle component exposed in PartUIToggleStates.
+
+    Attributes:
+        component: Rules-file component name (e.g. ``"MissileType"``).
+        toggle_id: ToggleID string used as the key in ``PartUIToggleStates``
+            (e.g. ``"missile_type"``).
+        default: Default integer value when the toggle is not set in a ship
+            file.
+        choices: Sorted tuple of all valid integer mode values.  Binary
+            toggles have ``(0, 1)``; multi-mode toggles list every mode.
+        always_allow_in_build_mode: ``True`` when the toggle can be changed
+            in the ship editor; ``None`` when not specified in the rules file.
+    """
+
+    component: str
+    toggle_id: str
+    default: int
+    choices: Tuple[int, ...]
+    always_allow_in_build_mode: bool | None = None
+
+
+@dataclass(frozen=True)
 class PartMeta:
     """Shared footprint and traversability metadata for one part placement."""
 
@@ -263,6 +288,7 @@ class PartMeta:
     unblocked_tiles: frozenset[Coord] = frozenset()
     blocked_travel_cells: frozenset[Coord] = frozenset()
     allowed_door_locations: Tuple[Coord, ...] = ()
+    ui_toggles: Tuple[UIToggleDef, ...] = ()
 
 
 def parse_coord(cell: object) -> Coord:
@@ -472,6 +498,22 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
             )
 
         if part_id and rotations:
+            ui_toggles_raw = part.get("ui_toggles") or []
+            ui_toggles = tuple(
+                UIToggleDef(
+                    component=str(t["component"]),
+                    toggle_id=str(t["toggle_id"]),
+                    default=int(t.get("default", 0)),
+                    choices=tuple(int(c) for c in (t.get("choices") or [])),
+                    always_allow_in_build_mode=(
+                        bool(t["always_allow_in_build_mode"])
+                        if t.get("always_allow_in_build_mode") is not None
+                        else None
+                    ),
+                )
+                for t in ui_toggles_raw
+                if isinstance(t, dict) and t.get("toggle_id")
+            )
             result[part_id] = VanillaPartGeometry(
                 part_id=part_id,
                 rotations=rotations,
@@ -498,6 +540,7 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
                     top_level_congested_speed
                 ),
                 cell_occupancy_factor=travel_payload.get("cell_occupancy_factor"),
+                ui_toggles=ui_toggles,
             )
 
     return result
@@ -582,6 +625,7 @@ def infer_meta(part_id: str, rotation: int) -> Tuple[PartMeta, bool]:
                 unblocked_tiles=rotation_geometry.unblocked_tiles,
                 blocked_travel_cells=rotation_geometry.blocked_travel_cells,
                 allowed_door_locations=rotation_geometry.allowed_door_locations,
+                ui_toggles=vanilla_geometry.ui_toggles,
             ),
             False,
         )
