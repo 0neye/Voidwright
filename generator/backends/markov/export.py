@@ -9,8 +9,11 @@ Limitations (current export):
   stochastic generation still does not synthesise new doors yet.
 - Color fields use game-default values; the ship will appear with default
   roof / crew colours.
-- Decals, PartControlGroups, PartUIToggleStates and WeaponSelfTargets are
-  omitted from the minimal ship dict.  The game falls back to defaults.
+- Decals, PartControlGroups, and WeaponSelfTargets are omitted from the
+  minimal ship dict.  The game falls back to defaults.
+- PartUIToggleStates is emitted for overclocked parts and for any part carrying
+  non-default toggle values (e.g. missile_type=4 for thermal canister mode) on
+  the graph-replay path.  Stochastic Markov samples omit it.
 - Roundtrip validation re-extracts the PNG and compares parts list; it does
   NOT verify in-game gameplay validity.
 """
@@ -22,10 +25,13 @@ from pathlib import Path
 from typing import Any, Optional
 
 from common.cosmoteer import create_ship_png_bytes, write_ship_png
+from common.geometry import load_vanilla_part_geometry
+from common.save_rect import origin_to_stored_location
 
 __all__ = [
     "generated_parts_to_cosmoteer_parts",
     "generated_doors_to_cosmoteer_doors",
+    "generated_parts_to_toggle_states",
     "make_minimal_ship_dict",
     "graph_to_generated_parts_payload",
     "roundtrip_validate",
@@ -33,6 +39,10 @@ __all__ = [
     "export_batch",
 ]
 
+
+# ── constants ────────────────────────────────────────────────────────────────
+
+_THERMAL_OVERCLOCK_TOGGLE = "thermal_overclock"
 
 # ── default field values ──────────────────────────────────────────────────────
 
@@ -84,6 +94,51 @@ def _local_2x_to_global_grid(local_2x: object, center_2x: object) -> list[int] |
     return [(local_x + center_x) // 2, (local_y + center_y) // 2]
 
 
+def generated_parts_to_toggle_states(parts: list[dict]) -> list[dict]:
+    """Build ``PartUIToggleStates`` entries for parts with non-default toggle values.
+
+    Generator format parts that carry ``overclocked=True`` are converted into
+    Cosmoteer ``PartUIToggleStates`` toggle-state records so the exported
+    ``.ship.png`` preserves the overclock state recorded during preprocessing.
+    Parts that carry a ``toggle_values`` dict (graph-replay path) also emit
+    entries for every key whose value differs from the game-file default, so
+    toggle state such as ``missile_type=4`` (thermal canister mode) survives
+    roundtrip export.
+
+    Args:
+        parts: Generator-format part dicts (``{part_id, rotation, x, y, ...}``).
+
+    Returns:
+        List of ``PartUIToggleStates`` dicts ready for embedding in a ship dict.
+        Empty when no parts carry non-default toggle states.
+    """
+    toggle_states = []
+    for part in parts:
+        overclocked = part.get("overclocked")
+        toggle_values = part.get("toggle_values")
+        if not overclocked and not toggle_values:
+            continue
+
+        part_id = str(part["part_id"])
+        rotation = int(part.get("rotation", 0)) % 4
+        stored_x, stored_y = origin_to_stored_location(
+            part_id, rotation, (int(part["x"]), int(part["y"]))
+        )
+        part_key: dict = {"ID": part_id, "Location": [stored_x, stored_y], "Rotation": rotation}
+        if "flip_x" in part:
+            part_key["FlipX"] = bool(part["flip_x"])
+        if "flip_y" in part:
+            part_key["FlipY"] = bool(part["flip_y"])
+
+        if overclocked:
+            toggle_states.append({"Key": [part_key, _THERMAL_OVERCLOCK_TOGGLE], "Value": 1})
+
+        for toggle_id, value in (toggle_values or {}).items():
+            toggle_states.append({"Key": [part_key, toggle_id], "Value": int(value)})
+
+    return toggle_states
+
+
 def generated_doors_to_cosmoteer_doors(
     doors: list[dict],
 ) -> list[dict]:
@@ -120,13 +175,16 @@ def make_minimal_ship_dict(
     name: str = "generated",
     flight_direction: int = 1,
     ship_rules_id: str = "cosmoteer.terran",
+    toggle_states: list[dict] | None = None,
 ) -> dict:
     """Build a minimal Cosmoteer ship dict from a list of Cosmoteer-format parts.
 
     Only the fields essential for in-game loading are included.  The game treats
     absent optional fields as defaults, so the ship should load and be flyable.
+    ``toggle_states`` is included as ``PartUIToggleStates`` when provided and
+    non-empty (used by the graph-replay path to preserve overclock state).
     """
-    return {
+    ship: dict[str, Any] = {
         "Version": 1,
         "Name": name,
         "FlightDirection": flight_direction,
@@ -140,6 +198,9 @@ def make_minimal_ship_dict(
         "Parts": parts,
         "Doors": doors or [],
     }
+    if toggle_states:
+        ship["PartUIToggleStates"] = toggle_states
+    return ship
 
 
 def graph_to_generated_parts_payload(
@@ -178,6 +239,8 @@ def graph_to_generated_parts_payload(
             continue
         graph_doors.append({"Cell": cell, "Orientation": int(door["Orientation"])})
 
+    vanilla_geometry = load_vanilla_part_geometry()
+    _toggle_defaults_cache: dict[str, dict[str, int]] = {}
     generated_parts = []
     for node in nodes:
         if not isinstance(node, dict):
@@ -192,8 +255,9 @@ def graph_to_generated_parts_payload(
         if not part_id or not isinstance(location, list) or len(location) != 2:
             continue
 
+        part_id = str(part_id)
         generated_part = {
-            "part_id": str(part_id),
+            "part_id": part_id,
             "rotation": int(node.get("rotation", 0)) % 4,
             "x": int(location[0]),
             "y": int(location[1]),
@@ -202,6 +266,28 @@ def graph_to_generated_parts_payload(
             generated_part["flip_x"] = bool(node.get("flip_x", node.get("FlipX", False)))
         if "flip_y" in node or "FlipY" in node:
             generated_part["flip_y"] = bool(node.get("flip_y", node.get("FlipY", False)))
+        if node.get("overclocked"):
+            generated_part["overclocked"] = True
+        # Propagate non-default toggle values (e.g. missile_type=4 for thermal
+        # canister mode) so they survive roundtrip export to .ship.png.
+        # thermal_overclock is omitted here since it is handled via `overclocked`.
+        node_toggles = node.get("toggle_values")
+        if node_toggles:
+            if part_id not in _toggle_defaults_cache:
+                part_meta = vanilla_geometry.get(part_id)
+                _toggle_defaults_cache[part_id] = (
+                    {t.toggle_id: t.default for t in part_meta.ui_toggles}
+                    if part_meta is not None
+                    else {}
+                )
+            toggle_defaults = _toggle_defaults_cache[part_id]
+            non_default = {
+                k: v
+                for k, v in node_toggles.items()
+                if k != _THERMAL_OVERCLOCK_TOGGLE and toggle_defaults.get(k) != v
+            }
+            if non_default:
+                generated_part["toggle_values"] = non_default
         generated_parts.append(generated_part)
 
     # Reuse the existing generator export schema so graph replay can flow through
@@ -254,12 +340,15 @@ def roundtrip_validate(generated_json: dict) -> dict:
         warnings     – list of str
         png_bytes    – int (size of generated PNG)
     """
-    cosmoteer_parts = generated_parts_to_cosmoteer_parts(generated_json.get("parts", []))
+    raw_parts = generated_json.get("parts", [])
+    cosmoteer_parts = generated_parts_to_cosmoteer_parts(raw_parts)
     cosmoteer_doors = generated_doors_to_cosmoteer_doors(generated_json.get("doors", []))
+    toggle_states = generated_parts_to_toggle_states(raw_parts)
     ship_dict = make_minimal_ship_dict(
         cosmoteer_parts,
         doors=cosmoteer_doors,
         name=generated_json.get("name", "generated"),
+        toggle_states=toggle_states or None,
     )
 
     png_bytes = create_ship_png_bytes(ship_dict)
@@ -434,9 +523,13 @@ def export_ship_png(
     if name is None:
         name = output_path.stem.replace(".ship", "")
 
-    cosmoteer_parts = generated_parts_to_cosmoteer_parts(generated_json.get("parts", []))
+    raw_parts = generated_json.get("parts", [])
+    cosmoteer_parts = generated_parts_to_cosmoteer_parts(raw_parts)
     cosmoteer_doors = generated_doors_to_cosmoteer_doors(generated_json.get("doors", []))
-    ship_dict = make_minimal_ship_dict(cosmoteer_parts, doors=cosmoteer_doors, name=name)
+    toggle_states = generated_parts_to_toggle_states(raw_parts)
+    ship_dict = make_minimal_ship_dict(
+        cosmoteer_parts, doors=cosmoteer_doors, name=name, toggle_states=toggle_states or None
+    )
     write_ship_png(ship_dict, output_path)
 
     result: dict[str, Any] = {

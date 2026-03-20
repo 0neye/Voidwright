@@ -92,6 +92,74 @@ def test_canonicalize_hash_is_translation_invariant_when_location2x_exists() -> 
     assert relative_hash_a == relative_hash_b
 
 
+def test_canonicalize_hash_is_translation_invariant_for_overclocked_parts() -> None:
+    """Canonical hash should collapse translated overclocked ships that have the same layout."""
+
+    # ship_a at world origin; ship_b translated by (10, 7).  The PartUIToggleStates
+    # entry carries a world-coordinate Location that would cause the hashes to
+    # diverge without canonicalization.
+    offset = [10, 7]
+    parts_a = [
+        {"ID": "cosmoteer.corridor", "Location": [0, 0], "Rotation": 0},
+        {"ID": "cosmoteer.corridor", "Location": [2, 0], "Rotation": 0},
+    ]
+    parts_b = [
+        {"ID": "cosmoteer.corridor", "Location": [p["Location"][0] + offset[0], p["Location"][1] + offset[1]], "Rotation": 0}
+        for p in parts_a
+    ]
+    # Toggle entry: part at Location [0, 0] (ship_a) or [10, 7] (ship_b)
+    toggle_a = [{"Key": [{"ID": "cosmoteer.corridor", "Location": [0, 0], "Rotation": 0}, "thermal_overclock"], "Value": 1}]
+    toggle_b = [{"Key": [{"ID": "cosmoteer.corridor", "Location": [10, 7], "Rotation": 0}, "thermal_overclock"], "Value": 1}]
+
+    raw_a = _base_ship_payload(parts_a, name="overclock-layout")
+    raw_a["PartUIToggleStates"] = toggle_a
+    raw_b = _base_ship_payload(parts_b, name="overclock-layout")
+    raw_b["PartUIToggleStates"] = toggle_b
+
+    ship_a = apply_relative_coords_transform(raw_a)
+    ship_b = apply_relative_coords_transform(raw_b)
+
+    ship_a_text = json.dumps(ship_a, sort_keys=True)
+    ship_b_text = json.dumps(ship_b, sort_keys=True)
+
+    _, legacy_hash_a = canonicalize_json_text(ship_a_text, translation_invariant=False)
+    _, legacy_hash_b = canonicalize_json_text(ship_b_text, translation_invariant=False)
+    _, relative_hash_a = canonicalize_json_text(ship_a_text, translation_invariant=True)
+    _, relative_hash_b = canonicalize_json_text(ship_b_text, translation_invariant=True)
+
+    assert legacy_hash_a != legacy_hash_b, "legacy hashes should differ when world coords differ"
+    assert relative_hash_a == relative_hash_b, "translation-invariant hashes must match for translated overclocked ships"
+
+
+def test_canonicalize_hash_distinguishes_different_overclock_configs() -> None:
+    """Ships with the same layout but different overclock configs must hash differently."""
+
+    parts = [
+        {"ID": "cosmoteer.corridor", "Location": [0, 0], "Rotation": 0},
+        {"ID": "cosmoteer.corridor", "Location": [2, 0], "Rotation": 0},
+    ]
+    # Ship A: first corridor overclocked
+    toggle_a = [{"Key": [{"ID": "cosmoteer.corridor", "Location": [0, 0], "Rotation": 0}, "thermal_overclock"], "Value": 1}]
+    # Ship B: second corridor overclocked
+    toggle_b = [{"Key": [{"ID": "cosmoteer.corridor", "Location": [2, 0], "Rotation": 0}, "thermal_overclock"], "Value": 1}]
+
+    raw_a = _base_ship_payload(parts, name="overclock-layout")
+    raw_a["PartUIToggleStates"] = toggle_a
+    raw_b = _base_ship_payload(parts, name="overclock-layout")
+    raw_b["PartUIToggleStates"] = toggle_b
+
+    ship_a = apply_relative_coords_transform(raw_a)
+    ship_b = apply_relative_coords_transform(raw_b)
+
+    ship_a_text = json.dumps(ship_a, sort_keys=True)
+    ship_b_text = json.dumps(ship_b, sort_keys=True)
+
+    _, hash_a = canonicalize_json_text(ship_a_text, translation_invariant=True)
+    _, hash_b = canonicalize_json_text(ship_b_text, translation_invariant=True)
+
+    assert hash_a != hash_b, "ships with different overclock configs must not dedupe"
+
+
 def test_run_canonicalize_dedupes_shifted_layouts_and_keeps_transform_metadata(tmp_path: Path) -> None:
     """Canonicalization should dedupe shifted layouts and preserve transform fields."""
 
@@ -159,7 +227,7 @@ def test_process_ship_uses_centered_2x_payloads(tmp_path: Path) -> None:
     node = graph_payload["graphs"]["A_structural_part_graph"]["nodes"][0]
     door = graph_payload["doors"][0]
 
-    assert graph_payload["schema_version"] == 5
+    assert graph_payload["schema_version"] == 7
     assert "location" not in node
     assert node["location_2x"] == [0, 0]
     assert node["walkable_cells_2x"] == [[0, 0]]

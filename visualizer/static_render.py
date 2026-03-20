@@ -118,6 +118,7 @@ def paste_tinted(
         int(node.get("rotation", 0)),
         flip_x=flip_x,
         flip_y=flip_y,
+        toggle_values=node.get("toggle_values"),
     )
     tint_overlay = Image.new("RGBA", icon.size, tint)
     icon = Image.blend(icon, tint_overlay, alpha=0.55)

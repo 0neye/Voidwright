@@ -5,6 +5,7 @@ from __future__ import annotations
 from visualizer.backends.base import StaticVisualizationBackend
 from visualizer.backends.cardinal_zones import CardinalZonesBackend
 from visualizer.backends.spatial_zones import SpatialZonesBackend
+from visualizer.backends.thermal_networks import ThermalNetworksBackend
 from visualizer.backends.traversable_clusters import TraversableClustersBackend
 
 __all__ = ["get_static_backend", "get_static_backends"]
@@ -15,6 +16,7 @@ _BACKENDS: dict[str, StaticVisualizationBackend] = {
         SpatialZonesBackend(),
         CardinalZonesBackend(),
         TraversableClustersBackend(),
+        ThermalNetworksBackend(),
     )
 }
 

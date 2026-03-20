@@ -6,7 +6,15 @@ from pathlib import Path
 from common.cosmoteer import create_ship_png_bytes, parse_ship_png
 from common.files import output_name_for_ship_png
 from common.geometry import load_vanilla_part_geometry
-from generator.backends.markov.export import export_ship_png, graph_to_generated_parts_payload
+from common.cosmoteer import create_ship_png_bytes
+from common.cosmoteer.parser import _decode_ship_data, _extract_embedded_payload
+from generator.backends.markov.export import (
+    export_ship_png,
+    generated_parts_to_cosmoteer_parts,
+    generated_parts_to_toggle_states,
+    graph_to_generated_parts_payload,
+    make_minimal_ship_dict,
+)
 from markov.model import ShipPart
 from preprocessing.pipeline import run_pipeline
 
@@ -231,6 +239,7 @@ def test_pipeline_roundtrip_replays_all_vanilla_parts_from_graph(tmp_path: Path)
         output_dir=graph_dir,
         extracted_dir=extracted_dir,
         canonical_dir=canonical_dir,
+        opt_in_csv=tmp_path / "no-opt-in.csv",
         extract_workers=1,
         extract_executor="thread",
         canonicalize_workers=1,
@@ -296,6 +305,7 @@ def test_pipeline_roundtrip_replays_doors_from_graph(tmp_path: Path) -> None:
         output_dir=graph_dir,
         extracted_dir=extracted_dir,
         canonical_dir=canonical_dir,
+        opt_in_csv=tmp_path / "no-opt-in.csv",
         extract_workers=1,
         extract_executor="thread",
         canonicalize_workers=1,
@@ -385,3 +395,112 @@ def test_graph_replay_payload_preserves_unknown_part_nodes() -> None:
             "y": 0,
         },
     ]
+
+
+def test_graph_replay_carries_overclocked_flag_and_exports_toggle_states() -> None:
+    """Graph replay should carry overclocked=True and export PartUIToggleStates."""
+
+    # corridor has no save_rect offset, so stored location == footprint origin
+    graph_payload = {
+        "ship": {"name": "overclock-replay"},
+        "graphs": {
+            "A_structural_part_graph": {
+                "nodes": [
+                    {
+                        "id": 0,
+                        "part_id": "cosmoteer.corridor",
+                        "location_2x": [0, 0],
+                        "rotation": 0,
+                        "overclocked": True,
+                    },
+                    {
+                        "id": 1,
+                        "part_id": "cosmoteer.corridor",
+                        "location_2x": [4, 0],
+                        "rotation": 0,
+                    },
+                ],
+            }
+        },
+        "coord_transform": {"version": 1, "frame": "bbox_center_2x", "scale": 2, "center_2x": [0, 0]},
+    }
+
+    generated_payload = graph_to_generated_parts_payload(graph_payload)
+
+    # graph_to_generated_parts_payload should propagate overclocked
+    assert generated_payload["parts"][0].get("overclocked") is True
+    assert "overclocked" not in generated_payload["parts"][1]
+
+    # generated_parts_to_toggle_states should produce exactly one entry
+    toggle_states = generated_parts_to_toggle_states(generated_payload["parts"])
+    assert len(toggle_states) == 1
+    assert toggle_states[0]["Key"][1] == "thermal_overclock"
+    assert toggle_states[0]["Value"] == 1
+    key_ref = toggle_states[0]["Key"][0]
+    assert key_ref["ID"] == "cosmoteer.corridor"
+    assert key_ref["Rotation"] == 0
+    # corridor has no save_rect offset → stored location == footprint origin == (0, 0)
+    assert key_ref["Location"] == [0, 0]
+
+    # export_ship_png should embed PartUIToggleStates in the PNG
+    cosmoteer_parts = generated_parts_to_cosmoteer_parts(generated_payload["parts"])
+    ship_dict = make_minimal_ship_dict(cosmoteer_parts, toggle_states=toggle_states)
+    png_bytes = create_ship_png_bytes(ship_dict)
+    extracted = _decode_ship_data(_extract_embedded_payload(png_bytes))
+    assert "PartUIToggleStates" in extracted
+    assert len(extracted["PartUIToggleStates"]) == 1
+    extracted_toggle = extracted["PartUIToggleStates"][0]
+    assert extracted_toggle["Key"][1] == "thermal_overclock"
+    assert extracted_toggle["Value"] == 1
+    assert extracted_toggle["Key"][0]["ID"] == "cosmoteer.corridor"
+
+
+def test_toggle_state_key_includes_flip_flags() -> None:
+    """generated_parts_to_toggle_states must include FlipX/FlipY in the part key.
+
+    A flipped overclocked part must produce a PartUIToggleStates key that
+    carries the same FlipX/FlipY flags as the real part record, otherwise
+    the game cannot match the toggle state to the part and drops it on load.
+    """
+
+    parts = [
+        {
+            "part_id": "cosmoteer.corridor",
+            "rotation": 0,
+            "x": 0,
+            "y": 0,
+            "overclocked": True,
+            "flip_x": True,
+        },
+        {
+            "part_id": "cosmoteer.corridor",
+            "rotation": 0,
+            "x": 2,
+            "y": 0,
+            "overclocked": True,
+            "flip_y": True,
+        },
+        {
+            "part_id": "cosmoteer.corridor",
+            "rotation": 0,
+            "x": 4,
+            "y": 0,
+            "overclocked": True,
+            # no flip flags — key must not include FlipX or FlipY
+        },
+    ]
+
+    toggle_states = generated_parts_to_toggle_states(parts)
+    assert len(toggle_states) == 3
+
+    key_flip_x = toggle_states[0]["Key"][0]
+    assert key_flip_x.get("FlipX") is True
+    assert "FlipY" not in key_flip_x
+
+    key_flip_y = toggle_states[1]["Key"][0]
+    assert key_flip_y.get("FlipY") is True
+    assert "FlipX" not in key_flip_y
+
+    key_no_flip = toggle_states[2]["Key"][0]
+    assert "FlipX" not in key_no_flip
+    assert "FlipY" not in key_no_flip

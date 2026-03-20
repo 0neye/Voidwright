@@ -12,12 +12,13 @@ import orjson
 
 from common.files import inputs_needing_regeneration, iter_json_files, prune_stale_json_outputs, write_output_version
 from common.geometry import PartMeta, infer_meta, load_vanilla_part_geometry, normalize_part_id
+from common.save_rect import stored_location_to_origin
 from ship_layout.geometry import attachment_segments_2x
 from ship_layout.types import PlacedPart, Segment2x
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
 from .layout_helpers import door_adjacent_cells
 
-_GRAPH_SCHEMA_VERSION = 5
+_GRAPH_SCHEMA_VERSION = 7
 _GRAPH_SCHEMA_VERSION_KEY = "graph_schema_version"
 
 __all__ = [
@@ -402,6 +403,56 @@ def structural_door_edges(
     )
 
 
+def _build_part_toggle_states(
+    data: dict,
+) -> Dict[tuple[str, int, int], Dict[str, int]]:
+    """Return a mapping from normalized part coordinates to their toggle states.
+
+    Reads all ``PartUIToggleStates`` entries from the ship payload and groups
+    them by ``(normalized_part_id, norm_x, norm_y)``.  Each entry maps a
+    ``toggle_id`` string to its integer value.  Only entries where the stored
+    location can be resolved to footprint-origin coordinates are included.
+
+    The ``thermal_overclock`` toggle with value ``1`` is the conventional
+    overclocked marker used throughout the pipeline; callers that only care
+    about overclock status should check
+    ``states.get((part_id, x, y), {}).get("thermal_overclock", 0) == 1``.
+
+    Args:
+        data: Parsed canonical or extracted ship JSON payload.
+
+    Returns:
+        Mapping of ``(part_id, norm_x, norm_y)`` to ``{toggle_id: value}``
+        for every ``PartUIToggleStates`` entry that can be resolved.
+    """
+
+    result: Dict[tuple[str, int, int], Dict[str, int]] = {}
+    for entry in data.get("PartUIToggleStates") or []:
+        key = entry.get("Key")
+        value = entry.get("Value")
+        if not isinstance(key, list) or len(key) < 2:
+            continue
+        toggle_id = key[1]
+        if not isinstance(toggle_id, str):
+            continue
+        if not isinstance(value, (int, float)):
+            continue
+        part_ref = key[0]
+        if not isinstance(part_ref, dict):
+            continue
+        loc = part_ref.get("Location")
+        rotation = int(part_ref.get("Rotation", 0))
+        if not isinstance(loc, list) or len(loc) != 2:
+            continue
+        raw_id = part_ref.get("ID") or part_ref.get("IDString", "")
+        part_id = normalize_part_id(part_ref)
+        if not part_id:
+            continue
+        norm_x, norm_y = stored_location_to_origin(raw_id, rotation, loc)
+        result.setdefault((part_id, norm_x, norm_y), {})[toggle_id] = int(value)
+    return result
+
+
 def process_ship(ship_path: Path) -> dict:
     """Generate graph artifacts for one extracted or canonical ship JSON file."""
 
@@ -414,6 +465,7 @@ def process_ship(ship_path: Path) -> dict:
     raw_parts = data.get("Parts", [])
     parts = normalize_parts(raw_parts, center_2x=center_2x)
     doors = normalize_doors(data.get("Doors", []), center_2x=center_2x)
+    part_toggle_states = _build_part_toggle_states(data)
 
     part_records = []
     cell_to_parts: Dict[Coord, Set[int]] = defaultdict(set)
@@ -426,16 +478,33 @@ def process_ship(ship_path: Path) -> dict:
             unknown_part_ids[part["ID"]] += 1
         cells = part_cells(part, meta)
         walkable_cells = part_walkable_cells(part, meta)
+        loc = list(map(int, part["Location"]))
+        part_states = part_toggle_states.get((part["ID"], loc[0], loc[1]), {})
+        overclocked = part_states.get("thermal_overclock", 0) == 1
+
+        # Collect the current values of all UIToggles defined for this part.
+        # Only toggles registered in the vanilla geometry are included so the
+        # output stays well-scoped.  The value defaults to the toggle's game-file
+        # default when the ship save file does not override it.
+        toggle_values: Dict[str, int] = {}
+        for toggle_def in meta.ui_toggles:
+            saved_value = part_states.get(toggle_def.toggle_id)
+            toggle_values[toggle_def.toggle_id] = (
+                saved_value if saved_value is not None else toggle_def.default
+            )
+
         record = {
             "index": index,
             "part_id": part["ID"],
-            "location": list(map(int, part["Location"])),
+            "location": loc,
             "location_2x": part["Location2x"],
             "rotation": rotation,
             "width": meta.width,
             "height": meta.height,
             "traversable": meta.traversable,
             "meta_note": meta.note,
+            "overclocked": overclocked,
+            "toggle_values": toggle_values,
             "cells": cells,
             "walkable_cells": walkable_cells,
         }
@@ -457,6 +526,11 @@ def process_ship(ship_path: Path) -> dict:
             "traversable": record["traversable"],
             "walkable_cells_2x": _sorted_local_2x_cells(record["walkable_cells"], center_2x),
             "meta_note": record["meta_note"],
+            "overclocked": record["overclocked"],
+            # toggle_values: current UIToggle state for every toggle defined in
+            # the vanilla geometry for this part.  Absent toggles fall back to
+            # their game-file defaults.  Empty dict for parts with no UIToggles.
+            "toggle_values": record["toggle_values"],
         }
         for record in part_records
     ]
@@ -532,6 +606,16 @@ def process_ship(ship_path: Path) -> dict:
                 "Vanilla part traversability requires positive crew_speed_factor, while "
                 "walkable cells come from game-file unblocked_footprint_tiles. "
                 "Non-vanilla parts still use name-hint heuristics."
+            ),
+            "toggle_values_model": (
+                "Each structure node carries toggle_values: a dict of toggle_id->int for "
+                "every UIToggle component defined in vanilla_parts_full_geometry.json for "
+                "that part.  Values are read from PartUIToggleStates in the ship save file; "
+                "toggles not present in the save file fall back to their game-file defaults. "
+                "Parts with no UIToggle definitions have an empty dict.  Notable multi-mode "
+                "parts: cosmoteer.missile_launcher exposes missile_type (0=HE, 1=EMP, "
+                "2=Nuke, 3=Mine, 4=Thermal) and fire_mode (0=manual, 1=auto-target, "
+                "2=auto-fire)."
             ),
         },
         "graphs": {

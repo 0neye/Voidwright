@@ -166,14 +166,14 @@ python scripts/patch_ship_author.py <input.ship.png> <output.ship.png> <author>
 The codebase is split into purpose-specific packages:
 
 - **`preprocessing/`** - four-stage pipeline (extract -> canonicalize -> graphs -> door-rules). Each stage is its own submodule with a `main(argv)` and `build_parser()`. `pipeline.py` orchestrates all stages.
-- **`graph_expansion/`** - structural graph enrichment implemented as a pass-oriented pipeline. `structural.py` orchestrates an ordered list of passes under `graph_expansion/passes/` that add virtual nodes and cross-edges to preprocessing graph JSON: a global ship-info node, traversable-cluster super-nodes, hull-perimeter/interior classification nodes, 8-sector spatial zone nodes, a 22.5°-rotated 8-sector zone variant, weapon-group nodes, and a global virtual linker node.
+- **`graph_expansion/`** - structural graph enrichment implemented as a pass-oriented pipeline. `structural.py` orchestrates an ordered list of passes under `graph_expansion/passes/` that add virtual nodes and cross-edges to preprocessing graph JSON: a global ship-info node, traversable-cluster super-nodes, crew-access and core-support cross-edges, thermal-network virtual nodes, hull-perimeter/interior classification nodes, 8-sector spatial zone nodes, a 22.5°-rotated 8-sector zone variant, weapon-group nodes, and a global virtual linker node.
 - **`training/`** - backend-agnostic router. `router.py` resolves backend names; each backend under `training/backends/<name>/` registers its own CLI parser via `register_build_parser` / `register_validate_parser`.
 - **`generator/`** - backend-agnostic generation router. `generator/backends/markov/backend.py` wires CLI options; `generator/backends/markov/export.py` handles `.ship.png` encoding and roundtrip validation.
 - **`markov/`** - shared Markov internals used by both training and generation: `model.py`, `generation.py`, `inputs.py`, and related helpers. `symmetry.py` is a backward-compat shim; mirror computation lives in `ship_layout/symmetry.py`.
 - **`ship_layout/`** - shared structural geometry, connectivity, mirror symmetry (`symmetry.py`), and the `PlacementValidator` API (`validator.py`) used by generation and analysis.
-- **`visualizer/`** - generation event capture, icon loading, frame rendering, and MP4 export; also hosts a static visualization system (`cli.py`, `router.py`, `static_render.py`, `backends/`) that renders expanded graph data as static PNGs tinted by zone, cluster, or hull membership.
+- **`visualizer/`** - generation event capture, icon loading, frame rendering, and MP4 export; also hosts a static visualization system (`cli.py`, `router.py`, `static_render.py`, `backends/`) that renders expanded graph data as static PNGs tinted by zone, cluster, hull membership, or thermal-network membership; the thermal-networks backend also draws heat-exchanger absorption-radius overlays as stroke-only stencil outlines.
 - **`corpus/`** - rule-based corpus filtering. `filter.py` scans a graph JSON directory, applies an ordered list of `CorpusRule` objects, copies accepted files to an output directory, and writes `manifest.json` / `rejections.jsonl`. Rules live under `corpus/rules/` (`MaxSizeRule`, `RequireCrewRoomsRule`, `RequireReachableReactorRule`). `context.py` provides `CorpusContext` (lazy accessors over the parsed graph payload). The flat CLI (`corpus/cli.py`) is registered in `main.py` as the `corpus` domain.
-- **`common/`** - geometry metadata (`geometry.py`), file helpers, logging, and `common/cosmoteer/` (parser and encoder for `.ship.png` LSB payloads). `common/data/vanilla_parts_full_geometry.json` is the authoritative part geometry source.
+- **`common/`** - geometry metadata (`geometry.py`), heat-exchanger radius helpers (`heat_exchanger.py`), file helpers, logging, and `common/cosmoteer/` (parser and encoder for `.ship.png` LSB payloads). `common/data/vanilla_parts_full_geometry.json` is the authoritative part geometry source.
 
 ### Key data flow
 
@@ -203,6 +203,8 @@ Co-Authored-By: Model Name <noreply@lab.com>
 ## Major change workflow
 
 After making a major change or refactor and running appropriate tests, please update the AGENTS.md and CLAUDE.md as well as any applicable docs, when you deem it appropriate. If unsure, prompt the user.
+
+This includes files under `docs/`. For example: update `docs/graph-expansion.md` whenever passes, their behavior, output schema, or the expansion flow changes; update `docs/pipeline-and-artifacts.md` when preprocessing stages or artifact schemas change.
 
 ## Temp files
 
@@ -280,6 +282,32 @@ Structural passes (in pipeline order):
   `reactor_supports_energy_weapon`, `factory_supports_storage`,
   `factory_supports_ammo_weapon`, and `factory_supports_missile_weapon`.
   It reuses the same weighted cluster-local Dijkstra machinery as Layer 1.
+- `ThermalNetworksPass` identifies thermal connections between structural parts
+  by matching thermal port geometry in ship space (ports loaded from
+  `common.geometry`); overclock-conditional ports are only active when the
+  owning part has `overclocked=True`; overclocked engine rooms force all
+  directly connected thrusters to be overclocked too (already reflected in graph
+  data) and act as heat conduits — any thruster tile-adjacent to an overclocked
+  engine room gets an implicit thermal edge regardless of explicit port
+  alignment; railgun components (loaders, launchers, accelerators) receive
+  virtual barrel-axis thermal edges so the whole assembly always forms one
+  thermal unit; an OC conduit restriction suppresses port-matched edges between
+  an overclocked part and a non-overclocked non-conduit part (only dedicated
+  thermal conduits — heat pipes, radiators, exchangers, resonance beam turrets —
+  may bridge into an overclocked network via ports); connected components are
+  built via two-phase clustering: Phase 1 unions non-OC thermal conduits into
+  backbone spines, Phase 2 attaches non-backbone sub-groups as leaves without
+  merging separate backbones; non-backbone sub-groups that touch more than one
+  backbone cluster are added as leaves to all of them (multi-network leaf
+  membership — the same part may hold `thermal_member` edges to multiple
+  `thermal_network_N` virtual nodes); connected heat exchangers expand their
+  network by pulling in nearby overclocked non-conduit parts using a fixed
+  101-tile corner-cutout stencil (11×11 square with 5 cells removed from each
+  corner) centered on each exchanger tile — helpers live in
+  `common.heat_exchanger` and are memoized; isolated parts (no matching opposite
+  port) receive no node; the `thermal_network_by_part_id` annotation maps each
+  node ID to a list of network IDs (`Dict[int, List[str]]`; most nodes have a
+  single-element list, but multi-network leaf members have longer lists)
 - `HullPerimeterPass` classifies each part as perimeter or interior using 2x
   footprint cell neighbor checks; emits `hull_perimeter` / `interior` virtual
   nodes with `hull_member` / `interior_member` cross-edges
@@ -297,7 +325,7 @@ Structural passes (in pipeline order):
   `weapon_member` cross-edges
 - `GlobalVirtualLinkerPass` emits `global_virtual_member` cross-edges from the
   `global_ship` node to every other virtual node in the expansion graph, linking
-  the global anchor to all zone, cluster, hull, and weapon-group nodes
+  the global anchor to all zone, cluster, hull, thermal-network, and weapon-group nodes
 
 Contributor guidelines for graph expansion:
 
