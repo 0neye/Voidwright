@@ -248,7 +248,7 @@ The top-level payload also gets an `expansion` metadata block like:
       {"name": "traversable_clusters", "version": 2},
       {"name": "crew_access_layer1", "version": 2},
       {"name": "core_support_layer2", "version": 1},
-      {"name": "thermal_networks", "version": 9},
+      {"name": "thermal_networks", "version": 10},
       {"name": "hull_perimeter", "version": 1},
       {"name": "spatial_zones", "version": 1},
       {"name": "weapon_groups", "version": 1}
