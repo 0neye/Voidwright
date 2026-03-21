@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from training.backends.markov.backend import MarkovTrainingBackend
+from training.backends.hgt.backend import HGTTrainingBackend
 
 __all__ = ["get_training_backends", "get_training_backend"]
 
@@ -11,8 +12,10 @@ def get_training_backends() -> dict[str, object]:
     """Return the available training backend instances."""
 
     markov_backend = MarkovTrainingBackend()
+    hgt_backend = HGTTrainingBackend()
     return {
         markov_backend.name: markov_backend,
+        hgt_backend.name: hgt_backend,
     }
 
 

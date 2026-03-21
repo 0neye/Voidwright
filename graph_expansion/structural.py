@@ -52,7 +52,7 @@ __all__ = [
 ]
 
 EXPANSION_NAME = "structural"
-EXPANSION_VERSION = 12
+EXPANSION_VERSION = 13
 DEFAULT_PASSES: tuple[type[ExpansionPass], ...] = (
     BaseIndexesPass,
     TraversableClustersPass,

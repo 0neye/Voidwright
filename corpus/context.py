@@ -61,8 +61,8 @@ class CorpusContext:
 
     @cached_property
     def part_nodes(self) -> list[dict[str, Any]]:
-        """Structural part nodes (excludes virtual/other node types)."""
-        return [n for n in self._structural_nodes if n.get("kind") == "part"]
+        """Structural part nodes from the structural graph."""
+        return list(self._structural_nodes)
 
     @cached_property
     def part_count(self) -> int:
