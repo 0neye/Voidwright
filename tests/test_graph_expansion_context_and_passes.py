@@ -189,9 +189,14 @@ def test_global_virtual_linker_emits_node_and_no_edges_when_run_alone() -> None:
     expansion_graph = context.emitted_graphs[_EXPANSION_GRAPH_NAME]
 
     assert summary == {"global_nodes": 1, "global_virtual_member_edges": 0}
-    assert expansion_graph["nodes"] == [
-        {"id": GLOBAL_SHIP_NODE_ID, "kind": "global_ship_info", "ship": ship}
-    ]
+    global_node = expansion_graph["nodes"][0]
+    assert global_node["id"] == GLOBAL_SHIP_NODE_ID
+    assert global_node["kind"] == "global_ship_info"
+    assert global_node["ship"] == ship
+    assert global_node["total_parts"] == 2
+    assert global_node["occupied_cells"] == 0  # make_node nodes have no footprint
+    assert global_node["cluster_count"] == 0
+    assert global_node["thermal_count"] == 0
     assert expansion_graph["cross_edges"] == []
     assert expansion_graph["summary"] == {"global_ship_nodes": 1, "global_virtual_member_edges": 0}
 
@@ -216,9 +221,17 @@ def test_traversable_clusters_pass_records_annotations_and_emits_exact_clusters(
     assert context.get_annotation("traversable_clusters") == [[0, 1, 2]]
     assert context.get_annotation("cluster_by_part_id") == {0: 0, 1: 0, 2: 0}
     assert summary == {"cluster_count": 1, "super_member_edges": 3, "filtered_small_clusters": 0}
-    assert expansion_graph["nodes"] == [
-        {"id": "traversable_cluster_0", "kind": "traversable_cluster", "member_count": 3}
-    ]
+    cluster_node = expansion_graph["nodes"][0]
+    assert cluster_node["id"] == "traversable_cluster_0"
+    assert cluster_node["kind"] == "traversable_cluster"
+    assert cluster_node["member_count"] == 3
+    # All 3 members (0, 1, 2) appear in door edges → door_count == 3
+    assert cluster_node["door_count"] == 3
+    # Nodes 0, 1, 2 each have 1 walkable cell
+    assert cluster_node["walkable_cells_2x"] == 3
+    # make_node nodes have no location_2x → centroid defaults to 0.0
+    assert cluster_node["centroid_x"] == 0.0
+    assert cluster_node["centroid_y"] == 0.0
     assert expansion_graph["cross_edges"] == [
         {
             "source": "traversable_cluster_0",

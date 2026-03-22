@@ -266,7 +266,8 @@ Structural passes (in pipeline order):
   annotations, and emits traversable-cluster super-nodes with `super_member`
   cross-edges; single-part clusters and small clusters (combined walkable-cell
   footprint ≤ 16 2x-cells with no door edges) are filtered out and receive no
-  super-node or cross-edges
+  super-node or cross-edges; each cluster node carries `member_count`,
+  `door_count`, `walkable_cells_2x`, and `centroid_x`/`centroid_y`
 - `Layer1CrewAccessPass` emits direct structural-to-structural `crew_access_reactor`
   and `crew_access_factory` cross-edges. It uses weighted Dijkstra over exact
   walkable 2x cells plus door portals, and may repair legacy isolated crew rooms
@@ -305,7 +306,9 @@ Structural passes (in pipeline order):
   `common.heat_exchanger` and are memoized; isolated parts (no matching opposite
   port) receive no node; the `thermal_network_by_part_id` annotation maps each
   node ID to a list of network IDs (`Dict[int, List[str]]`; most nodes have a
-  single-element list, but multi-network leaf members have longer lists)
+  single-element list, but multi-network leaf members have longer lists); each
+  thermal network node carries `member_count`, `backbone_count` (non-OC conduit
+  members), and `overclocked_count`
 - `HullPerimeterPass` classifies each part as perimeter or interior using 2x
   footprint cell neighbor checks; emits `hull_perimeter` / `interior` virtual
   nodes with `hull_member` / `interior_member` cross-edges
@@ -313,15 +316,20 @@ Structural passes (in pipeline order):
   zones by 2x footprint cell angles from the origin; parts straddling a zone
   boundary receive `zone_member` edges in every touched zone; mirrored parts
   land in opposing zone pairs; the `zone_by_part_id` annotation is
-  `Dict[int, List[str]]`
+  `Dict[int, List[str]]`; each zone node carries `member_count`,
+  `occupied_cells`, and `avg_radius_2x`
 - `SpatialZonesRotatedPass` same semantics as `SpatialZonesPass` but sector
   boundaries rotated 22.5° so they fall on cardinal and semi-cardinal directions;
   zone IDs use the `zone_ene` / `zone_nne` / … 16-point naming convention;
-  cross-edges carry `kind="zone_member_rotated"`
+  cross-edges carry `kind="zone_member_rotated"`; same additional node fields
+  as `SpatialZonesPass`
 - `WeaponGroupsPass` detects weapon parts by `part_id` substring matching,
   groups them by type, and emits `weapon_group_<type>` virtual nodes with
-  `weapon_member` cross-edges
-- `GlobalVirtualLinkerPass` emits the `global_ship_info` node and
+  `weapon_member` cross-edges; each weapon group node carries `member_count`,
+  `centroid_x`/`centroid_y`, and `spatial_spread`
+- `GlobalVirtualLinkerPass` emits the `global_ship_info` node with the top-level
+  `ship` metadata and computed structural summary (`total_parts`, `occupied_cells`,
+  `footprint_w_2x`/`footprint_h_2x`, and virtual node kind counts), and
   `global_virtual_member` cross-edges from it to every other virtual node in the
   expansion graph; runs last so all zone, cluster, hull, thermal-network, and
   weapon-group nodes are present

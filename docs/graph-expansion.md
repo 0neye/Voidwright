@@ -116,6 +116,7 @@ Current structural passes:
   - computes crew-traversable clusters conservatively from doors plus corridor-like adjacency
   - stores transient annotations like `traversable_clusters` and `cluster_by_part_id`
   - emits traversable-cluster super-nodes and `super_member` cross-edges
+  - each cluster node carries: `member_count`, `door_count` (members with any door edge), `walkable_cells_2x` (total 2x walkable cells across members), `centroid_x`/`centroid_y` (mean `location_2x` of members)
 
 - `travel_support.py`
   - shared weighted-travel helpers for Layer 1 / Layer 2 passes
@@ -145,6 +146,7 @@ Current structural passes:
   - connected heat exchangers expand their network by pulling in nearby overclocked non-conduit parts using a fixed 101-tile corner-cutout stencil (11×11 square with 5 cells removed from each corner), centered on each exchanger tile; stencil helpers live in `common.heat_exchanger` and are memoized
   - connected components form `thermal_network_N` virtual nodes with `thermal_member` cross-edges; isolated parts receive no node
   - the `thermal_network_by_part_id` annotation maps each node ID to a `List[str]` of network IDs; most nodes have a single-element list, multi-network leaf members have longer lists
+  - each thermal network node carries: `member_count`, `backbone_count` (non-OC conduit members), `overclocked_count` (OC members)
 
 - `HullPerimeterPass`
   - classifies each part as `perimeter` (has at least one unoccupied 2x neighbor cell) or `interior`
@@ -157,20 +159,24 @@ Current structural passes:
   - stores `zone_by_part_id` annotation
   - emits one virtual zone node per populated zone with `zone_member` cross-edges
   - mirrored parts naturally land in opposing zone pairs, enabling downstream models to learn left-right symmetry as a co-occurrence pattern
+  - each zone node carries: `member_count`, `occupied_cells` (sum of `footprint.cell_count` for members), `avg_radius_2x` (mean distance from origin)
 
 - `SpatialZonesRotatedPass`
   - same semantics as `SpatialZonesPass` but sector boundaries rotated 22.5°, so they fall on cardinal and semi-cardinal directions
   - zone IDs use the 16-point naming convention (`zone_ene`, `zone_nne`, …)
   - cross-edges carry `kind="zone_member_rotated"`
+  - each zone node carries the same additional fields as `SpatialZonesPass`
 
 - `WeaponGroupsPass`
   - detects weapon parts by matching `part_id` against an ordered substring vocabulary (`cannon`, `railgun`, `missile_launcher`, …)
   - groups them by weapon type (first match wins)
   - stores `weapon_group_by_part_id` annotation
   - emits `weapon_group_<type>` virtual nodes with `weapon_member` cross-edges
+  - each weapon group node carries: `member_count`, `centroid_x`/`centroid_y` (mean `location_2x`), `spatial_spread` (RMS distance from centroid)
 
 - `GlobalVirtualLinkerPass`
-  - emits the single `global_ship_info` node containing the top-level `ship` metadata
+  - emits the single `global_ship_info` node with the top-level `ship` metadata and computed structural summary
+  - summary fields: `total_parts`, `occupied_cells` (sum of `footprint.cell_count`), `footprint_w_2x`/`footprint_h_2x` (bounding box of `location_2x`), and counts of each virtual node kind (`cluster_count`, `thermal_count`, `zone_count`, `zone_rot_count`, `weapon_grp_count`)
   - emits `global_virtual_member` cross-edges from that node to every other virtual node in the expansion graph
   - runs last so that all zone, cluster, hull, thermal-network, and weapon-group nodes are present when the linker edges are built
 
@@ -234,19 +240,19 @@ The top-level payload also gets an `expansion` metadata block like:
 {
   "expansion": {
     "backend": "structural",
-    "version": 11,
+    "version": 14,
     "graphs_added": ["X_expansion_structural"],
     "passes": [
       {"name": "base_indexes", "version": 1},
-      {"name": "traversable_clusters", "version": 2},
+      {"name": "traversable_clusters", "version": 4},
       {"name": "crew_access_layer1", "version": 2},
       {"name": "core_support_layer2", "version": 1},
-      {"name": "thermal_networks", "version": 10},
+      {"name": "thermal_networks", "version": 11},
       {"name": "hull_perimeter", "version": 1},
-      {"name": "spatial_zones", "version": 2},
-      {"name": "spatial_zones_rotated", "version": 2},
-      {"name": "weapon_groups", "version": 1},
-      {"name": "global_virtual_linker", "version": 2}
+      {"name": "spatial_zones", "version": 3},
+      {"name": "spatial_zones_rotated", "version": 3},
+      {"name": "weapon_groups", "version": 2},
+      {"name": "global_virtual_linker", "version": 3}
     ]
   }
 }

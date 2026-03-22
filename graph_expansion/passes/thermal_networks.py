@@ -723,7 +723,7 @@ class ThermalNetworksPass(ExpansionPass):
     """
 
     name = "thermal_networks"
-    version = 10
+    version = 11
     requires = ("base_indexes",)
     provides = ("thermal_networks", "thermal_network_by_part_id")
 
@@ -793,6 +793,8 @@ class ThermalNetworksPass(ExpansionPass):
 
         for cluster_index, members in enumerate(clusters):
             network_id = f"thermal_network_{cluster_index}"
+            backbone_count = 0
+            overclocked_count = 0
             for member_id in members:
                 network_by_part_id.setdefault(member_id, []).append(network_id)
                 thermal_member_edges.append(
@@ -804,11 +806,18 @@ class ThermalNetworksPass(ExpansionPass):
                         "kind": "thermal_member",
                     }
                 )
+                node = node_by_id.get(member_id, {})
+                if node.get("overclocked", False):
+                    overclocked_count += 1
+                elif is_thermal_conduit(str(node.get("part_id", ""))) or is_thermal_missile_launcher(node):
+                    backbone_count += 1
             thermal_nodes.append(
                 {
                     "id": network_id,
                     "kind": "thermal_network",
                     "member_count": len(members),
+                    "backbone_count": backbone_count,
+                    "overclocked_count": overclocked_count,
                 }
             )
 
