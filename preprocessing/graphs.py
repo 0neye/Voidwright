@@ -18,7 +18,7 @@ from ship_layout.types import PlacedPart, Segment2x
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
 from .layout_helpers import door_adjacent_cells
 
-_GRAPH_SCHEMA_VERSION = 8
+_GRAPH_SCHEMA_VERSION = 9
 _GRAPH_SCHEMA_VERSION_KEY = "graph_schema_version"
 
 __all__ = [

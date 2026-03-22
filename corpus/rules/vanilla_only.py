@@ -18,7 +18,7 @@ class VanillaOnlyRule(CorpusRule):
     """
 
     name = "vanilla_only"
-    version = 1
+    version = 2
 
     def evaluate(self, context: CorpusContext) -> RuleResult:
         for node in context.part_nodes:
