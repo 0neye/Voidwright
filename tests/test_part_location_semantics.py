@@ -152,6 +152,16 @@ def test_legacy_electro_bolter_alias_uses_disruptor_save_rect() -> None:
     assert stored_location_to_origin("cosmoteer.electro_bolter", 0, (10, 21)) == origin_location
 
 
+def test_legacy_other_id_alias_uses_canonical_save_rect() -> None:
+    """OtherIDs aliases should reuse the canonical save-rect offset logic."""
+
+    origin_location = (10, 20)
+    expected_stored_location = origin_to_stored_location("cosmoteer.point_defense", 0, origin_location)
+
+    assert origin_to_stored_location("point_defense", 0, origin_location) == expected_stored_location
+    assert stored_location_to_origin("point_defense", 0, expected_stored_location) == origin_location
+
+
 def parse_ship_png_bytes(png_bytes: bytes) -> dict:
     """Parse in-memory ship PNG bytes by writing a temporary ship file."""
 

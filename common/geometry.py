@@ -21,7 +21,35 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 VANILLA_PARTS_PATH = DATA_DIR / "vanilla_parts_full_geometry.json"
 VANILLA_NAMESPACE = "cosmoteer."
 PART_ID_ALIASES = {
+    # Legacy / alternate vanilla IDs declared via OtherIDs in terran rules.
+    "ammo_factory": "cosmoteer.factory_ammo",
+    "ammo_storage": "cosmoteer.storage_2x2",
+    "ammo_supply": "cosmoteer.factory_ammo",
+    "armor": "cosmoteer.armor",
+    "armor2": "cosmoteer.armor_2x1",
+    "armor_tri": "cosmoteer.armor_tri",
+    "armor_wedge": "cosmoteer.armor_wedge",
+    "aux_cockpit": "cosmoteer.control_room_small",
+    "big_cannon": "cosmoteer.cannon_large",
+    "big_thruster": "cosmoteer.thruster_large",
+    "bunk": "cosmoteer.crew_quarters_small",
+    "cockpit": "cosmoteer.control_room_small",
+    "conveyor": "cosmoteer.conveyor",
+    "corridor": "cosmoteer.corridor",
+    "cosmoteer.ammo_factory": "cosmoteer.factory_ammo",
+    "cosmoteer.ammo_storage": "cosmoteer.storage_2x2",
+    "cosmoteer.crew_quarters_small_a": "cosmoteer.crew_quarters_small",
+    "cosmoteer.crew_quarters_small_b": "cosmoteer.crew_quarters_small",
+    "cosmoteer.crew_quarters_small_c": "cosmoteer.crew_quarters_small",
+    "cosmoteer.deck_cannon": "cosmoteer.cannon_deck",
     "cosmoteer.electro_bolter": "cosmoteer.disruptor",
+    "cosmoteer.ftl_drive": "cosmoteer.hyperdrive_small",
+    "cosmoteer.heat_pipe": "cosmoteer.heat_pipe_adaptive",
+    "cosmoteer.heat_pipe_3way_junction": "cosmoteer.heat_pipe_adaptive",
+    "cosmoteer.heat_pipe_4way_junction": "cosmoteer.heat_pipe_adaptive",
+    "cosmoteer.heat_pipe_corner": "cosmoteer.heat_pipe_adaptive",
+    "cosmoteer.ion_beam_prism_45": "cosmoteer.ion_beam_prism",
+    "cosmoteer.laser_blaster": "cosmoteer.laser_blaster_small",
     # Legacy / alternate factory IDs declared via OtherIDs in vanilla rules.
     "cosmoteer.missile_factory": "cosmoteer.factory_he",
     "missile_factory": "cosmoteer.factory_he",
@@ -29,12 +57,41 @@ PART_ID_ALIASES = {
     "cosmoteer.missile_factory_he": "cosmoteer.factory_he",
     "cosmoteer.missile_factory_emp": "cosmoteer.factory_emp",
     "cosmoteer.missile_factory_nuke": "cosmoteer.factory_nuke",
+    "cosmoteer.missile_storage": "cosmoteer.storage_3x2",
     "cosmoteer.mine_factory": "cosmoteer.factory_mine",
+    "cosmoteer.resource_collector": "cosmoteer.manipulator_beam_emitter",
+    "cosmoteer.thermal_tank": "cosmoteer.thermal_battery",
+    "electro_bolt": "cosmoteer.disruptor",
+    "explosive_charge": "cosmoteer.explosive_charge",
+    "fire_extinguisher": "cosmoteer.fire_extinguisher",
+    "ftl_drive": "cosmoteer.hyperdrive_small",
+    "general_jobs": "cosmoteer.crew_quarters_med",
+    "ion_beam": "cosmoteer.ion_beam_emitter",
+    "med_cannon": "cosmoteer.cannon_med",
+    "med_thruster": "cosmoteer.thruster_med",
+    "missile_launcher": "cosmoteer.missile_launcher",
+    "missile_storage": "cosmoteer.storage_3x2",
+    "point_defense": "cosmoteer.point_defense",
+    "power_storage": "cosmoteer.power_storage",
+    "power_supply": "cosmoteer.power_storage",
+    "quarters": "cosmoteer.crew_quarters_med",
+    "reactor": "cosmoteer.reactor_small",
+    "sensor_array": "cosmoteer.sensor_array",
+    "shield_generator": "cosmoteer.shield_gen_small",
+    "small_laser": "cosmoteer.laser_blaster_small",
+    "small_thruster": "cosmoteer.thruster_small",
+    "structure": "cosmoteer.structure",
+    "structure_wedge": "cosmoteer.structure_wedge",
     # The _L variant of each flippable wedge is identical to the base part.
-    # Confirmed via armor_1x2_wedge.rules / structure_1x2_wedge.rules:
-    #   OtherIDs includes both _L and _R; FlipWhenLoadingIDs lists only _R.
+    # The handed _R variant must stay out of PART_ID_ALIASES because
+    # normalize_part_id() cannot also remap rotation. Those go in
+    # FLIP_H_PART_IDS so geometry lookup preserves the current wedge behavior.
     "cosmoteer.armor_1x2_wedge_L": "cosmoteer.armor_1x2_wedge",
+    "armor2_wedge_L": "cosmoteer.armor_1x2_wedge",
+    "Kroom.Armor_1x3_Wedge_L": "cosmoteer.armor_1x3_wedge",
     "cosmoteer.structure_1x2_wedge_L": "cosmoteer.structure_1x2_wedge",
+    "structure2_wedge_L": "cosmoteer.structure_1x2_wedge",
+    "Kroom.Structure_1x3_Wedge_L": "cosmoteer.structure_1x3_wedge",
 }
 
 # Part IDs that map to a base part with a horizontal flip (mirror) applied on
@@ -46,8 +103,12 @@ PART_ID_ALIASES = {
 # meaning a part saved at rotation r is equivalent to the base part at rotation
 # FLIP_H_ROTATE[r] after mirroring.
 FLIP_H_PART_IDS: Dict[str, str] = {
+    "armor2_wedge_R": "cosmoteer.armor_1x2_wedge",
     "cosmoteer.armor_1x2_wedge_R": "cosmoteer.armor_1x2_wedge",
+    "Kroom.Armor_1x3_Wedge_R": "cosmoteer.armor_1x3_wedge",
+    "structure2_wedge_R": "cosmoteer.structure_1x2_wedge",
     "cosmoteer.structure_1x2_wedge_R": "cosmoteer.structure_1x2_wedge",
+    "Kroom.Structure_1x3_Wedge_R": "cosmoteer.structure_1x3_wedge",
 }
 # Rotation remapping applied together with a horizontal flip (index = saved
 # rotation, value = equivalent base-part rotation after mirroring).
@@ -661,5 +722,4 @@ def iter_ship_files(input_dir: Path) -> Iterator[Path]:
     """Yield ship JSON files in deterministic order for corpus processing."""
 
     yield from sorted(p for p in input_dir.glob("*.json") if not p.name.startswith("."))
-
 
