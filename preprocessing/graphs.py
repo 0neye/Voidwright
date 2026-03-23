@@ -18,7 +18,7 @@ from ship_layout.types import PlacedPart, Segment2x
 from .concurrency import add_concurrency_arguments, run_auto_parallel_work, resolve_worker_count
 from .layout_helpers import door_adjacent_cells
 
-_GRAPH_SCHEMA_VERSION = 9
+_GRAPH_SCHEMA_VERSION = 11
 _GRAPH_SCHEMA_VERSION_KEY = "graph_schema_version"
 
 __all__ = [
@@ -103,6 +103,8 @@ def normalize_parts(parts: object, *, center_2x: Sequence[int] | None = None) ->
                 "Location": location,
                 "Location2x": location_2x,
                 "Rotation": int(part.get("Rotation", 0)),
+                "FlipX": bool(part.get("FlipX", False)),
+                "FlipY": bool(part.get("FlipY", False)),
             }
         )
     return normalized_parts
@@ -191,6 +193,8 @@ def _part_from_record(record: dict) -> dict:
         "rotation": int(record["rotation"]) % 4,
         "x": int(record["location"][0]),
         "y": int(record["location"][1]),
+        "flip_x": bool(record.get("flip_x", False)),
+        "flip_y": bool(record.get("flip_y", False)),
     }
 
 
@@ -500,6 +504,8 @@ def process_ship(ship_path: Path) -> dict:
             "location": loc,
             "location_2x": part["Location2x"],
             "rotation": rotation,
+            "flip_x": bool(part.get("FlipX", False)),
+            "flip_y": bool(part.get("FlipY", False)),
             "width": meta.width,
             "height": meta.height,
             "traversable": meta.traversable,
@@ -519,6 +525,8 @@ def process_ship(ship_path: Path) -> dict:
             "part_id": record["part_id"],
             "location_2x": record["location_2x"],
             "rotation": record["rotation"],
+            "flip_x": record["flip_x"],
+            "flip_y": record["flip_y"],
             "footprint": {
                 "cell_count": len(record["cells"]),
                 "width": record["width"],

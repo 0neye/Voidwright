@@ -227,9 +227,11 @@ def test_process_ship_uses_centered_2x_payloads(tmp_path: Path) -> None:
     node = graph_payload["graphs"]["A_structural_part_graph"]["nodes"][0]
     door = graph_payload["doors"][0]
 
-    assert graph_payload["schema_version"] == 9
+    assert graph_payload["schema_version"] == 11
     assert "location" not in node
     assert node["location_2x"] == [0, 0]
+    assert node["flip_x"] is False
+    assert node["flip_y"] is False
     assert node["walkable_cells_2x"] == [[0, 0]]
     assert "Cell" not in door
     assert door["Cell2x"] == [0, 2]
@@ -254,6 +256,8 @@ def test_graph_replay_converts_location_2x_nodes_for_export() -> None:
                         "part_id": "cosmoteer.corridor",
                         "location_2x": [0, 0],
                         "rotation": 0,
+                        "flip_x": True,
+                        "flip_y": True,
                     }
                 ]
             }
@@ -268,6 +272,8 @@ def test_graph_replay_converts_location_2x_nodes_for_export() -> None:
             "rotation": 0,
             "x": 4,
             "y": -1,
+            "flip_x": True,
+            "flip_y": True,
         }
     ]
     assert generated_payload["doors"] == [{"Cell": [4, -1], "Orientation": 1}]
