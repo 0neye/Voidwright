@@ -117,12 +117,16 @@ FLIP_H_PART_IDS: Dict[str, str] = {
 FLIP_H_ROTATE: Tuple[int, int, int, int] = (0, 3, 2, 1)
 
 # Canonical base part IDs that support a horizontal flip in real ship data.
-# These are exactly the target IDs from FLIP_H_PART_IDS (the wedge types whose
-# right-handed _R variants appear there).  When a part in this set has
+# Includes the four wedge types whose right-handed _R variants appear in
+# FLIP_H_PART_IDS, plus the two hybrid wedges which use flip_x=True directly
+# on their base ID without any _R alias.  When a part in this set has
 # flip_x=True in graph data, it should be encoded as a virtual training token
 # via encode_flipped_part_id() so the model learns the flipped geometry as a
 # distinct part type rather than via a separate imbalanced binary head.
-FLIPPABLE_PART_IDS: frozenset[str] = frozenset(FLIP_H_PART_IDS.values())
+FLIPPABLE_PART_IDS: frozenset[str] = frozenset(FLIP_H_PART_IDS.values()) | {
+    "cosmoteer.armor_structure_hybrid_1x2",
+    "cosmoteer.armor_structure_hybrid_1x3",
+}
 
 # Suffix appended to a base part ID to form the virtual training token for a
 # horizontally-flipped wedge.  Double-underscore prevents collision with any
