@@ -5,8 +5,9 @@ The script parses lines like:
 
     epoch 001/100  train_loss=2.4408  train_acc=0.5617  val_loss=0.8700  ...
 
-By default it reads ``models/hgt14/train_log.txt`` and writes
-``out/visualizations/loss-curves/hgt14-loss-curve.png``.
+The input log is provided explicitly. The default output path is derived from
+the log's parent directory name, so any run folder can be plotted without code
+changes.
 """
 
 from __future__ import annotations
@@ -32,10 +33,6 @@ _EPOCH_RE = re.compile(r"^epoch\s+(?P<epoch>\d+)/(?P<total>\d+)\s+(?P<body>.*)$"
 _FIELD_RE = re.compile(
     r"(?P<key>[A-Za-z0-9_]+)=(?P<value>-?(?:\d+(?:\.\d*)?|\.\d+)|nan|inf|-inf)"
 )
-
-_DEFAULT_INPUT = Path("models/hgt14/train_log.txt")
-_DEFAULT_OUTPUT = Path("out/visualizations/loss-curves/hgt14-loss-curve.png")
-
 
 @dataclass(frozen=True)
 class LossPoint:
@@ -292,8 +289,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--input",
         type=Path,
-        default=_DEFAULT_INPUT,
-        help="Training log to plot (default: models/hgt14/train_log.txt)",
+        required=True,
+        help="Training log to plot",
     )
     parser.add_argument(
         "--output",
