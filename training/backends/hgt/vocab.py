@@ -78,10 +78,31 @@ class VocabRegistry:
 
         Vanilla parts (from the geometry JSON) are indexed first for stability,
         then modded parts (alphabetically), then ``<unk>``, then ``<mask>``.
+
+        Virtual flipped-wedge tokens (e.g. ``cosmoteer.armor_1x2_wedge__flipped``)
+        are injected alongside their base IDs so the model can predict flipped
+        wedges as distinct part types rather than via a separate binary head.
         """
+        from common.geometry import (
+            FLIP_H_PART_IDS,
+            FLIPPABLE_PART_IDS,
+            FLIPPED_PART_ID_SUFFIX,
+        )
+
         geo = orjson.loads(_GEOMETRY_PATH.read_bytes())
-        vanilla_ids = sorted({p["id"].lower() for p in geo["parts"]})
+        base_vanilla: set[str] = {p["id"].lower() for p in geo["parts"]}
+        # Add a virtual __flipped token for every flippable wedge base ID so
+        # convert_graph() can encode flipped wedges as distinct vocabulary entries.
+        flipped_virtual: set[str] = {
+            pid.lower() + FLIPPED_PART_ID_SUFFIX for pid in FLIPPABLE_PART_IDS
+        }
+        vanilla_ids = sorted(base_vanilla | flipped_virtual)
         in_geometry: set[str] = set(vanilla_ids)
+        # FlipH alias keys (e.g. cosmoteer.armor_1x2_wedge_R) are vanilla parts
+        # stored under their raw IDs in graph JSON because normalize_part_id
+        # cannot simultaneously remap rotation.  Include them as vanilla so
+        # they don't inflate the modded count.
+        flip_h_vanilla: set[str] = {k.lower() for k in FLIP_H_PART_IDS}
 
         modded: set[str] = set()
         for path in sorted(input_dir.iterdir()):
@@ -97,7 +118,7 @@ class VocabRegistry:
                 .get("nodes", [])
             ):
                 pid = node.get("part_id", "").lower()
-                if pid and pid not in in_geometry:
+                if pid and pid not in in_geometry and pid not in flip_h_vanilla:
                     modded.add(pid)
 
         part_ids = vanilla_ids + sorted(modded) + [_UNK_TOKEN, _MASK_TOKEN]

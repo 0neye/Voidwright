@@ -8,20 +8,17 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch_geometric.nn import HGTConv
 
-from training.backends.hgt.convert import METADATA
+from training.backends.hgt.convert import build_metadata
 from training.backends.hgt.vocab import WEAPON_TYPES
 
 __all__ = ["ShipHGT", "SinusoidalPE"]
 
+ROTATION_MASK_IDX = 4
+
 # Virtual node types that can be dropped during training as conditioning dropout.
 _VIRTUAL_TYPES: tuple[str, ...] = (
-    "cluster", "thermal", "hull_peri", "hull_int",
+    "cluster", "thermal",
     "zone", "zone_rot", "weapon_grp", "ship_info",
-)
-
-# Simple virtual types whose input projection is a single scalar → hidden_dim.
-_SIMPLE_VIRT_TYPES: tuple[str, ...] = (
-    "cluster", "thermal", "hull_peri", "hull_int", "ship_info",
 )
 
 
@@ -53,7 +50,7 @@ class ShipHGT(nn.Module):
     ------------
     1. Per-node-type input projections map raw features to *hidden_dim*.
     2. Stacked :class:`~torch_geometric.nn.HGTConv` layers perform
-       heterogeneous message passing.
+       heterogeneous message passing with per-relation K/V transforms.
     3. A linear head predicts masked part_id values for the pretraining
        objective.
 
@@ -84,10 +81,11 @@ class ShipHGT(nn.Module):
         *,
         hidden_dim: int = 128,
         num_heads: int = 4,
-        num_layers: int = 3,
+        num_layers: int = 2,
         dropout: float = 0.1,
         pe_dim: int = 32,
         virtual_dropout_rate: float = 0.3,
+        reverse_edges: bool = True,
     ) -> None:
         super().__init__()
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
@@ -101,30 +99,47 @@ class ShipHGT(nn.Module):
         # --- Input projections: structural parts ---
         part_embed_dim = hidden_dim // 2  # 64 by default
         self.part_id_embed = nn.Embedding(vocab_size, part_embed_dim)
-        self.rotation_embed = nn.Embedding(4, 16)
+        self.rotation_embed = nn.Embedding(5, 16)
         self.loc_pe = SinusoidalPE(pe_dim)
         # part input: part_id_embed + rotation_embed + pe + [fp_cells, fp_w, fp_h, traversable, overclocked]
         part_in_dim = part_embed_dim + 16 + pe_dim + 5
         self.part_proj = nn.Linear(part_in_dim, hidden_dim)
 
         # --- Input projections: virtual nodes ---
-        # cluster / thermal / hull_peri / hull_int / ship_info: 1 scalar → hidden_dim
-        self.simple_virt_projs = nn.ModuleDict(
-            {ntype: nn.Linear(1, hidden_dim) for ntype in _SIMPLE_VIRT_TYPES}
-        )
 
-        # zone / zone_rot: 1 scalar + zone_label_embed(16) → hidden_dim
+        # ship_info: 8 features → hidden_dim
+        # [log1p(total_parts), log1p(occupied_cells), footprint_w_2x, footprint_h_2x,
+        #  log1p(cluster_count), log1p(thermal_count), log1p(weapon_grp_count), log1p(zone_count)]
+        self.ship_info_proj = nn.Linear(8, hidden_dim)
+
+        # cluster: 5 features → hidden_dim
+        # [log1p(member_count), log1p(door_count), log1p(walkable_cells_2x), centroid_x, centroid_y]
+        self.cluster_proj = nn.Linear(5, hidden_dim)
+
+        # thermal: 4 features → hidden_dim
+        # [log1p(member_count), log1p(backbone_count), log1p(overclocked_count), leaf_fraction]
+        self.thermal_proj = nn.Linear(4, hidden_dim)
+
+        # zone / zone_rot: 3 features + zone_label_embed(16) → hidden_dim
+        # [log1p(member_count), log1p(occupied_cells), avg_radius_2x]
         self.zone_label_embed = nn.Embedding(8, 16)
-        self.zone_proj = nn.Linear(1 + 16, hidden_dim)
-        self.zone_rot_proj = nn.Linear(1 + 16, hidden_dim)
+        self.zone_proj = nn.Linear(3 + 16, hidden_dim)
+        self.zone_rot_proj = nn.Linear(3 + 16, hidden_dim)
 
-        # weapon_grp: 1 scalar + weapon_type_embed(16) → hidden_dim
+        # weapon_grp: 4 features + weapon_type_embed(16) → hidden_dim
+        # [log1p(member_count), centroid_x, centroid_y, log1p(spatial_spread)]
         self.weapon_type_embed = nn.Embedding(len(WEAPON_TYPES), 16)
-        self.weapon_grp_proj = nn.Linear(1 + 16, hidden_dim)
+        self.weapon_grp_proj = nn.Linear(4 + 16, hidden_dim)
 
         # --- HGTConv layers ---
+        # HGTConv uses per-relation K/Q/V linear transforms (HeteroLinear) for
+        # each (head, edge_type) pair — significantly more expressive than
+        # grouped parameter sharing.  build_metadata() ensures only edge types
+        # that will actually appear in the data get allocated transforms.
+        metadata = build_metadata(reverse_edges=reverse_edges)
         self.convs = nn.ModuleList(
-            [HGTConv(hidden_dim, hidden_dim, METADATA, num_heads) for _ in range(num_layers)]
+            [HGTConv(hidden_dim, hidden_dim, metadata=metadata, heads=num_heads)
+             for _ in range(num_layers)]
         )
 
         self.dropout = nn.Dropout(dropout)
@@ -134,6 +149,8 @@ class ShipHGT(nn.Module):
         self.part_pred_head = nn.Linear(hidden_dim, vocab_size - 1)
 
         # --- Auxiliary masked prediction heads ---
+        # 4-class rotation prediction for masked parts.
+        self.rotation_pred_head = nn.Linear(hidden_dim, 4)
         # Binary overclocked status prediction for masked parts.
         self.overclock_pred_head = nn.Linear(hidden_dim, 1)
         # Edge existence prediction from concatenated endpoint embeddings.
@@ -158,24 +175,31 @@ class ShipHGT(nn.Module):
             feat = torch.cat([part_emb, rot_emb, pe, other], dim=1)
             x_dict["part"] = self.dropout(F.relu(self.part_proj(feat)))
 
-        # Simple virtual types (x is [K, 1])
-        for ntype in _SIMPLE_VIRT_TYPES:
-            if ntype in data.node_types and data[ntype].num_nodes > 0:
-                x_dict[ntype] = self.dropout(F.relu(self.simple_virt_projs[ntype](data[ntype].x)))
+        # ship_info: 8-feature conditioning node
+        if "ship_info" in data.node_types and data["ship_info"].num_nodes > 0:
+            x_dict["ship_info"] = self.dropout(F.relu(self.ship_info_proj(data["ship_info"].x)))
 
-        # Zone types (x is [Z, 1], also has zone_label)
+        # cluster: 5-feature traversable cluster nodes
+        if "cluster" in data.node_types and data["cluster"].num_nodes > 0:
+            x_dict["cluster"] = self.dropout(F.relu(self.cluster_proj(data["cluster"].x)))
+
+        # thermal: 4-feature thermal network nodes
+        if "thermal" in data.node_types and data["thermal"].num_nodes > 0:
+            x_dict["thermal"] = self.dropout(F.relu(self.thermal_proj(data["thermal"].x)))
+
+        # zone / zone_rot: 3-feature + zone label embedding
         for ntype, proj in (("zone", self.zone_proj), ("zone_rot", self.zone_rot_proj)):
             if ntype in data.node_types and data[ntype].num_nodes > 0:
-                mc = data[ntype].x                                  # [Z, 1]
-                zl = self.zone_label_embed(data[ntype].zone_label)  # [Z, 16]
-                x_dict[ntype] = self.dropout(F.relu(proj(torch.cat([mc, zl], dim=1))))
+                feat = data[ntype].x                                    # [Z, 3]
+                zl = self.zone_label_embed(data[ntype].zone_label)      # [Z, 16]
+                x_dict[ntype] = self.dropout(F.relu(proj(torch.cat([feat, zl], dim=1))))
 
-        # Weapon groups (x is [W, 1], also has weapon_type)
+        # weapon_grp: 4-feature + weapon type embedding
         if "weapon_grp" in data.node_types and data["weapon_grp"].num_nodes > 0:
-            mc = data["weapon_grp"].x                                         # [W, 1]
-            wt = self.weapon_type_embed(data["weapon_grp"].weapon_type)       # [W, 16]
+            feat = data["weapon_grp"].x                                          # [W, 4]
+            wt = self.weapon_type_embed(data["weapon_grp"].weapon_type)          # [W, 16]
             x_dict["weapon_grp"] = self.dropout(
-                F.relu(self.weapon_grp_proj(torch.cat([mc, wt], dim=1)))
+                F.relu(self.weapon_grp_proj(torch.cat([feat, wt], dim=1)))
             )
 
         return x_dict
@@ -209,26 +233,33 @@ class ShipHGT(nn.Module):
         x_dict = self._apply_virtual_dropout(x_dict)
 
         # ship_info is a source-only node (sends messages, never receives them).
-        # HGTConv drops it from its output, so we preserve the initial encoding
-        # and re-inject it before each layer so it can keep sending messages.
+        # HGTConv omits it from its output when it has no incoming edges, so
+        # preserve the initial encoding and re-inject it before each layer.
         source_only = {"ship_info": x_dict["ship_info"]} if "ship_info" in x_dict else {}
 
+        dropped = self._last_dropped_virtual_types
+
         for conv in self.convs:
-            # Filter to edge types whose src and tgt node types are present.
-            # Must be recomputed each layer: HGTConv drops types that received
-            # no messages, so x_dict keys may shrink between layers.
+            # Filter to edge types whose src and tgt are present AND not dropped.
+            # Excluding dropped types' edges prevents noisy gradient flow through
+            # disconnected virtual nodes with zero embeddings.
+            try:
+                raw_edges = data.edge_index_dict.items()
+            except KeyError:
+                raw_edges = []  # batch has no edges in any edge type
             edge_index_dict = {
                 k: v
-                for k, v in data.edge_index_dict.items()
+                for k, v in raw_edges
                 if k[0] in x_dict and k[2] in x_dict
+                and k[0] not in dropped and k[2] not in dropped
+                and v.shape[1] > 0
             }
-            x_dict = conv(x_dict, edge_index_dict)
-            # HGTConv can return None for node types that received no messages.
-            x_dict = {
-                k: self.dropout(F.relu(v))
-                for k, v in x_dict.items()
-                if v is not None
-            }
+            # HGTConv crashes on an empty edge dict (all types dropped by virtual
+            # dropout or absent in this batch). Skip message passing and keep the
+            # current embeddings; the prediction head still runs on them.
+            if edge_index_dict:
+                x_dict = conv(x_dict, edge_index_dict)
+                x_dict = {k: self.dropout(F.relu(v)) for k, v in x_dict.items()}
             # Restore source-only nodes with their fixed initial encoding.
             x_dict.update(source_only)
 
@@ -237,6 +268,10 @@ class ShipHGT(nn.Module):
     def predict_parts(self, x_dict: dict[str, Tensor]) -> Tensor:
         """Return part_id logits ``[N, num_classes]`` from encoded part features."""
         return self.part_pred_head(x_dict["part"])
+
+    def predict_rotation(self, x_dict: dict[str, Tensor], mask_indices: Tensor) -> Tensor:
+        """4-class rotation logits ``[M, 4]`` for masked part nodes."""
+        return self.rotation_pred_head(x_dict["part"][mask_indices])
 
     def predict_overclock(self, x_dict: dict[str, Tensor], mask_indices: Tensor) -> Tensor:
         """Binary overclock logits ``[M, 1]`` for masked part nodes."""

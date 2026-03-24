@@ -48,6 +48,8 @@ PART_ID_ALIASES = {
     "cosmoteer.heat_pipe_3way_junction": "cosmoteer.heat_pipe_adaptive",
     "cosmoteer.heat_pipe_4way_junction": "cosmoteer.heat_pipe_adaptive",
     "cosmoteer.heat_pipe_corner": "cosmoteer.heat_pipe_adaptive",
+    "cosmoteer.heat_pipe_junction": "cosmoteer.heat_pipe_adaptive",
+    "cosmoteer.heat_sink": "cosmoteer.heat_exchanger",
     "cosmoteer.ion_beam_prism_45": "cosmoteer.ion_beam_prism",
     "cosmoteer.laser_blaster": "cosmoteer.laser_blaster_small",
     # Legacy / alternate factory IDs declared via OtherIDs in vanilla rules.
@@ -114,6 +116,19 @@ FLIP_H_PART_IDS: Dict[str, str] = {
 # rotation, value = equivalent base-part rotation after mirroring).
 FLIP_H_ROTATE: Tuple[int, int, int, int] = (0, 3, 2, 1)
 
+# Canonical base part IDs that support a horizontal flip in real ship data.
+# These are exactly the target IDs from FLIP_H_PART_IDS (the wedge types whose
+# right-handed _R variants appear there).  When a part in this set has
+# flip_x=True in graph data, it should be encoded as a virtual training token
+# via encode_flipped_part_id() so the model learns the flipped geometry as a
+# distinct part type rather than via a separate imbalanced binary head.
+FLIPPABLE_PART_IDS: frozenset[str] = frozenset(FLIP_H_PART_IDS.values())
+
+# Suffix appended to a base part ID to form the virtual training token for a
+# horizontally-flipped wedge.  Double-underscore prevents collision with any
+# real game ID (which uses single underscores and namespace dots only).
+FLIPPED_PART_ID_SUFFIX: str = "__flipped"
+
 # These fallback substrings are only used for unknown or non-vanilla parts.
 # They are intentionally conservative and derived from the vanilla corpus:
 # categories with positive crew_speed_factor go here, while known zero-speed
@@ -171,6 +186,8 @@ __all__ = [
     "DATA_DIR",
     "FLIP_H_PART_IDS",
     "FLIP_H_ROTATE",
+    "FLIPPABLE_PART_IDS",
+    "FLIPPED_PART_ID_SUFFIX",
     "NON_TRAVERSABLE_HINTS",
     "PART_ID_ALIASES",
     "PartMeta",
@@ -182,6 +199,8 @@ __all__ = [
     "VANILLA_NAMESPACE",
     "VANILLA_PARTS_PATH",
     "VanillaPartGeometry",
+    "decode_flipped_part_id",
+    "encode_flipped_part_id",
     "infer_meta",
     "is_vanilla_part_id",
     "iter_ship_files",
@@ -605,6 +624,28 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
             )
 
     return result
+
+
+def encode_flipped_part_id(part_id: str) -> str:
+    """Return the virtual training token for a horizontally-flipped wedge.
+
+    The returned ID uses the lowercased *part_id* so it matches the lowercase
+    vocabulary entries built by ``VocabRegistry.build_from_corpus``.  The
+    caller is responsible for checking that *part_id* belongs to
+    ``FLIPPABLE_PART_IDS`` before calling this function.
+    """
+    return part_id.lower() + FLIPPED_PART_ID_SUFFIX
+
+
+def decode_flipped_part_id(virtual_id: str) -> Optional[str]:
+    """Return the base part ID when *virtual_id* is a flipped virtual token.
+
+    Returns ``None`` when *virtual_id* is not a virtual flipped token.  The
+    returned base ID is lowercased and matches entries in ``FLIPPABLE_PART_IDS``.
+    """
+    if virtual_id.endswith(FLIPPED_PART_ID_SUFFIX):
+        return virtual_id[: -len(FLIPPED_PART_ID_SUFFIX)]
+    return None
 
 
 def normalize_part_id(part: dict) -> Optional[str]:

@@ -51,10 +51,17 @@ class HGTTrainingBackend(TrainingBackend):
             action="store_true",
             help="Reconvert all graph files even if cached .pt files exist",
         )
+        parser.add_argument(
+            "--resume",
+            type=Path,
+            default=None,
+            metavar="CHECKPOINT",
+            help="Resume training from this checkpoint (.pt); skips completed epochs",
+        )
         # Model
         parser.add_argument("--hidden-dim", type=int, default=128)
         parser.add_argument("--num-heads", type=int, default=4)
-        parser.add_argument("--num-layers", type=int, default=3)
+        parser.add_argument("--num-layers", type=int, default=2)
         parser.add_argument("--dropout", type=float, default=0.1)
         parser.add_argument("--pe-dim", type=int, default=32,
                             help="Sinusoidal positional encoding dimension (must be div by 4)")
@@ -68,12 +75,16 @@ class HGTTrainingBackend(TrainingBackend):
                             help="Fraction of part nodes to mask per batch")
         parser.add_argument("--virtual-dropout", type=float, default=0.3,
                             help="Probability of zeroing each virtual node type per forward pass")
+        parser.add_argument("--rotation-mask-rate", type=float, default=0.0,
+                            help="Fraction of masked part nodes whose rotation is also masked and predicted (0 = disabled)")
         parser.add_argument("--overclock-mask-rate", type=float, default=0.15,
                             help="Fraction of part nodes whose overclocked flag is masked")
         parser.add_argument("--door-mask-rate", type=float, default=0.15,
                             help="Fraction of door edges removed before message passing for link prediction")
         parser.add_argument("--virtual-edge-mask-rate", type=float, default=0.0,
                             help="Fraction of virtual membership edges removed for link prediction (0 = disabled)")
+        parser.add_argument("--no-reverse-edges", action="store_true",
+                            help="Disable reverse membership edges (part → virtual)")
         parser.add_argument("--val-split", type=float, default=0.1,
                             help="Fraction of graphs held out for validation")
         parser.add_argument("--seed", type=int, default=42)
@@ -82,6 +93,12 @@ class HGTTrainingBackend(TrainingBackend):
             type=str,
             default=None,
             help="Compute device (e.g. 'cuda', 'cpu'). Defaults to cuda if available.",
+        )
+        parser.add_argument(
+            "--amp",
+            action="store_true",
+            default=False,
+            help="Enable automatic mixed precision (fp16) training. Reduces GPU memory usage.",
         )
 
     def register_validate_parser(self, backend_subparsers: argparse._SubParsersAction) -> None:
@@ -122,11 +139,19 @@ class HGTTrainingBackend(TrainingBackend):
         )
         parser.add_argument("--batch-size", type=int, default=8)
         parser.add_argument("--mask-rate", type=float, default=0.15)
+        parser.add_argument("--rotation-mask-rate", type=float, default=0.0)
         parser.add_argument("--overclock-mask-rate", type=float, default=0.15)
         parser.add_argument("--door-mask-rate", type=float, default=0.15)
         parser.add_argument("--virtual-edge-mask-rate", type=float, default=0.0)
+        parser.add_argument("--no-reverse-edges", action="store_true")
         parser.add_argument("--seed", type=int, default=42)
         parser.add_argument("--device", type=str, default=None)
+        parser.add_argument(
+            "--amp",
+            action="store_true",
+            default=False,
+            help="Enable automatic mixed precision (fp16) evaluation on CUDA.",
+        )
 
     # ------------------------------------------------------------------
     # Build
@@ -140,6 +165,7 @@ class HGTTrainingBackend(TrainingBackend):
         from training.backends.hgt.model import ShipHGT
         from training.backends.hgt.train import (
             eval_epoch,
+            load_checkpoint,
             load_dataset,
             save_checkpoint,
             train_epoch,
@@ -175,8 +201,10 @@ class HGTTrainingBackend(TrainingBackend):
 
         # Convert corpus to .pt cache
         print(f"{prefix} converting graphs to {cache_dir} ...")
+        reverse_edges = not args.no_reverse_edges
         pt_paths = convert_corpus(
-            args.input_dir, cache_dir, vocab, force=args.force_reconvert
+            args.input_dir, cache_dir, vocab, force=args.force_reconvert,
+            reverse_edges=reverse_edges,
         )
         if not pt_paths:
             print(f"{prefix} ERROR: no graphs found in {args.input_dir}")
@@ -207,6 +235,7 @@ class HGTTrainingBackend(TrainingBackend):
             "dropout": args.dropout,
             "pe_dim": args.pe_dim,
             "virtual_dropout_rate": args.virtual_dropout,
+            "reverse_edges": reverse_edges,
         }
         model = ShipHGT(**model_config).to(device)
         n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -215,35 +244,69 @@ class HGTTrainingBackend(TrainingBackend):
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=args.lr, weight_decay=args.weight_decay
         )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
-        # Training loop
+        use_amp = args.amp and device.type == "cuda"
+        scaler = torch.amp.GradScaler("cuda") if use_amp else None
+        if use_amp:
+            print(f"{prefix} AMP enabled (fp16 autocast)")
+
+        # Resume from checkpoint if requested.
+        start_epoch = 1
         best_val_loss = float("inf")
-        best_ckpt = args.output_dir / "best.pt"
-        log_lines: list[str] = []
+        if args.resume:
+            print(f"{prefix} resuming from {args.resume}")
+            ckpt = load_checkpoint(args.resume, model, optimizer, scaler=scaler)
+            start_epoch = ckpt["epoch"] + 1
+            if ckpt.get("metrics") and "loss" in ckpt["metrics"]:
+                best_val_loss = ckpt["metrics"]["loss"]
+            print(f"{prefix} continuing from epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")
 
-        for epoch in range(1, args.epochs + 1):
+        # last_epoch=-1 on fresh start; ckpt["epoch"]-1 when resuming so the
+        # cosine schedule continues from where it left off.
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.epochs, last_epoch=start_epoch - 2
+        )
+
+        best_ckpt = args.output_dir / "best.pt"
+        val_metrics: dict[str, float] = {}
+        log_path = args.output_dir / "train_log.txt"
+        # Open in append mode so resumed runs extend the existing log.
+        log_file = log_path.open("a", encoding="utf-8")
+
+        for epoch in range(start_epoch, args.epochs + 1):
             train_metrics = train_epoch(
                 model, train_loader, optimizer, device, args.mask_rate, vocab.mask_idx,
+                rotation_mask_rate=args.rotation_mask_rate,
                 overclock_mask_rate=args.overclock_mask_rate,
                 door_mask_rate=args.door_mask_rate,
                 virtual_edge_mask_rate=args.virtual_edge_mask_rate,
+                scaler=scaler,
             )
             val_metrics = eval_epoch(
                 model, val_loader, device, args.mask_rate, vocab.mask_idx,
+                rotation_mask_rate=args.rotation_mask_rate,
                 overclock_mask_rate=args.overclock_mask_rate,
                 door_mask_rate=args.door_mask_rate,
                 virtual_edge_mask_rate=args.virtual_edge_mask_rate,
+                amp=use_amp,
             )
             scheduler.step()
 
             aux = []
+            if args.rotation_mask_rate > 0.0:
+                aux.append(f"rot_loss={train_metrics['rotation_loss']:.4f}/{val_metrics['rotation_loss']:.4f}")
+                aux.append(f"rot_acc={val_metrics['rotation_acc']:.4f}")
             if args.overclock_mask_rate > 0.0:
-                aux.append(f"oc_loss={train_metrics['overclock_loss']:.4f}")
+                aux.append(f"oc_loss={train_metrics['overclock_loss']:.4f}/{val_metrics['overclock_loss']:.4f}")
+                aux.append(f"oc_acc={val_metrics['overclock_acc']:.4f}")
             if args.door_mask_rate > 0.0:
-                aux.append(f"door_loss={train_metrics['door_loss']:.4f}")
+                aux.append(f"door_loss={train_metrics['door_loss']:.4f}/{val_metrics['door_loss']:.4f}")
             if args.virtual_edge_mask_rate > 0.0:
-                aux.append(f"virt_loss={train_metrics['virtual_edge_loss']:.4f}")
+                aux.append(f"virt_loss={train_metrics['virtual_edge_loss']:.4f}/{val_metrics['virtual_edge_loss']:.4f}")
+            if train_metrics["skipped_batches"] > 0.0:
+                aux.append(f"skipped_batches={int(train_metrics['skipped_batches'])}")
+            if use_amp:
+                aux.append(f"amp_scale={train_metrics['scaler_scale']:.1f}")
             aux_str = ("  " + "  ".join(aux)) if aux else ""
             line = (
                 f"epoch {epoch:03d}/{args.epochs}  "
@@ -252,19 +315,35 @@ class HGTTrainingBackend(TrainingBackend):
                 f"val_top5={val_metrics['top5_acc']:.4f}"
                 f"{aux_str}"
             )
-            print(f"{prefix} {line}")
-            log_lines.append(line)
+            print(f"{prefix} {line}", flush=True)
+            log_file.write(line + "\n")
+            log_file.flush()
 
             if val_metrics["loss"] < best_val_loss:
                 best_val_loss = val_metrics["loss"]
-                save_checkpoint(best_ckpt, model, optimizer, epoch, val_metrics, model_config)
-                print(f"{prefix}   → new best checkpoint saved")
+                save_checkpoint(
+                    best_ckpt,
+                    model,
+                    optimizer,
+                    epoch,
+                    val_metrics,
+                    model_config,
+                    scaler=scaler,
+                )
+                print(f"{prefix}   → new best checkpoint saved", flush=True)
 
-        # Save final checkpoint and training log
+        log_file.close()
+
+        # Save final checkpoint
         save_checkpoint(
-            args.output_dir / "last.pt", model, optimizer, args.epochs, val_metrics, model_config
+            args.output_dir / "last.pt",
+            model,
+            optimizer,
+            args.epochs,
+            val_metrics,
+            model_config,
+            scaler=scaler,
         )
-        (args.output_dir / "train_log.txt").write_text("\n".join(log_lines) + "\n", encoding="utf-8")
         print(f"{prefix} training complete. Best val_loss={best_val_loss:.4f}")
         print(f"{prefix} outputs written to {args.output_dir}")
         return 0
@@ -289,13 +368,16 @@ class HGTTrainingBackend(TrainingBackend):
             device = torch.device(args.device)
         else:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        use_amp = args.amp and device.type == "cuda"
 
         torch.manual_seed(args.seed)
 
         vocab = VocabRegistry.load(args.vocab)
 
         cache_dir = args.cache_dir or (args.checkpoint.parent / "val_cache")
-        pt_paths = convert_corpus(args.input_dir, cache_dir, vocab, force=False)
+        reverse_edges = not args.no_reverse_edges
+        pt_paths = convert_corpus(args.input_dir, cache_dir, vocab, force=False,
+                                  reverse_edges=reverse_edges)
         if not pt_paths:
             print(f"{prefix} ERROR: no graphs found in {args.input_dir}")
             return 1
@@ -311,9 +393,11 @@ class HGTTrainingBackend(TrainingBackend):
 
         metrics = eval_epoch(
             model, loader, device, args.mask_rate, vocab.mask_idx,
+            rotation_mask_rate=args.rotation_mask_rate,
             overclock_mask_rate=args.overclock_mask_rate,
             door_mask_rate=args.door_mask_rate,
             virtual_edge_mask_rate=args.virtual_edge_mask_rate,
+            amp=use_amp,
         )
         print(f"{prefix} loss={metrics['loss']:.4f}  acc={metrics['acc']:.4f}  top5={metrics['top5_acc']:.4f}")
 
