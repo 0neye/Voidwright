@@ -121,6 +121,13 @@ python main.py training validate markov \
   --output models/markov/coordinate-validation.v2.json
 ```
 
+**Compute HGT corpus statistics (mask/loss calibration):**
+```bash
+python main.py training stats hgt \
+  --input-dir expanded_ship_graphs \
+  --output models/hgt/corpus-stats.json
+```
+
 **Generate ships:**
 ```bash
 python main.py generator generate markov \
@@ -167,7 +174,7 @@ The codebase is split into purpose-specific packages:
 
 - **`preprocessing/`** - four-stage pipeline (extract -> canonicalize -> graphs -> door-rules). Each stage is its own submodule with a `main(argv)` and `build_parser()`. `pipeline.py` orchestrates all stages.
 - **`graph_expansion/`** - structural graph enrichment implemented as a pass-oriented pipeline. `structural.py` orchestrates an ordered list of passes under `graph_expansion/passes/` that add virtual nodes and cross-edges to preprocessing graph JSON: a global ship-info node, traversable-cluster super-nodes, crew-access and core-support cross-edges, thermal-network virtual nodes, hull-perimeter/interior classification nodes, 8-sector spatial zone nodes, a 22.5°-rotated 8-sector zone variant, weapon-group nodes, and a global virtual linker node.
-- **`training/`** - backend-agnostic router. `router.py` resolves backend names; each backend under `training/backends/<name>/` registers its own CLI parser via `register_build_parser` / `register_validate_parser`.
+- **`training/`** - backend-agnostic router. `router.py` resolves backend names; each backend under `training/backends/<name>/` registers its own CLI parser via `register_build_parser` / `register_validate_parser` / `register_stats_parser`.
 - **`generator/`** - backend-agnostic generation router. `generator/backends/markov/backend.py` wires CLI options; `generator/backends/markov/export.py` handles `.ship.png` encoding and roundtrip validation.
 - **`markov/`** - shared Markov internals used by both training and generation: `model.py`, `generation.py`, `inputs.py`, and related helpers. `symmetry.py` is a backward-compat shim; mirror computation lives in `ship_layout/symmetry.py`.
 - **`ship_layout/`** - shared structural geometry, connectivity, mirror symmetry (`symmetry.py`), and the `PlacementValidator` API (`validator.py`) used by generation and analysis.

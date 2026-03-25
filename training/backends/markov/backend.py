@@ -24,6 +24,13 @@ class MarkovTrainingBackend(TrainingBackend):
 
     name = "markov"
 
+    def register_stats_parser(self, backend_subparsers: argparse._SubParsersAction) -> None:
+        """Register a placeholder stats parser for the Markov backend."""
+        backend_subparsers.add_parser(
+            self.name,
+            help="Markov backend does not currently expose corpus stats",
+        )
+
     def register_build_parser(self, backend_subparsers: argparse._SubParsersAction) -> None:
         """Register the Markov build parser."""
 
@@ -160,3 +167,9 @@ class MarkovTrainingBackend(TrainingBackend):
         )
         print(f"[training:markov] validation written to {args.output}")
         return 0
+
+    def run_stats(self, args: argparse.Namespace) -> int:
+        """Return an informative error until Markov stats are implemented."""
+        del args
+        print("[training:markov] ERROR: stats is not implemented for the markov backend")
+        return 2

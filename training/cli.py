@@ -22,16 +22,22 @@ def build_parser() -> argparse.ArgumentParser:
         "build",
         help="Build a model for a specific training backend",
     )
+    stats_parser = action_subparsers.add_parser(
+        "stats",
+        help="Compute backend-specific corpus statistics",
+    )
     validate_parser = action_subparsers.add_parser(
         "validate",
         help="Run backend-specific validation",
     )
 
     build_backend_subparsers = build_parser.add_subparsers(dest="backend", required=True)
+    stats_backend_subparsers = stats_parser.add_subparsers(dest="backend", required=True)
     validate_backend_subparsers = validate_parser.add_subparsers(dest="backend", required=True)
 
     for backend in get_training_backends().values():
         backend.register_build_parser(build_backend_subparsers)
+        backend.register_stats_parser(stats_backend_subparsers)
         backend.register_validate_parser(validate_backend_subparsers)
 
     return parser
@@ -46,6 +52,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.action == "build":
         return backend.run_build(args)
+    if args.action == "stats":
+        return backend.run_stats(args)
     if args.action == "validate":
         return backend.run_validate(args)
 
