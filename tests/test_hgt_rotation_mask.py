@@ -48,6 +48,31 @@ class _OverclockBatch:
         raise KeyError(key)
 
 
+class _NoOverclockBatch:
+    def __init__(self) -> None:
+        self.part = type(
+            "PartStore",
+            (),
+            {
+                "num_nodes": 4,
+                "x": torch.tensor(
+                    [
+                        [0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0],
+                    ],
+                    dtype=torch.float,
+                ),
+            },
+        )()
+
+    def __getitem__(self, key: str):
+        if key == "part":
+            return self.part
+        raise KeyError(key)
+
+
 def test_apply_rotation_mask_uses_dedicated_mask_idx(monkeypatch) -> None:
     batch = _RotationBatch()
 
@@ -65,12 +90,29 @@ def test_ship_hgt_allocates_rotation_mask_embedding_slot() -> None:
     assert model.rotation_embed.num_embeddings == ROTATION_MASK_IDX + 1
 
 
-def test_apply_overclock_mask_uses_dedicated_mask_value(monkeypatch) -> None:
+def test_apply_overclock_mask_uses_dedicated_mask_value() -> None:
     batch = _OverclockBatch()
 
-    monkeypatch.setattr(torch, "randperm", lambda n, device=None: torch.tensor([1, 3, 0, 2], device=device))
     _, indices, labels = apply_overclock_mask(batch, mask_rate=0.5)
 
     assert indices.tolist() == [1, 3]
     assert labels.tolist() == [1.0, 1.0]
     assert batch["part"].x[:, 6].tolist() == [0.0, OVERCLOCK_MASK_VALUE, 0.0, OVERCLOCK_MASK_VALUE]
+
+
+def test_apply_overclock_mask_falls_back_to_uniform_when_no_oc(monkeypatch) -> None:
+    batch = _NoOverclockBatch()
+    monkeypatch.setattr(torch, "randperm", lambda n, device=None: torch.tensor([2, 0, 1, 3], device=device))
+    _, indices, labels = apply_overclock_mask(batch, mask_rate=0.5)
+
+    assert indices.tolist() == [2, 0]
+    assert labels.tolist() == [0.0, 0.0]
+    assert batch["part"].x[:, 6].tolist() == [OVERCLOCK_MASK_VALUE, 0.0, OVERCLOCK_MASK_VALUE, 0.0]
+
+
+def test_apply_overclock_mask_keeps_all_positives_when_over_budget() -> None:
+    batch = _OverclockBatch()
+    _, indices, labels = apply_overclock_mask(batch, mask_rate=0.25)
+
+    assert indices.tolist() == [1, 3]
+    assert labels.tolist() == [1.0, 1.0]

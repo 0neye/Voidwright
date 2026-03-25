@@ -6,7 +6,8 @@ from types import SimpleNamespace
 
 import torch
 
-from training.backends.hgt.backend import HGTTrainingBackend
+import training.cli
+from training.backends.hgt.backend import HGTTrainingBackend, _resolve_virtual_mask_rates
 from training.backends.hgt import train as train_module
 from training.backends.hgt.train import load_checkpoint, save_checkpoint, train_epoch
 
@@ -146,6 +147,42 @@ def test_hgt_validate_parser_accepts_amp_flag() -> None:
     )
 
     assert args.amp is True
+
+
+def test_hgt_stats_parser_is_registered() -> None:
+    parser = training.cli.build_parser()
+    args = parser.parse_args(
+        [
+            "stats",
+            "hgt",
+            "--input-dir",
+            "graphs",
+        ]
+    )
+    assert args.action == "stats"
+    assert args.backend == "hgt"
+
+
+def test_resolve_virtual_mask_rates_uses_legacy_default() -> None:
+    args = argparse.Namespace(
+        virtual_edge_mask_rate=0.3,
+        virtual_edge_mask_rate_dense=None,
+        virtual_edge_mask_rate_sparse=None,
+    )
+    dense, sparse = _resolve_virtual_mask_rates(args)
+    assert dense == 0.3
+    assert sparse == 0.3
+
+
+def test_resolve_virtual_mask_rates_prefers_split_values() -> None:
+    args = argparse.Namespace(
+        virtual_edge_mask_rate=0.3,
+        virtual_edge_mask_rate_dense=0.2,
+        virtual_edge_mask_rate_sparse=0.6,
+    )
+    dense, sparse = _resolve_virtual_mask_rates(args)
+    assert dense == 0.2
+    assert sparse == 0.6
 
 
 def test_hgt_train_epoch_skips_nonfinite_loss_batches(monkeypatch) -> None:

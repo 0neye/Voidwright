@@ -7,6 +7,10 @@ import logging
 import random
 from pathlib import Path
 
+import orjson
+import torch
+
+from training.backends.hgt.stats import collect_corpus_stats, rotation_class_weights_from_stats
 from training.base import TrainingBackend
 
 __all__ = ["HGTTrainingBackend"]
@@ -14,10 +18,58 @@ __all__ = ["HGTTrainingBackend"]
 log = logging.getLogger(__name__)
 
 
+def _resolve_virtual_mask_rates(args: argparse.Namespace) -> tuple[float, float]:
+    """Resolve dense/sparse virtual mask rates with legacy flag compatibility."""
+    legacy = args.virtual_edge_mask_rate
+    dense = args.virtual_edge_mask_rate_dense
+    sparse = args.virtual_edge_mask_rate_sparse
+    if legacy is not None and dense is None:
+        dense = legacy
+    if legacy is not None and sparse is None:
+        sparse = legacy
+    return float(dense or 0.0), float(sparse or 0.0)
+
+
+def _parse_rotation_weights_arg(value: str) -> torch.Tensor | None:
+    """Parse rotation class-weight CLI argument."""
+    lowered = value.strip().lower()
+    if lowered == "none":
+        return None
+    if lowered == "auto":
+        raise ValueError("'auto' requires corpus stats and cannot be parsed directly")
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    if len(parts) != 4:
+        raise ValueError("rotation class weights must have exactly four comma-separated values")
+    try:
+        parsed = [float(part) for part in parts]
+    except ValueError as exc:
+        raise ValueError("rotation class weights must be floats") from exc
+    return torch.tensor(parsed, dtype=torch.float)
+
+
 class HGTTrainingBackend(TrainingBackend):
     """Train a Heterogeneous Graph Transformer encoder on expanded ship graphs."""
 
     name = "hgt"
+
+    def register_stats_parser(self, backend_subparsers: argparse._SubParsersAction) -> None:
+        parser = backend_subparsers.add_parser(
+            self.name,
+            help="Compute corpus statistics used to calibrate HGT masking/loss settings",
+        )
+        parser.add_argument(
+            "--input-dir",
+            type=Path,
+            required=True,
+            metavar="DIR",
+            help="Directory containing expanded ship graph JSON files",
+        )
+        parser.add_argument(
+            "--output",
+            type=Path,
+            default=Path("models/hgt/corpus-stats.json"),
+            help="Path to write the corpus stats JSON report",
+        )
 
     def register_build_parser(self, backend_subparsers: argparse._SubParsersAction) -> None:
         parser = backend_subparsers.add_parser(
@@ -77,12 +129,26 @@ class HGTTrainingBackend(TrainingBackend):
                             help="Probability of zeroing each virtual node type per forward pass")
         parser.add_argument("--rotation-mask-rate", type=float, default=0.0,
                             help="Fraction of masked part nodes whose rotation is also masked and predicted (0 = disabled)")
+        parser.add_argument(
+            "--rotation-class-weights",
+            type=str,
+            default="auto",
+            help="Rotation CE class weights: auto, none, or comma-separated w0,w1,w2,w3",
+        )
         parser.add_argument("--overclock-mask-rate", type=float, default=0.15,
-                            help="Fraction of part nodes whose overclocked flag is masked")
+                            help="Overclock masking budget. Targeted masking always includes OC positives, then pads with non-OC nodes")
         parser.add_argument("--door-mask-rate", type=float, default=0.15,
                             help="Fraction of door edges removed before message passing for link prediction")
-        parser.add_argument("--virtual-edge-mask-rate", type=float, default=0.0,
-                            help="Fraction of virtual membership edges removed for link prediction (0 = disabled)")
+        parser.add_argument(
+            "--virtual-edge-mask-rate",
+            type=float,
+            default=None,
+            help="Legacy single virtual-edge mask rate. If set and split rates are omitted, applies to dense and sparse groups",
+        )
+        parser.add_argument("--virtual-edge-mask-rate-dense", type=float, default=None,
+                            help="Mask rate for dense virtual memberships (cluster)")
+        parser.add_argument("--virtual-edge-mask-rate-sparse", type=float, default=None,
+                            help="Mask rate for sparse virtual memberships (thermal/weapon_grp)")
         parser.add_argument("--no-reverse-edges", action="store_true",
                             help="Disable reverse membership edges (part → virtual)")
         parser.add_argument("--val-split", type=float, default=0.1,
@@ -140,9 +206,22 @@ class HGTTrainingBackend(TrainingBackend):
         parser.add_argument("--batch-size", type=int, default=8)
         parser.add_argument("--mask-rate", type=float, default=0.15)
         parser.add_argument("--rotation-mask-rate", type=float, default=0.0)
+        parser.add_argument(
+            "--rotation-class-weights",
+            type=str,
+            default="auto",
+            help="Rotation CE class weights: auto, none, or comma-separated w0,w1,w2,w3",
+        )
         parser.add_argument("--overclock-mask-rate", type=float, default=0.15)
         parser.add_argument("--door-mask-rate", type=float, default=0.15)
-        parser.add_argument("--virtual-edge-mask-rate", type=float, default=0.0)
+        parser.add_argument(
+            "--virtual-edge-mask-rate",
+            type=float,
+            default=None,
+            help="Legacy single virtual-edge mask rate. If set and split rates are omitted, applies to dense and sparse groups",
+        )
+        parser.add_argument("--virtual-edge-mask-rate-dense", type=float, default=None)
+        parser.add_argument("--virtual-edge-mask-rate-sparse", type=float, default=None)
         parser.add_argument("--no-reverse-edges", action="store_true")
         parser.add_argument("--seed", type=int, default=42)
         parser.add_argument("--device", type=str, default=None)
@@ -158,7 +237,6 @@ class HGTTrainingBackend(TrainingBackend):
     # ------------------------------------------------------------------
 
     def run_build(self, args: argparse.Namespace) -> int:
-        import torch
         from torch_geometric.loader import DataLoader
 
         from training.backends.hgt.convert import convert_corpus
@@ -187,6 +265,7 @@ class HGTTrainingBackend(TrainingBackend):
 
         args.output_dir.mkdir(parents=True, exist_ok=True)
         cache_dir = args.cache_dir or (args.output_dir / "cache")
+        dense_virtual_rate, sparse_virtual_rate = _resolve_virtual_mask_rates(args)
 
         # Vocab
         vocab_path = args.output_dir / "vocab.json"
@@ -210,6 +289,29 @@ class HGTTrainingBackend(TrainingBackend):
             print(f"{prefix} ERROR: no graphs found in {args.input_dir}")
             return 1
         print(f"{prefix} {len(pt_paths)} graphs available")
+
+        # Corpus stats drive automatic calibration for weighted rotation loss.
+        corpus_stats = collect_corpus_stats(args.input_dir)
+        corpus_stats_path = args.output_dir / "corpus-stats.json"
+        corpus_stats_path.write_bytes(orjson.dumps(corpus_stats, option=orjson.OPT_INDENT_2))
+        print(f"{prefix} corpus stats written to {corpus_stats_path}")
+        rotation_weights_arg = args.rotation_class_weights.strip().lower()
+        if rotation_weights_arg == "auto":
+            rotation_class_weights = rotation_class_weights_from_stats(corpus_stats)
+        else:
+            try:
+                rotation_class_weights = _parse_rotation_weights_arg(args.rotation_class_weights)
+            except ValueError as exc:
+                print(f"{prefix} ERROR: {exc}")
+                return 1
+        if rotation_class_weights is None:
+            print(f"{prefix} rotation CE class weights: disabled")
+        else:
+            weights_str = ",".join(f"{w:.4f}" for w in rotation_class_weights.tolist())
+            print(f"{prefix} rotation CE class weights: [{weights_str}]")
+        print(
+            f"{prefix} virtual edge mask rates: dense={dense_virtual_rate:.3f}, sparse={sparse_virtual_rate:.3f}"
+        )
 
         # Load and split
         random.shuffle(pt_paths)
@@ -277,17 +379,21 @@ class HGTTrainingBackend(TrainingBackend):
             train_metrics = train_epoch(
                 model, train_loader, optimizer, device, args.mask_rate, vocab.mask_idx,
                 rotation_mask_rate=args.rotation_mask_rate,
+                rotation_class_weights=rotation_class_weights,
                 overclock_mask_rate=args.overclock_mask_rate,
                 door_mask_rate=args.door_mask_rate,
-                virtual_edge_mask_rate=args.virtual_edge_mask_rate,
+                virtual_edge_mask_rate_dense=dense_virtual_rate,
+                virtual_edge_mask_rate_sparse=sparse_virtual_rate,
                 scaler=scaler,
             )
             val_metrics = eval_epoch(
                 model, val_loader, device, args.mask_rate, vocab.mask_idx,
                 rotation_mask_rate=args.rotation_mask_rate,
+                rotation_class_weights=rotation_class_weights,
                 overclock_mask_rate=args.overclock_mask_rate,
                 door_mask_rate=args.door_mask_rate,
-                virtual_edge_mask_rate=args.virtual_edge_mask_rate,
+                virtual_edge_mask_rate_dense=dense_virtual_rate,
+                virtual_edge_mask_rate_sparse=sparse_virtual_rate,
                 amp=use_amp,
             )
             scheduler.step()
@@ -299,10 +405,19 @@ class HGTTrainingBackend(TrainingBackend):
             if args.overclock_mask_rate > 0.0:
                 aux.append(f"oc_loss={train_metrics['overclock_loss']:.4f}/{val_metrics['overclock_loss']:.4f}")
                 aux.append(f"oc_acc={val_metrics['overclock_acc']:.4f}")
+                aux.append(f"oc_recall={val_metrics['overclock_recall']:.4f}")
             if args.door_mask_rate > 0.0:
                 aux.append(f"door_loss={train_metrics['door_loss']:.4f}/{val_metrics['door_loss']:.4f}")
-            if args.virtual_edge_mask_rate > 0.0:
-                aux.append(f"virt_loss={train_metrics['virtual_edge_loss']:.4f}/{val_metrics['virtual_edge_loss']:.4f}")
+            if dense_virtual_rate > 0.0 or sparse_virtual_rate > 0.0:
+                aux.append(
+                    "virt_loss(d/s)="
+                    f"{train_metrics['virtual_edge_loss_dense']:.4f}/{train_metrics['virtual_edge_loss_sparse']:.4f}"
+                    f" vs {val_metrics['virtual_edge_loss_dense']:.4f}/{val_metrics['virtual_edge_loss_sparse']:.4f}"
+                )
+                aux.append(
+                    "virt_acc(d/s)="
+                    f"{val_metrics['virtual_edge_acc_dense']:.4f}/{val_metrics['virtual_edge_acc_sparse']:.4f}"
+                )
             if train_metrics["skipped_batches"] > 0.0:
                 aux.append(f"skipped_batches={int(train_metrics['skipped_batches'])}")
             if use_amp:
@@ -353,8 +468,6 @@ class HGTTrainingBackend(TrainingBackend):
     # ------------------------------------------------------------------
 
     def run_validate(self, args: argparse.Namespace) -> int:
-        import torch
-        import orjson
         from torch_geometric.loader import DataLoader
 
         from training.backends.hgt.convert import convert_corpus
@@ -371,6 +484,18 @@ class HGTTrainingBackend(TrainingBackend):
         use_amp = args.amp and device.type == "cuda"
 
         torch.manual_seed(args.seed)
+        dense_virtual_rate, sparse_virtual_rate = _resolve_virtual_mask_rates(args)
+
+        rotation_weights_arg = args.rotation_class_weights.strip().lower()
+        if rotation_weights_arg == "auto":
+            corpus_stats = collect_corpus_stats(args.input_dir)
+            rotation_class_weights = rotation_class_weights_from_stats(corpus_stats)
+        else:
+            try:
+                rotation_class_weights = _parse_rotation_weights_arg(args.rotation_class_weights)
+            except ValueError as exc:
+                print(f"{prefix} ERROR: {exc}")
+                return 1
 
         vocab = VocabRegistry.load(args.vocab)
 
@@ -394,9 +519,11 @@ class HGTTrainingBackend(TrainingBackend):
         metrics = eval_epoch(
             model, loader, device, args.mask_rate, vocab.mask_idx,
             rotation_mask_rate=args.rotation_mask_rate,
+            rotation_class_weights=rotation_class_weights,
             overclock_mask_rate=args.overclock_mask_rate,
             door_mask_rate=args.door_mask_rate,
-            virtual_edge_mask_rate=args.virtual_edge_mask_rate,
+            virtual_edge_mask_rate_dense=dense_virtual_rate,
+            virtual_edge_mask_rate_sparse=sparse_virtual_rate,
             amp=use_amp,
         )
         print(f"{prefix} loss={metrics['loss']:.4f}  acc={metrics['acc']:.4f}  top5={metrics['top5_acc']:.4f}")
@@ -406,9 +533,29 @@ class HGTTrainingBackend(TrainingBackend):
             "input_dir": str(args.input_dir),
             "num_graphs": len(dataset),
             "mask_rate": args.mask_rate,
+            "rotation_class_weights": None if rotation_class_weights is None else rotation_class_weights.tolist(),
+            "virtual_edge_mask_rate_dense": dense_virtual_rate,
+            "virtual_edge_mask_rate_sparse": sparse_virtual_rate,
             **metrics,
         }
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_bytes(orjson.dumps(report, option=orjson.OPT_INDENT_2))
+        print(f"{prefix} report written to {args.output}")
+        return 0
+
+    # ------------------------------------------------------------------
+    # Stats
+    # ------------------------------------------------------------------
+
+    def run_stats(self, args: argparse.Namespace) -> int:
+        prefix = "[training:hgt:stats]"
+        try:
+            payload = collect_corpus_stats(args.input_dir)
+        except Exception as exc:
+            print(f"{prefix} ERROR: failed to compute stats from {args.input_dir}: {exc}")
+            return 1
+
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
         print(f"{prefix} report written to {args.output}")
         return 0

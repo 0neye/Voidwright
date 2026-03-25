@@ -34,14 +34,58 @@ log = logging.getLogger(__name__)
 
 OVERCLOCK_MASK_VALUE = -1.0
 
-# Edge types eligible for virtual-edge masked link prediction.
-_VIRTUAL_EDGE_TYPES: tuple[tuple[str, str, str], ...] = (
+# Dense virtual membership edge types.
+# Zone and zone_rot edges are intentionally excluded: spatial zone membership
+# is a deterministic geometric function of part position and ship center, so
+# asking the model to reconstruct it from graph context provides no structural
+# signal and only adds noise to the dense virtual loss.  Zone nodes still
+# participate fully in message passing as conditioning infrastructure.
+_VIRTUAL_EDGE_TYPES_DENSE: tuple[tuple[str, str, str], ...] = (
     ("cluster", "super_member", "part"),
+)
+
+# Sparse virtual membership edge types.
+_VIRTUAL_EDGE_TYPES_SPARSE: tuple[tuple[str, str, str], ...] = (
     ("thermal", "thermal_member", "part"),
-    ("zone", "zone_member", "part"),
-    ("zone_rot", "zone_member_rotated", "part"),
     ("weapon_grp", "weapon_member", "part"),
 )
+
+
+# ---------------------------------------------------------------------------
+# Loss helpers
+# ---------------------------------------------------------------------------
+
+def _rotation_cross_entropy(
+    logits: Tensor,
+    labels: Tensor,
+    class_weights: Tensor | None,
+) -> Tensor:
+    if class_weights is not None:
+        return F.cross_entropy(logits, labels, weight=class_weights.to(logits.device))
+    return F.cross_entropy(logits, labels)
+
+
+def _apply_virtual_edge_masks(
+    batch: "HeteroData",
+    virtual_edge_mask_rate_dense: float,
+    virtual_edge_mask_rate_sparse: float,
+) -> tuple["HeteroData", list[tuple[tuple[str, str, str], Tensor, Tensor, Tensor, Tensor, bool]]]:
+    virt_masks: list[tuple[tuple[str, str, str], Tensor, Tensor, Tensor, Tensor, bool]] = []
+    for is_sparse_group, edge_group, mask_rate in (
+        (False, _VIRTUAL_EDGE_TYPES_DENSE, virtual_edge_mask_rate_dense),
+        (True, _VIRTUAL_EDGE_TYPES_SPARSE, virtual_edge_mask_rate_sparse),
+    ):
+        if mask_rate <= 0.0:
+            continue
+        for ek in edge_group:
+            ei = getattr(batch[ek], "edge_index", None)
+            if ei is not None and ei.shape[1] > 0:
+                all_src = ei[0].clone()
+                all_tgt = ei[1].clone()
+                batch, pos_src, pos_tgt = apply_edge_mask(batch, ek, mask_rate)
+                if pos_src.shape[0] > 0:
+                    virt_masks.append((ek, all_src, all_tgt, pos_src, pos_tgt, is_sparse_group))
+    return batch, virt_masks
 
 
 # ---------------------------------------------------------------------------
@@ -119,14 +163,29 @@ def apply_overclock_mask(
     true_labels:
         1-D FloatTensor of original overclocked values (0.0 or 1.0).
     """
-    n = data["part"].num_nodes
+    part_store = data["part"]
+    n = part_store.num_nodes
     num_mask = max(1, int(n * mask_rate))
     device = data["part"].x.device
-    mask_indices = torch.randperm(n, device=device)[:num_mask]
-    true_labels = data["part"].x[mask_indices, 6].clone()
+    oc_values = part_store.x[:, 6]
+    oc_indices = torch.nonzero(oc_values > 0.5, as_tuple=False).flatten()
+
+    if oc_indices.numel() == 0:
+        mask_indices = torch.randperm(n, device=device)[:num_mask]
+    else:
+        # Targeted masking: always include all positives, then pad with random negatives.
+        non_oc_indices = torch.nonzero(oc_values <= 0.5, as_tuple=False).flatten()
+        if non_oc_indices.numel() > 0:
+            non_oc_perm = non_oc_indices[torch.randperm(non_oc_indices.numel(), device=device)]
+        else:
+            non_oc_perm = non_oc_indices
+        remaining_budget = max(0, num_mask - oc_indices.numel())
+        mask_indices = torch.cat([oc_indices, non_oc_perm[:remaining_budget]])
+
+    true_labels = part_store.x[mask_indices, 6].clone()
     # Clone before mutation to avoid corrupting the cached dataset.
-    data["part"].x = data["part"].x.clone()
-    data["part"].x[mask_indices, 6] = OVERCLOCK_MASK_VALUE
+    part_store.x = part_store.x.clone()
+    part_store.x[mask_indices, 6] = OVERCLOCK_MASK_VALUE
     return data, mask_indices, true_labels
 
 
@@ -225,8 +284,15 @@ def _edge_prediction_loss(
     all_tgt: Tensor,
     n_nodes_src: int,
     n_nodes_tgt: int,
-) -> Tensor:
-    """BCE loss for masked edge link prediction with balanced negative sampling.
+) -> tuple[Tensor, float]:
+    """BCE loss and balanced accuracy for masked edge link prediction.
+
+    Returns
+    -------
+    loss:
+        Binary cross-entropy over a balanced pos/neg sample.
+    acc:
+        Fraction of the balanced sample correctly classified (logit > 0 = positive).
 
     Parameters
     ----------
@@ -238,7 +304,7 @@ def _edge_prediction_loss(
     """
     n_pos = pos_src.shape[0]
     if n_pos == 0:
-        return torch.tensor(0.0, device=pos_src.device)
+        return torch.tensor(0.0, device=pos_src.device), 0.0
 
     device = pos_src.device
     # Encode all positive pairs once as integers for vectorised isin lookup.
@@ -246,7 +312,7 @@ def _edge_prediction_loss(
     neg_src, neg_tgt = _sample_negative_edges(n_nodes_src, n_nodes_tgt, all_encoded, n_pos, device)
     n_neg = neg_src.shape[0]
     if n_neg == 0:
-        return torch.tensor(0.0, device=device)
+        return torch.tensor(0.0, device=device), 0.0
 
     combined_src = torch.cat([pos_src, neg_src])
     combined_tgt = torch.cat([pos_tgt, neg_tgt])
@@ -255,7 +321,9 @@ def _edge_prediction_loss(
         torch.zeros(n_neg, dtype=torch.float, device=device),
     ])
     logits = model.predict_edge(x_dict, src_type, combined_src, tgt_type, combined_tgt).squeeze(-1)
-    return F.binary_cross_entropy_with_logits(logits, labels)
+    loss = F.binary_cross_entropy_with_logits(logits, labels)
+    acc = float(((logits > 0) == labels.bool()).sum().item()) / labels.shape[0]
+    return loss, acc
 
 
 # ---------------------------------------------------------------------------
@@ -271,9 +339,11 @@ def train_epoch(
     mask_token_idx: int,
     *,
     rotation_mask_rate: float = 0.0,
+    rotation_class_weights: Tensor | None = None,
     overclock_mask_rate: float = 0.0,
     door_mask_rate: float = 0.0,
-    virtual_edge_mask_rate: float = 0.0,
+    virtual_edge_mask_rate_dense: float = 0.0,
+    virtual_edge_mask_rate_sparse: float = 0.0,
     scaler: "torch.cuda.amp.GradScaler | None" = None,
     grad_clip: float = 1.0,
 ) -> dict[str, float]:
@@ -291,8 +361,11 @@ def train_epoch(
     total_rot_correct = 0
     total_rot_masked = 0
     total_oc_loss = 0.0
+    total_oc_positive_masked = 0
+    total_oc_masked = 0
     total_door_loss = 0.0
-    total_virt_loss = 0.0
+    total_virt_loss_dense = 0.0
+    total_virt_loss_sparse = 0.0
     skipped_batches = 0
     n_batches = 0
 
@@ -326,17 +399,9 @@ def train_epoch(
                 batch, door_pos_src, door_pos_tgt = apply_edge_mask(batch, DOOR_EDGE_KEY, door_mask_rate)
 
         # --- Virtual edge masking ---
-        # Each entry: (edge_key, all_src, all_tgt, pos_src, pos_tgt)
-        virt_masks: list[tuple[tuple[str, str, str], Tensor, Tensor, Tensor, Tensor]] = []
-        if virtual_edge_mask_rate > 0.0:
-            for ek in _VIRTUAL_EDGE_TYPES:
-                ei = getattr(batch[ek], "edge_index", None)
-                if ei is not None and ei.shape[1] > 0:
-                    all_src = ei[0].clone()
-                    all_tgt = ei[1].clone()
-                    batch, pos_src, pos_tgt = apply_edge_mask(batch, ek, virtual_edge_mask_rate)
-                    if pos_src.shape[0] > 0:
-                        virt_masks.append((ek, all_src, all_tgt, pos_src, pos_tgt))
+        batch, virt_masks = _apply_virtual_edge_masks(
+            batch, virtual_edge_mask_rate_dense, virtual_edge_mask_rate_sparse
+        )
 
         # --- Forward pass + loss (AMP autocast when scaler is active) ---
         amp_enabled = scaler is not None and device.type == "cuda"
@@ -355,7 +420,7 @@ def train_epoch(
             # --- Rotation loss (weighted 0.7× to reduce gradient interference) ---
             if rot_labels is not None and rot_labels.shape[0] > 0:
                 rot_logits = model.predict_rotation(x_dict, rot_part_idx)
-                rot_loss = F.cross_entropy(rot_logits, rot_labels)
+                rot_loss = _rotation_cross_entropy(rot_logits, rot_labels, rotation_class_weights)
                 loss = loss + 0.7 * rot_loss
                 total_rot_loss += rot_loss.item()
                 total_rot_correct += (rot_logits.argmax(dim=1) == rot_labels).sum().item()
@@ -369,13 +434,15 @@ def train_epoch(
                 n_non_oc = float(oc_labels.shape[0]) - n_oc
                 pos_weight = torch.tensor([max(1.0, n_non_oc / max(1.0, n_oc))], device=device)
                 oc_loss = F.binary_cross_entropy_with_logits(oc_logits, oc_labels, pos_weight=pos_weight)
-                loss = loss + oc_loss
+                loss = loss + 0.6 * oc_loss
                 total_oc_loss += oc_loss.item()
+                total_oc_positive_masked += int(n_oc)
+                total_oc_masked += oc_labels.shape[0]
 
             # --- Door edge loss ---
             if door_pos_src is not None and door_pos_src.shape[0] > 0:
                 n_parts = batch["part"].num_nodes
-                door_loss = _edge_prediction_loss(
+                door_loss, _ = _edge_prediction_loss(
                     model, x_dict, "part", "part",
                     door_pos_src, door_pos_tgt,
                     door_all_src, door_all_tgt,
@@ -386,8 +453,9 @@ def train_epoch(
 
             # --- Virtual membership edge loss ---
             if virt_masks:
-                virt_loss: Tensor = torch.tensor(0.0, device=device)
-                for ek, all_src, all_tgt, pos_src, pos_tgt in virt_masks:
+                virt_loss_dense: Tensor = torch.tensor(0.0, device=device)
+                virt_loss_sparse: Tensor = torch.tensor(0.0, device=device)
+                for ek, all_src, all_tgt, pos_src, pos_tgt, is_sparse_group in virt_masks:
                     src_type, _, tgt_type = ek
                     # Skip if virtual dropout zeroed this node type's features this step.
                     if src_type in dropped_virtual:
@@ -395,13 +463,18 @@ def train_epoch(
                     n_src = getattr(batch[src_type], "num_nodes", 0) or 0
                     n_tgt = getattr(batch[tgt_type], "num_nodes", 0) or 0
                     if n_src > 0 and n_tgt > 0:
-                        virt_loss = virt_loss + _edge_prediction_loss(
+                        edge_loss, _ = _edge_prediction_loss(
                             model, x_dict, src_type, tgt_type,
                             pos_src, pos_tgt, all_src, all_tgt,
                             n_src, n_tgt,
                         )
-                loss = loss + virt_loss
-                total_virt_loss += virt_loss.item()
+                        if is_sparse_group:
+                            virt_loss_sparse = virt_loss_sparse + edge_loss
+                        else:
+                            virt_loss_dense = virt_loss_dense + edge_loss
+                loss = loss + virt_loss_dense + virt_loss_sparse
+                total_virt_loss_dense += virt_loss_dense.item()
+                total_virt_loss_sparse += virt_loss_sparse.item()
 
         if not torch.isfinite(loss):
             skipped_batches += 1
@@ -435,8 +508,12 @@ def train_epoch(
         "rotation_loss": total_rot_loss / batch_denom,
         "rotation_acc": total_rot_correct / max(1, total_rot_masked),
         "overclock_loss": total_oc_loss / batch_denom,
+        "overclock_positive_masked": float(total_oc_positive_masked),
+        "overclock_positive_rate": float(total_oc_positive_masked) / max(1, total_oc_masked),
         "door_loss": total_door_loss / batch_denom,
-        "virtual_edge_loss": total_virt_loss / batch_denom,
+        "virtual_edge_loss_dense": total_virt_loss_dense / batch_denom,
+        "virtual_edge_loss_sparse": total_virt_loss_sparse / batch_denom,
+        "virtual_edge_loss": (total_virt_loss_dense + total_virt_loss_sparse) / batch_denom,
         "skipped_batches": float(skipped_batches),
         "scaler_scale": float(getattr(scaler, "get_scale", lambda: 1.0)()) if scaler is not None else 1.0,
     }
@@ -451,9 +528,11 @@ def eval_epoch(
     mask_token_idx: int,
     *,
     rotation_mask_rate: float = 0.0,
+    rotation_class_weights: Tensor | None = None,
     overclock_mask_rate: float = 0.0,
     door_mask_rate: float = 0.0,
-    virtual_edge_mask_rate: float = 0.0,
+    virtual_edge_mask_rate_dense: float = 0.0,
+    virtual_edge_mask_rate_sparse: float = 0.0,
     amp: bool = False,
 ) -> dict[str, float]:
     """Run one evaluation pass; returns MLM metrics and any enabled aux metrics."""
@@ -467,9 +546,19 @@ def eval_epoch(
     total_rot_masked = 0
     total_oc_loss = 0.0
     total_oc_correct = 0
+    total_oc_tp = 0
     total_oc_masked = 0
+    total_oc_positive_masked = 0
     total_door_loss = 0.0
-    total_virt_loss = 0.0
+    total_door_acc = 0.0
+    total_virt_loss_dense = 0.0
+    total_virt_loss_sparse = 0.0
+    total_virt_acc_dense = 0.0
+    total_virt_acc_sparse = 0.0
+    virt_batches_dense = 0
+    virt_batches_sparse = 0
+    rot_correct_by_class = [0, 0, 0, 0]
+    rot_total_by_class = [0, 0, 0, 0]
     n_batches = 0
 
     for batch in loader:
@@ -494,16 +583,9 @@ def eval_epoch(
                 door_all_tgt = ei[1].clone()
                 batch, door_pos_src, door_pos_tgt = apply_edge_mask(batch, DOOR_EDGE_KEY, door_mask_rate)
 
-        virt_masks: list[tuple[tuple[str, str, str], Tensor, Tensor, Tensor, Tensor]] = []
-        if virtual_edge_mask_rate > 0.0:
-            for ek in _VIRTUAL_EDGE_TYPES:
-                ei = getattr(batch[ek], "edge_index", None)
-                if ei is not None and ei.shape[1] > 0:
-                    all_src = ei[0].clone()
-                    all_tgt = ei[1].clone()
-                    batch, pos_src, pos_tgt = apply_edge_mask(batch, ek, virtual_edge_mask_rate)
-                    if pos_src.shape[0] > 0:
-                        virt_masks.append((ek, all_src, all_tgt, pos_src, pos_tgt))
+        batch, virt_masks = _apply_virtual_edge_masks(
+            batch, virtual_edge_mask_rate_dense, virtual_edge_mask_rate_sparse
+        )
 
         with torch.autocast("cuda", enabled=(amp and device.type == "cuda")):
             x_dict = model(batch)
@@ -522,10 +604,17 @@ def eval_epoch(
 
             if rot_labels is not None and rot_labels.shape[0] > 0:
                 rot_logits = model.predict_rotation(x_dict, rot_part_idx)
-                rot_loss = F.cross_entropy(rot_logits, rot_labels)
+                rot_loss = _rotation_cross_entropy(rot_logits, rot_labels, rotation_class_weights)
                 total_rot_loss += rot_loss.item()
-                total_rot_correct += (rot_logits.argmax(dim=1) == rot_labels).sum().item()
+                rot_pred = rot_logits.argmax(dim=1)
+                total_rot_correct += (rot_pred == rot_labels).sum().item()
                 total_rot_masked += rot_labels.shape[0]
+                for class_idx in range(4):
+                    class_mask = rot_labels == class_idx
+                    class_count = int(class_mask.sum().item())
+                    if class_count > 0:
+                        rot_total_by_class[class_idx] += class_count
+                        rot_correct_by_class[class_idx] += int((rot_pred[class_mask] == class_idx).sum().item())
 
             if oc_idx is not None and oc_labels is not None and oc_idx.shape[0] > 0:
                 oc_logits = model.predict_overclock(x_dict, oc_idx).squeeze(-1)
@@ -533,28 +622,41 @@ def eval_epoch(
                 n_non_oc = float(oc_labels.shape[0]) - n_oc
                 pos_weight = torch.tensor([max(1.0, n_non_oc / max(1.0, n_oc))], device=device)
                 total_oc_loss += F.binary_cross_entropy_with_logits(oc_logits, oc_labels, pos_weight=pos_weight).item()
-                total_oc_correct += ((oc_logits > 0) == oc_labels.bool()).sum().item()
+                oc_pred_pos = oc_logits > 0
+                total_oc_correct += (oc_pred_pos == oc_labels.bool()).sum().item()
+                total_oc_tp += int((oc_pred_pos & oc_labels.bool()).sum().item())
                 total_oc_masked += oc_idx.shape[0]
+                total_oc_positive_masked += int(n_oc)
 
             if door_pos_src is not None and door_pos_src.shape[0] > 0:
                 n_parts = batch["part"].num_nodes
-                total_door_loss += _edge_prediction_loss(
+                door_loss, door_acc = _edge_prediction_loss(
                     model, x_dict, "part", "part",
                     door_pos_src, door_pos_tgt,
                     door_all_src, door_all_tgt,
                     n_parts, n_parts,
-                ).item()
+                )
+                total_door_loss += door_loss.item()
+                total_door_acc += door_acc
 
-            for ek, all_src, all_tgt, pos_src, pos_tgt in virt_masks:
+            for ek, all_src, all_tgt, pos_src, pos_tgt, is_sparse_group in virt_masks:
                 src_type, _, tgt_type = ek
                 n_src = getattr(batch[src_type], "num_nodes", 0) or 0
                 n_tgt = getattr(batch[tgt_type], "num_nodes", 0) or 0
                 if n_src > 0 and n_tgt > 0:
-                    total_virt_loss += _edge_prediction_loss(
+                    edge_loss, edge_acc = _edge_prediction_loss(
                         model, x_dict, src_type, tgt_type,
                         pos_src, pos_tgt, all_src, all_tgt,
                         n_src, n_tgt,
-                    ).item()
+                    )
+                    if is_sparse_group:
+                        total_virt_loss_sparse += edge_loss.item()
+                        total_virt_acc_sparse += edge_acc
+                        virt_batches_sparse += 1
+                    else:
+                        total_virt_loss_dense += edge_loss.item()
+                        total_virt_acc_dense += edge_acc
+                        virt_batches_dense += 1
 
     part_denom = max(1, total_masked)
     batch_denom = max(1, n_batches)
@@ -564,10 +666,26 @@ def eval_epoch(
         "top5_acc": total_top5 / part_denom,
         "rotation_loss": total_rot_loss / batch_denom,
         "rotation_acc": total_rot_correct / max(1, total_rot_masked),
+        "rotation_acc_r0": rot_correct_by_class[0] / max(1, rot_total_by_class[0]),
+        "rotation_acc_r1": rot_correct_by_class[1] / max(1, rot_total_by_class[1]),
+        "rotation_acc_r2": rot_correct_by_class[2] / max(1, rot_total_by_class[2]),
+        "rotation_acc_r3": rot_correct_by_class[3] / max(1, rot_total_by_class[3]),
+        "rotation_count_r0": float(rot_total_by_class[0]),
+        "rotation_count_r1": float(rot_total_by_class[1]),
+        "rotation_count_r2": float(rot_total_by_class[2]),
+        "rotation_count_r3": float(rot_total_by_class[3]),
         "overclock_loss": total_oc_loss / batch_denom,
         "overclock_acc": total_oc_correct / max(1, total_oc_masked),
+        "overclock_recall": float(total_oc_tp) / max(1, total_oc_positive_masked),
+        "overclock_positive_masked": float(total_oc_positive_masked),
+        "overclock_positive_rate": float(total_oc_positive_masked) / max(1, total_oc_masked),
         "door_loss": total_door_loss / batch_denom,
-        "virtual_edge_loss": total_virt_loss / batch_denom,
+        "door_acc": total_door_acc / batch_denom,
+        "virtual_edge_loss_dense": total_virt_loss_dense / batch_denom,
+        "virtual_edge_loss_sparse": total_virt_loss_sparse / batch_denom,
+        "virtual_edge_loss": (total_virt_loss_dense + total_virt_loss_sparse) / batch_denom,
+        "virtual_edge_acc_dense": total_virt_acc_dense / max(1, virt_batches_dense),
+        "virtual_edge_acc_sparse": total_virt_acc_sparse / max(1, virt_batches_sparse),
     }
 
 
