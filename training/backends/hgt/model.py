@@ -6,9 +6,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
-from torch_geometric.nn import HGTConv
 
-from training.backends.hgt.convert import build_metadata
+from training.backends.hgt.convert import EDGE_FEAT_GROUPS, build_metadata
+from training.backends.hgt.edge_conv import EdgeAwareHGTConv
 from training.backends.hgt.vocab import WEAPON_TYPES
 
 __all__ = ["ShipHGT", "SinusoidalPE"]
@@ -86,6 +86,7 @@ class ShipHGT(nn.Module):
         pe_dim: int = 32,
         virtual_dropout_rate: float = 0.3,
         reverse_edges: bool = True,
+        edge_features: bool = False,
     ) -> None:
         super().__init__()
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
@@ -132,14 +133,17 @@ class ShipHGT(nn.Module):
         self.weapon_grp_proj = nn.Linear(4 + 16, hidden_dim)
 
         # --- HGTConv layers ---
-        # HGTConv uses per-relation K/Q/V linear transforms (HeteroLinear) for
-        # each (head, edge_type) pair — significantly more expressive than
-        # grouped parameter sharing.  build_metadata() ensures only edge types
-        # that will actually appear in the data get allocated transforms.
+        # When edge_features=True, uses EdgeAwareHGTConv with additive attention
+        # bias from shared_sides (touching) and log1p(travel_distance) (crew_access/
+        # core_support).  Otherwise identical to vanilla HGTConv.
         metadata = build_metadata(reverse_edges=reverse_edges)
+        feat_groups = EDGE_FEAT_GROUPS if edge_features else None
+        self._edge_features = edge_features
         self.convs = nn.ModuleList(
-            [HGTConv(hidden_dim, hidden_dim, metadata=metadata, heads=num_heads)
-             for _ in range(num_layers)]
+            [EdgeAwareHGTConv(
+                hidden_dim, hidden_dim, metadata=metadata, heads=num_heads,
+                edge_feat_groups=feat_groups,
+            ) for _ in range(num_layers)]
         )
 
         self.dropout = nn.Dropout(dropout)
@@ -254,11 +258,20 @@ class ShipHGT(nn.Module):
                 and k[0] not in dropped and k[2] not in dropped
                 and v.shape[1] > 0
             }
-            # HGTConv crashes on an empty edge dict (all types dropped by virtual
-            # dropout or absent in this batch). Skip message passing and keep the
-            # current embeddings; the prediction head still runs on them.
+            # Collect per-edge features only when edge_features is enabled.
+            edge_attr_dict = None
+            if self._edge_features:
+                collected = {
+                    k: attr
+                    for k in edge_index_dict
+                    if (attr := getattr(data[k], "edge_attr", None)) is not None
+                }
+                edge_attr_dict = collected or None
+            # EdgeAwareHGTConv crashes on an empty edge dict (all types dropped
+            # by virtual dropout or absent in this batch).  Skip message passing
+            # and keep the current embeddings; the prediction head still runs.
             if edge_index_dict:
-                x_dict = conv(x_dict, edge_index_dict)
+                x_dict = conv(x_dict, edge_index_dict, edge_attr_dict=edge_attr_dict)
                 x_dict = {k: self.dropout(F.relu(v)) for k, v in x_dict.items()}
             # Restore source-only nodes with their fixed initial encoding.
             x_dict.update(source_only)

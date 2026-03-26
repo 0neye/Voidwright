@@ -22,6 +22,9 @@ __all__ = [
     "NODE_TYPES",
     "EDGE_TYPES",
     "DOOR_EDGE_KEY",
+    "TOUCHING_EDGE_KEY",
+    "TRAVEL_EDGE_KINDS",
+    "EDGE_FEAT_GROUPS",
     "METADATA",
     "convert_graph",
     "convert_corpus",
@@ -33,8 +36,9 @@ log = logging.getLogger(__name__)
 # Schema constants
 # ---------------------------------------------------------------------------
 
-# Typed constant for the door edge key, used by the training loop.
+# Typed constants for edge keys used by the training loop and model.
 DOOR_EDGE_KEY: tuple[str, str, str] = ("part", "door", "part")
+TOUCHING_EDGE_KEY: tuple[str, str, str] = ("part", "touching", "part")
 
 # Short node type names used in PyG HeteroData.
 NODE_TYPES: list[str] = [
@@ -140,7 +144,7 @@ _CROSS_EDGE_SCHEMA: dict[str, tuple[str, str, str]] = {
 }
 
 # Edge kinds that carry a travel_distance float feature.
-_TRAVEL_EDGE_KINDS: frozenset[str] = frozenset({
+TRAVEL_EDGE_KINDS: frozenset[str] = frozenset({
     "crew_access_reactor", "crew_access_factory",
     "reactor_supports_power_storage", "reactor_supports_shield",
     "reactor_supports_engine_room", "reactor_supports_thruster",
@@ -148,6 +152,12 @@ _TRAVEL_EDGE_KINDS: frozenset[str] = frozenset({
     "factory_supports_storage", "factory_supports_ammo_weapon",
     "factory_supports_missile_weapon",
 })
+
+# Edge feature groups for EdgeAwareHGTConv: group name → (feat_dim, edge_type_keys).
+EDGE_FEAT_GROUPS: dict[str, tuple[int, list[str]]] = {
+    "touching": (1, ["__".join(TOUCHING_EDGE_KEY)]),
+    "travel": (1, [f"part__{kind}__part" for kind in sorted(TRAVEL_EDGE_KINDS)]),
+}
 
 # global_virtual_member target pyg_type → relation name
 _GLOBAL_LINK_RELS: dict[str, str] = {
@@ -450,7 +460,7 @@ def convert_graph(payload: dict[str, Any], vocab: VocabRegistry, *, reverse_edge
             continue
 
         feat = None
-        if ck in _TRAVEL_EDGE_KINDS:
+        if ck in TRAVEL_EDGE_KINDS:
             feat = math.log1p(float(ce.get("travel_distance", 0.0)))
 
         _add((src_pyg, rel, tgt_pyg), src_local, tgt_local, feat)

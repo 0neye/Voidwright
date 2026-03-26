@@ -32,6 +32,9 @@ _EXPANSION_GRAPH_NAME = EXPANSION_GRAPH_NAME
 
 # Stable part IDs used across tests.
 _HEAT_PIPE_ID = "cosmoteer.heat_pipe"
+# resolve_geometry_part_id_and_rotation remaps heat_pipe → heat_pipe_adaptive;
+# fake_geo keys must use the resolved ID while node part_ids keep the raw game ID.
+_HEAT_PIPE_GEO_ID = "cosmoteer.heat_pipe_adaptive"
 _RADIATOR_ID = "cosmoteer.radiator"
 _HEAT_EXCHANGER_ID = "cosmoteer.heat_exchanger"
 _OVERCLOCK_PART_ID = "cosmoteer.ion_beam_emitter"
@@ -189,7 +192,7 @@ def test_thermal_networks_two_adjacent_heat_pipes_form_one_network() -> None:
         make_node(1, [2, 0], _HEAT_PIPE_ID + "_receiver"),
     ]
     fake_geo = {
-        _HEAT_PIPE_ID: _make_vanilla_geo(
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo(
             (_make_thermal_port((0, 0), "Right"),)
         ),
         _HEAT_PIPE_ID + "_receiver": _make_vanilla_geo(
@@ -239,7 +242,7 @@ def test_thermal_networks_radiator_adjacent_to_heat_pipe_connects() -> None:
     ]
     fake_geo = {
         _RADIATOR_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Down"),)),
-        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
     }
 
     context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
@@ -264,7 +267,7 @@ def test_thermal_networks_overclock_conditional_port_inactive_when_not_overclock
     # Part 0: normal Right port at (0, 0)
     # Part 1: overclock-conditional Left port at (0, 0) in local tile → 2x (2, 0)
     fake_geo = {
-        _HEAT_PIPE_ID: _make_vanilla_geo(
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo(
             (_make_thermal_port((0, 0), "Right", overclock_conditional=False),)
         ),
         _OVERCLOCK_PART_ID: _make_vanilla_geo(
@@ -296,7 +299,7 @@ def test_thermal_networks_overclock_conditional_port_active_when_overclocked() -
         make_node(1, [2, 0], _OVERCLOCK_PART_ID, overclocked=True),
     ]
     fake_geo = {
-        _HEAT_PIPE_ID: _make_vanilla_geo(
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo(
             (_make_thermal_port((0, 0), "Right", overclock_conditional=False),)
         ),
         _OVERCLOCK_PART_ID: _make_vanilla_geo(
@@ -356,7 +359,7 @@ def test_thermal_networks_non_adjacent_ports_do_not_connect() -> None:
         make_node(1, [4, 0], _HEAT_PIPE_ID),
     ]
     fake_geo = {
-        _HEAT_PIPE_ID: _make_vanilla_geo(
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo(
             (_make_thermal_port((0, 0), "Right"),)
         )
     }
@@ -380,7 +383,7 @@ def test_thermal_networks_three_parts_chain_forms_one_network() -> None:
     # Each heat pipe has a Right port at (0,0) and a Left port at (0,0) in local tile,
     # mapping to 2x positions matching their location_2x.
     fake_geo = {
-        _HEAT_PIPE_ID: _make_vanilla_geo(
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo(
             (
                 _make_thermal_port((0, 0), "Right"),
                 _make_thermal_port((0, 0), "Left"),
@@ -415,7 +418,7 @@ def test_thermal_networks_two_isolated_pairs_form_two_networks() -> None:
         _HEAT_PIPE_R: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
         _HEAT_PIPE_L: _make_vanilla_geo((_make_thermal_port((0, 0), "Left"),)),
         _RADIATOR_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
-        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Left"),)),
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Left"),)),
     }
 
     context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
@@ -438,7 +441,7 @@ def test_thermal_networks_summary_increments_in_expansion_graph() -> None:
         make_node(1, [2, 0], _RADIATOR_ID),
     ]
     fake_geo = {
-        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
         _RADIATOR_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Left"),)),
     }
 
@@ -464,7 +467,7 @@ def test_connected_heat_exchanger_pulls_in_overclocked_part_within_radius() -> N
     ]
     fake_geo = {
         _HEAT_EXCHANGER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Down"),)),
-        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
         _ARMOR_ID: _make_vanilla_geo(()),
     }
 
@@ -536,7 +539,7 @@ def test_connected_heat_exchanger_includes_part_near_center_radius_boundary() ->
     ]
     fake_geo = {
         _HEAT_EXCHANGER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Down"),)),
-        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
         _ARMOR_ID: _make_vanilla_geo(()),
     }
 
@@ -560,7 +563,7 @@ def test_connected_heat_exchanger_does_not_pull_in_overclocked_part_outside_radi
     ]
     fake_geo = {
         _HEAT_EXCHANGER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Down"),)),
-        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
         _ARMOR_ID: _make_vanilla_geo(()),
     }
 
@@ -585,7 +588,7 @@ def test_connected_heat_exchanger_excludes_far_diagonal_outside_radius() -> None
     ]
     fake_geo = {
         _HEAT_EXCHANGER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Down"),)),
-        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
         _ARMOR_ID: _make_vanilla_geo(()),
     }
 
@@ -609,7 +612,7 @@ def test_connected_heat_exchanger_includes_3_4_offset_within_radius() -> None:
     ]
     fake_geo = {
         _HEAT_EXCHANGER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Down"),)),
-        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
         _ARMOR_ID: _make_vanilla_geo(()),
     }
 
@@ -632,7 +635,7 @@ def test_connected_heat_exchanger_ignores_non_overclocked_parts_within_radius() 
     ]
     fake_geo = {
         _HEAT_EXCHANGER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Down"),)),
-        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Up"),)),
         _ARMOR_ID: _make_vanilla_geo(()),
     }
 
@@ -751,7 +754,7 @@ def test_overclocked_engine_room_pulls_thruster_into_heat_pipe_network() -> None
     # But thruster has no port facing Left at (8,0), so no port match for ER↔thruster.
     # Only the heat pipe ↔ engine room port match fires; thruster joins via proximity edge.
     fake_geo = {
-        _HEAT_PIPE_ID:    _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        _HEAT_PIPE_GEO_ID:    _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
         _ENGINE_ROOM_ID:  _make_vanilla_geo((_make_thermal_port((0, 0), "Left"),)),
         _THRUSTER_SMALL_ID: _make_vanilla_geo(()),
     }
@@ -826,7 +829,7 @@ def test_overclocked_part_connects_to_non_overclocked_heat_pipe() -> None:
         make_node(1, [2, 0], _OVERCLOCK_PART_ID, overclocked=True),
     ]
     fake_geo = {
-        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
         _OVERCLOCK_PART_ID: _make_vanilla_geo(
             (_make_thermal_port((0, 0), "Left", overclock_conditional=True),)
         ),
@@ -854,7 +857,7 @@ def test_overclocked_parts_do_not_chain_through_each_other() -> None:
         make_node(2, [4, 0], _OVERCLOCK_PART_ID, overclocked=True),
     ]
     fake_geo = {
-        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
         _OVERCLOCK_PART_ID: _make_vanilla_geo(
             (
                 _make_thermal_port((0, 0), "Left", overclock_conditional=True),
@@ -924,8 +927,8 @@ def test_barrel_stacked_railgun_parts_form_virtual_thermal_edge() -> None:
     assert context.get_annotation("thermal_networks") == [[0, 1]]
 
 
-def test_barrel_stacked_railgun_non_overclocked_also_connects() -> None:
-    """Barrel-axis virtual edges apply regardless of overclocked status."""
+def test_barrel_stacked_non_overclocked_railguns_are_excluded_from_clusters() -> None:
+    """Non-overclocked non-backbone railgun parts must not be thermal members."""
 
     nodes = [
         make_node(0, [0, 0], _RAILGUN_LOADER_ID, overclocked=False, footprint={"width": 2, "height": 3}),
@@ -935,7 +938,41 @@ def test_barrel_stacked_railgun_non_overclocked_also_connects() -> None:
 
     context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
 
+    assert summary["railgun_assembly_edges"] == 0
+    assert summary["networks"] == 0
+    assert context.get_annotation("thermal_networks") == []
+
+
+def test_overclocked_railgun_launcher_pulls_non_overclocked_assembly_parts() -> None:
+    """An overclocked railgun member promotes its full barrel-connected assembly."""
+
+    nodes = [
+        make_node(0, [0, 0], _RAILGUN_LAUNCHER_ID, overclocked=True, footprint={"width": 2, "height": 4}),
+        make_node(1, [0, 8], _RAILGUN_ACCELERATOR_ID, overclocked=False, footprint={"width": 2, "height": 3}),
+    ]
+    fake_geo: dict[str, Any] = {}
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
     assert summary["railgun_assembly_edges"] == 1
+    assert summary["networks"] == 1
+    assert context.get_annotation("thermal_networks") == [[0, 1]]
+
+
+def test_overclocked_railgun_assembly_does_not_promote_disconnected_components() -> None:
+    """Promotion is per connected component: isolated non-OC railgun nodes stay excluded."""
+
+    nodes = [
+        # Component A: launcher (OC) + accelerator (non-OC), barrel-stacked → promoted
+        make_node(0, [0, 0], _RAILGUN_LAUNCHER_ID, overclocked=True, footprint={"width": 2, "height": 4}),
+        make_node(1, [0, 8], _RAILGUN_ACCELERATOR_ID, overclocked=False, footprint={"width": 2, "height": 3}),
+        # Component B: isolated loader (non-OC), far from A → not promoted
+        make_node(2, [20, 0], _RAILGUN_LOADER_ID, overclocked=False, footprint={"width": 2, "height": 3}),
+    ]
+    fake_geo: dict[str, Any] = {}
+
+    context, summary = _run_thermal_pass(nodes, fake_geometry=fake_geo)
+
     assert summary["networks"] == 1
     assert context.get_annotation("thermal_networks") == [[0, 1]]
 
@@ -1110,7 +1147,7 @@ def test_missile_launcher_in_non_thermal_mode_has_no_thermal_ports() -> None:
         _MISSILE_LAUNCHER_ID: _make_vanilla_geo(
             (_make_thermal_port((0, 0), "Right"),)
         ),
-        _HEAT_PIPE_ID: _make_vanilla_geo(
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo(
             (_make_thermal_port((0, 0), "Left"),)
         ),
     }
@@ -1133,7 +1170,7 @@ def test_missile_launcher_with_no_toggle_values_has_no_thermal_ports() -> None:
         _MISSILE_LAUNCHER_ID: _make_vanilla_geo(
             (_make_thermal_port((0, 0), "Right"),)
         ),
-        _HEAT_PIPE_ID: _make_vanilla_geo(
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo(
             (_make_thermal_port((0, 0), "Left"),)
         ),
     }
@@ -1156,7 +1193,7 @@ def test_missile_launcher_in_thermal_mode_joins_network_as_backbone() -> None:
         _MISSILE_LAUNCHER_ID: _make_vanilla_geo(
             (_make_thermal_port((0, 0), "Right"),)
         ),
-        _HEAT_PIPE_ID: _make_vanilla_geo(
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo(
             (_make_thermal_port((0, 0), "Left"),)
         ),
     }
@@ -1214,7 +1251,7 @@ def test_thermal_missile_launcher_separated_from_non_thermal_one() -> None:
                 _make_thermal_port((0, 0), "Right"),
             )
         ),
-        _HEAT_PIPE_ID: _make_vanilla_geo(
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo(
             (_make_thermal_port((0, 0), "Left"),)
         ),
     }
@@ -1233,17 +1270,17 @@ def test_thermal_missile_launcher_separated_from_non_thermal_one() -> None:
 
 
 def test_railgun_assembly_joined_to_single_network_stays_disjoint() -> None:
-    """A railgun assembly connected to only one backbone network is a normal leaf member."""
+    """An overclocked railgun assembly connected to only one backbone network is a normal leaf member."""
 
     # Heat pipe A (backbone) at [0, 0] with a Right port.
-    # Railgun launcher at [2, 0] with a Left port that matches pipe A.
+    # Railgun launcher (OC) at [2, 0] with a Left port that matches pipe A.
     # Only one backbone cluster → railgun ends up in exactly one network.
     nodes = [
         make_node(0, [0, 0], _HEAT_PIPE_ID),
-        make_node(1, [2, 0], _RAILGUN_LAUNCHER_ID, footprint={"width": 2, "height": 4}),
+        make_node(1, [2, 0], _RAILGUN_LAUNCHER_ID, overclocked=True, footprint={"width": 2, "height": 4}),
     ]
     fake_geo = {
-        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
         _RAILGUN_LAUNCHER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Left"),)),
     }
 
@@ -1274,13 +1311,13 @@ def test_railgun_assembly_spanning_two_backbone_networks_joins_both() -> None:
     """
 
     nodes = [
-        make_node(0, [0, 0], _HEAT_PIPE_ID),                                       # backbone A
-        make_node(1, [0, 4], _HEAT_PIPE_ID + "_b"),                                 # backbone B
-        make_node(2, [2, 0], _RAILGUN_LAUNCHER_ID, footprint={"width": 2, "height": 4}),  # railgun
+        make_node(0, [0, 0], _HEAT_PIPE_ID),                                                        # backbone A
+        make_node(1, [0, 4], _HEAT_PIPE_ID + "_b"),                                                  # backbone B
+        make_node(2, [2, 0], _RAILGUN_LAUNCHER_ID, overclocked=True, footprint={"width": 2, "height": 4}),  # railgun
     ]
     fake_geo = {
         # Pipe A: Right port at tile (0, 0) → 2x (0, 0)
-        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
         # Pipe B: Right port at tile (0, 0) → 2x (0, 4)
         _HEAT_PIPE_ID + "_b": _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
         # Railgun: Left port at tile (0, 0) → 2x (2, 0) matches Pipe A;
@@ -1342,11 +1379,11 @@ def test_railgun_assembly_multi_part_spanning_two_networks() -> None:
     nodes = [
         make_node(0, [0, 0], _HEAT_PIPE_ID),
         make_node(1, [0, 6], _HEAT_PIPE_ID + "_b"),
-        make_node(2, [2, 0], _RAILGUN_LOADER_ID,    rotation=0, footprint={"width": 2, "height": 3}),
-        make_node(3, [2, 6], _RAILGUN_LAUNCHER_ID,  rotation=0, footprint={"width": 2, "height": 4}),
+        make_node(2, [2, 0], _RAILGUN_LOADER_ID,   rotation=0, overclocked=False, footprint={"width": 2, "height": 3}),
+        make_node(3, [2, 6], _RAILGUN_LAUNCHER_ID, rotation=0, overclocked=True,  footprint={"width": 2, "height": 4}),
     ]
     fake_geo = {
-        _HEAT_PIPE_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
+        _HEAT_PIPE_GEO_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
         _HEAT_PIPE_ID + "_b": _make_vanilla_geo((_make_thermal_port((0, 0), "Right"),)),
         # Loader: Left port at tile (0, 0) → 2x (2, 0) matches Pipe A.
         _RAILGUN_LOADER_ID: _make_vanilla_geo((_make_thermal_port((0, 0), "Left"),)),

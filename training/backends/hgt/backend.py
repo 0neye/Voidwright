@@ -117,6 +117,8 @@ class HGTTrainingBackend(TrainingBackend):
         parser.add_argument("--dropout", type=float, default=0.1)
         parser.add_argument("--pe-dim", type=int, default=32,
                             help="Sinusoidal positional encoding dimension (must be div by 4)")
+        parser.add_argument("--edge-features", action="store_true", default=False,
+                            help="Use EdgeAwareHGTConv with per-edge feature attention bias (shared_sides, travel_distance)")
         # Training
         parser.add_argument("--epochs", type=int, default=50)
         parser.add_argument("--batch-size", type=int, default=8,
@@ -338,6 +340,7 @@ class HGTTrainingBackend(TrainingBackend):
             "pe_dim": args.pe_dim,
             "virtual_dropout_rate": args.virtual_dropout,
             "reverse_edges": reverse_edges,
+            "edge_features": args.edge_features,
         }
         model = ShipHGT(**model_config).to(device)
         n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
