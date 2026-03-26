@@ -24,7 +24,7 @@ class GlobalVirtualLinkerPass(ExpansionPass):
     """Emit the global ship-info node and connect it to every other virtual node."""
 
     name = "global_virtual_linker"
-    version = 3
+    version = 4
     requires = ("base_indexes",)
 
     def run(self, context: ExpansionContext) -> Mapping[str, Any]:
@@ -78,17 +78,25 @@ class GlobalVirtualLinkerPass(ExpansionPass):
         }
         nodes.append(global_node)
 
-        new_edges = [
-            {
+        new_edges = []
+        for node in prior_virtual_nodes:
+            if node.get("member_count", 1) <= 0:
+                continue
+            virtual_id = node["id"]
+            new_edges.append({
                 "source": GLOBAL_SHIP_NODE_ID,
                 "source_graph": EXPANSION_GRAPH_NAME,
-                "target": node["id"],
+                "target": virtual_id,
                 "target_graph": EXPANSION_GRAPH_NAME,
                 "kind": "global_virtual_member",
-            }
-            for node in prior_virtual_nodes
-            if node.get("member_count", 1) > 0
-        ]
+            })
+            new_edges.append({
+                "source": virtual_id,
+                "source_graph": EXPANSION_GRAPH_NAME,
+                "target": GLOBAL_SHIP_NODE_ID,
+                "target_graph": EXPANSION_GRAPH_NAME,
+                "kind": "global_virtual_member",
+            })
 
         cross_edges.extend(new_edges)
 

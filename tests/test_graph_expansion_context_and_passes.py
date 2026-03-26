@@ -1257,7 +1257,7 @@ def _run_global_virtual_linker(
 
 
 def test_global_virtual_linker_connects_to_all_virtual_nodes() -> None:
-    """GlobalVirtualLinkerPass should emit one edge per non-global virtual node."""
+    """GlobalVirtualLinkerPass should emit one edge per direction per virtual node."""
 
     nodes = [
         make_node(0, [[0, 0]], _CORRIDOR_ID),
@@ -1278,13 +1278,14 @@ def test_global_virtual_linker_connects_to_all_virtual_nodes() -> None:
         e for e in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
         if e.get("kind") == "global_virtual_member"
     ]
-    linked_targets = {e["target"] for e in linker_edges}
+    outbound_targets = {e["target"] for e in linker_edges if e["source"] == "global_ship"}
+    inbound_sources = {e["source"] for e in linker_edges if e["target"] == "global_ship"}
 
-    assert linked_targets == virtual_ids
-    assert all(e["source"] == "global_ship" for e in linker_edges)
+    assert outbound_targets == virtual_ids
+    assert inbound_sources == virtual_ids
     assert all(e["source_graph"] == _EXPANSION_GRAPH_NAME for e in linker_edges)
     assert all(e["target_graph"] == _EXPANSION_GRAPH_NAME for e in linker_edges)
-    assert summary == {"global_nodes": 1, "global_virtual_member_edges": len(virtual_ids)}
+    assert summary == {"global_nodes": 1, "global_virtual_member_edges": 2 * len(virtual_ids)}
 
 
 def test_global_virtual_linker_skips_empty_virtual_nodes() -> None:
@@ -1315,7 +1316,9 @@ def test_global_virtual_linker_skips_empty_virtual_nodes() -> None:
         if e.get("kind") == "global_virtual_member"
     ]
     linked_targets = {e["target"] for e in linker_edges}
+    linked_sources = {e["source"] for e in linker_edges}
     assert hull_node["id"] not in linked_targets
+    assert hull_node["id"] not in linked_sources
 
 
 def test_global_virtual_linker_no_self_edge() -> None:
@@ -1326,7 +1329,11 @@ def test_global_virtual_linker_no_self_edge() -> None:
 
     self_edges = [
         e for e in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
-        if e.get("kind") == "global_virtual_member" and e["target"] == "global_ship"
+        if (
+            e.get("kind") == "global_virtual_member"
+            and e["source"] == "global_ship"
+            and e["target"] == "global_ship"
+        )
     ]
     assert self_edges == []
 
