@@ -25,7 +25,7 @@ extracted_ship_data_validation/
 generated_ship_graphs/
 generated_ship_graphs_canonical/
 expanded_ship_graphs/
-filtered_hgt_corpus/
+filtered_hgt_corpus*/
 models/
 out/
 assets/local/
