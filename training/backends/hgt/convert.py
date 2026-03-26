@@ -82,6 +82,12 @@ _BASE_EDGE_TYPES: list[tuple[str, str, str]] = [
     ("ship_info", "links_zone", "zone"),
     ("ship_info", "links_zone_rot", "zone_rot"),
     ("ship_info", "links_weapon_grp", "weapon_grp"),
+    # Reverse global links (virtual → ship_info) for bidirectional ship_info flow.
+    ("cluster", "rev_links_cluster", "ship_info"),
+    ("thermal", "rev_links_thermal", "ship_info"),
+    ("zone", "rev_links_zone", "ship_info"),
+    ("zone_rot", "rev_links_zone_rot", "ship_info"),
+    ("weapon_grp", "rev_links_weapon_grp", "ship_info"),
 ]
 
 # Reverse membership edges (part → virtual) — only included when reverse_edges is enabled.
@@ -159,14 +165,17 @@ EDGE_FEAT_GROUPS: dict[str, tuple[int, list[str]]] = {
     "travel": (1, [f"part__{kind}__part" for kind in sorted(TRAVEL_EDGE_KINDS)]),
 }
 
-# global_virtual_member target pyg_type → relation name
-_GLOBAL_LINK_RELS: dict[str, str] = {
+# global_virtual_member (ship_info -> virtual) target pyg_type → relation name
+_GLOBAL_LINK_RELS_FWD: dict[str, str] = {
     "cluster":    "links_cluster",
     "thermal":    "links_thermal",
     "zone":       "links_zone",
     "zone_rot":   "links_zone_rot",
     "weapon_grp": "links_weapon_grp",
 }
+
+# global_virtual_member (virtual -> ship_info) source pyg_type → relation name
+_GLOBAL_LINK_RELS_REV: dict[str, str] = {k: f"rev_{v}" for k, v in _GLOBAL_LINK_RELS_FWD.items()}
 
 # Forward membership edge key → reverse edge key (part → virtual).
 # Inverted directly from _REVERSE_EDGE_TYPES: (part, rev_rel, virtual) → (virtual, rel, part).
@@ -424,15 +433,22 @@ def convert_graph(payload: dict[str, Any], vocab: VocabRegistry, *, reverse_edge
         ck: str = ce["kind"]
 
         if ck == "global_virtual_member":
+            src_id = str(ce["source"])
             tgt_id = str(ce["target"])
-            entry = virt_id_to_local.get(tgt_id)
-            if entry is None:
+            src_entry = virt_id_to_local.get(src_id)
+            tgt_entry = virt_id_to_local.get(tgt_id)
+            if src_entry is None or tgt_entry is None:
                 continue
-            tgt_type, tgt_local = entry
-            rel = _GLOBAL_LINK_RELS.get(tgt_type)
-            if rel is None:
-                continue
-            _add(("ship_info", rel, tgt_type), 0, tgt_local)
+            if src_entry[0] == "ship_info":
+                tgt_type, tgt_local = tgt_entry
+                rel = _GLOBAL_LINK_RELS_FWD.get(tgt_type)
+                if rel is not None:
+                    _add(("ship_info", rel, tgt_type), 0, tgt_local)
+            elif tgt_entry[0] == "ship_info":
+                src_type, src_local = src_entry
+                rel = _GLOBAL_LINK_RELS_REV.get(src_type)
+                if rel is not None:
+                    _add((src_type, rel, "ship_info"), src_local, 0)
             continue
 
         schema = _CROSS_EDGE_SCHEMA.get(ck)
