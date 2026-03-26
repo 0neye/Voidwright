@@ -149,6 +149,24 @@ The shared and backend-specific implementation now lives primarily under:
 - `common/cosmoteer/`
 - `common/data/`
 
+## HGT training notes
+
+The HGT backend now has a dedicated corpus-stats command that should be run on
+the corpus-filtered HGT subset, not the raw expanded graphs:
+
+```bash
+python -m training.cli stats hgt \
+  --input-dir filtered_hgt_corpus \
+  --output models/hgt/corpus-stats.json
+```
+
+Use `filtered_hgt_corpus` for both HGT training and HGT stats collection. It
+is the validated, corpus-filtered subset of `expanded_ship_graphs`.
+
+The HGT build command also supports `--edge-features`, which enables
+`EdgeAwareHGTConv` and adds per-edge attention bias from `shared_sides` and
+`travel_distance`.
+
 ## Corpus filtering stage (optional)
 
 `corpus/cli.py` is a shared, backend-agnostic filtering stage that sits between
@@ -165,7 +183,8 @@ python main.py corpus \
   --output-dir filtered_ship_graphs_canonical \
   --max-parts 300 \
   --require-crew-rooms \
-  --require-reachable-reactor
+  --require-reachable-reactor \
+  --vanilla-only
 ```
 
 Or directly:
@@ -176,7 +195,8 @@ python -m corpus.cli \
   --output-dir filtered_ship_graphs_canonical \
   --max-parts 300 \
   --require-crew-rooms \
-  --require-reachable-reactor
+  --require-reachable-reactor \
+  --vanilla-only
 ```
 
 **Output artifacts:**
@@ -195,6 +215,7 @@ python -m corpus.cli \
 | `--max-occupied-cells N` | `max_size` | Reject ships whose occupied 2x-cell count exceeds N |
 | `--require-crew-rooms` | `require_crew_rooms` | Reject ships with no crew rooms |
 | `--require-reachable-reactor` | `require_reachable_reactor` | Reject ships whose crew cannot reach any reactor; requires expansion graphs |
+| `--vanilla-only` | `vanilla_only` | Reject ships that contain non-vanilla (modded) part IDs |
 
 No rules are enabled by default.  The `require_reachable_reactor` rule requires
 that the input corpus contains expansion graph data

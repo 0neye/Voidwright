@@ -89,7 +89,7 @@ python main.py corpus \
   --require-reachable-reactor
 ```
 
-Available filter flags: `--max-parts N`, `--max-occupied-cells N`, `--require-crew-rooms`, `--require-reachable-reactor` (needs expanded graphs), `--no-rejections-log`. Writes `manifest.json` and (when ships are rejected) `rejections.jsonl` to the output directory.
+Available filter flags: `--max-parts N`, `--max-occupied-cells N`, `--require-crew-rooms`, `--require-reachable-reactor` (needs expanded graphs), `--vanilla-only`, `--no-rejections-log`. Writes `manifest.json` and (when ships are rejected) `rejections.jsonl` to the output directory.
 
 The package-level CLIs remain supported:
 
@@ -130,6 +130,10 @@ python main.py training stats hgt \
   --input-dir filtered_hgt_corpus \
   --output models/hgt/corpus-stats.json
 ```
+
+The HGT build command also supports `--edge-features`, which enables
+`EdgeAwareHGTConv` and adds per-edge attention bias from `shared_sides` and
+`travel_distance`.
 
 **Generate ships:**
 ```bash
@@ -340,9 +344,9 @@ Structural passes (in pipeline order):
 - `GlobalVirtualLinkerPass` emits the `global_ship_info` node with the top-level
   `ship` metadata and computed structural summary (`total_parts`, `occupied_cells`,
   `footprint_w_2x`/`footprint_h_2x`, and virtual node kind counts), and
-  `global_virtual_member` cross-edges from it to every other virtual node in the
-  expansion graph; runs last so all zone, cluster, hull, thermal-network, and
-  weapon-group nodes are present
+  bidirectional `global_virtual_member` cross-edges between it and every other
+  non-empty virtual node in the expansion graph; runs last so all zone, cluster,
+  hull, thermal-network, and weapon-group nodes are present
 
 Contributor guidelines for graph expansion:
 

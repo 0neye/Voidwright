@@ -177,7 +177,7 @@ Current structural passes:
 - `GlobalVirtualLinkerPass`
   - emits the single `global_ship_info` node with the top-level `ship` metadata and computed structural summary
   - summary fields: `total_parts`, `occupied_cells` (sum of `footprint.cell_count`), `footprint_w_2x`/`footprint_h_2x` (bounding box of `location_2x`), and counts of each virtual node kind (`cluster_count`, `thermal_count`, `zone_count`, `zone_rot_count`, `weapon_grp_count`)
-  - emits `global_virtual_member` cross-edges from that node to every other virtual node in the expansion graph
+  - emits bidirectional `global_virtual_member` cross-edges between that node and every other non-empty virtual node in the expansion graph
   - runs last so that all zone, cluster, hull, thermal-network, and weapon-group nodes are present when the linker edges are built
 
 ## Expansion flow
@@ -230,7 +230,7 @@ That graph contains:
   - `zone_member` edges from each zone node to its member structural nodes
   - `zone_member_rotated` edges from each rotated-zone node to its member structural nodes
   - `weapon_member` edges from each weapon-group node to its member structural nodes
-  - `global_virtual_member` edges from the `global_ship` node to every virtual node
+  - bidirectional `global_virtual_member` edges between `global_ship` and every non-empty virtual node
 - `summary`
   - compact counts for all of the above: cluster count, crew-access edge counts, Layer 2 core-support edge counts, hull-perimeter/interior counts, spatial-zone and weapon-group node/edge counts
 
@@ -240,19 +240,19 @@ The top-level payload also gets an `expansion` metadata block like:
 {
   "expansion": {
     "backend": "structural",
-    "version": 14,
+    "version": 16,
     "graphs_added": ["X_expansion_structural"],
     "passes": [
       {"name": "base_indexes", "version": 1},
       {"name": "traversable_clusters", "version": 4},
       {"name": "crew_access_layer1", "version": 2},
       {"name": "core_support_layer2", "version": 1},
-      {"name": "thermal_networks", "version": 11},
+      {"name": "thermal_networks", "version": 12},
       {"name": "hull_perimeter", "version": 1},
       {"name": "spatial_zones", "version": 3},
       {"name": "spatial_zones_rotated", "version": 3},
       {"name": "weapon_groups", "version": 2},
-      {"name": "global_virtual_linker", "version": 3}
+      {"name": "global_virtual_linker", "version": 4}
     ]
   }
 }
