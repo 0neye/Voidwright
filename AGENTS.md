@@ -122,9 +122,12 @@ python main.py training validate markov \
 ```
 
 **Compute HGT corpus statistics (mask/loss calibration):**
+
+> **Important:** All HGT training runs (including stats) must use `filtered_hgt_corpus` as the input directory, not `expanded_ship_graphs`. `filtered_hgt_corpus` is the corpus-filtered subset of `expanded_ship_graphs` that has been validated for HGT training quality.
+
 ```bash
 python main.py training stats hgt \
-  --input-dir expanded_ship_graphs \
+  --input-dir filtered_hgt_corpus \
   --output models/hgt/corpus-stats.json
 ```
 
