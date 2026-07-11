@@ -12,6 +12,7 @@ from corpus.filter import run_filter, validate_corpus_has_expansion
 from corpus.rules.max_size import MaxSizeRule
 from corpus.rules.require_crew_rooms import RequireCrewRoomsRule
 from corpus.rules.require_reachable_reactor import RequireReachableReactorRule
+from corpus.rules.vanilla_only import VanillaOnlyRule
 
 __all__ = ["build_parser", "main"]
 
@@ -64,6 +65,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--vanilla-only",
+        action="store_true",
+        default=False,
+        help="Reject ships that contain any non-vanilla (modded) part IDs.",
+    )
+    parser.add_argument(
         "--no-rejections-log",
         action="store_true",
         default=False,
@@ -92,6 +99,8 @@ def _build_active_ruleset(args: argparse.Namespace) -> list:
         rules.append(RequireCrewRoomsRule())
     if args.require_reachable_reactor:
         rules.append(RequireReachableReactorRule())
+    if args.vanilla_only:
+        rules.append(VanillaOnlyRule())
     return rules
 
 

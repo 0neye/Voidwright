@@ -89,7 +89,7 @@ python main.py corpus \
   --require-reachable-reactor
 ```
 
-Available filter flags: `--max-parts N`, `--max-occupied-cells N`, `--require-crew-rooms`, `--require-reachable-reactor` (needs expanded graphs), `--no-rejections-log`. Writes `manifest.json` and (when ships are rejected) `rejections.jsonl` to the output directory.
+Available filter flags: `--max-parts N`, `--max-occupied-cells N`, `--require-crew-rooms`, `--require-reachable-reactor` (needs expanded graphs), `--vanilla-only`, `--no-rejections-log`. Writes `manifest.json` and (when ships are rejected) `rejections.jsonl` to the output directory.
 
 The package-level CLIs remain supported:
 
@@ -120,6 +120,20 @@ python main.py training validate markov \
   --input-dir extracted_ship_data_canonical \
   --output models/markov/coordinate-validation.v2.json
 ```
+
+**Compute HGT corpus statistics (mask/loss calibration):**
+
+> **Important:** All HGT training runs (including stats) must use `filtered_hgt_corpus` as the input directory, not `expanded_ship_graphs`. `filtered_hgt_corpus` is the corpus-filtered subset of `expanded_ship_graphs` that has been validated for HGT training quality.
+
+```bash
+python main.py training stats hgt \
+  --input-dir filtered_hgt_corpus \
+  --output models/hgt/corpus-stats.json
+```
+
+The HGT build command also supports `--edge-features`, which enables
+`EdgeAwareHGTConv` and adds per-edge attention bias from `shared_sides` and
+`travel_distance`.
 
 **Generate ships:**
 ```bash
@@ -167,7 +181,7 @@ The codebase is split into purpose-specific packages:
 
 - **`preprocessing/`** - four-stage pipeline (extract -> canonicalize -> graphs -> door-rules). Each stage is its own submodule with a `main(argv)` and `build_parser()`. `pipeline.py` orchestrates all stages.
 - **`graph_expansion/`** - structural graph enrichment implemented as a pass-oriented pipeline. `structural.py` orchestrates an ordered list of passes under `graph_expansion/passes/` that add virtual nodes and cross-edges to preprocessing graph JSON: a global ship-info node, traversable-cluster super-nodes, crew-access and core-support cross-edges, thermal-network virtual nodes, hull-perimeter/interior classification nodes, 8-sector spatial zone nodes, a 22.5°-rotated 8-sector zone variant, weapon-group nodes, and a global virtual linker node.
-- **`training/`** - backend-agnostic router. `router.py` resolves backend names; each backend under `training/backends/<name>/` registers its own CLI parser via `register_build_parser` / `register_validate_parser`.
+- **`training/`** - backend-agnostic router. `router.py` resolves backend names; each backend under `training/backends/<name>/` registers its own CLI parser via `register_build_parser` / `register_validate_parser` / `register_stats_parser`.
 - **`generator/`** - backend-agnostic generation router. `generator/backends/markov/backend.py` wires CLI options; `generator/backends/markov/export.py` handles `.ship.png` encoding and roundtrip validation.
 - **`markov/`** - shared Markov internals used by both training and generation: `model.py`, `generation.py`, `inputs.py`, and related helpers. `symmetry.py` is a backward-compat shim; mirror computation lives in `ship_layout/symmetry.py`.
 - **`ship_layout/`** - shared structural geometry, connectivity, mirror symmetry (`symmetry.py`), and the `PlacementValidator` API (`validator.py`) used by generation and analysis.
@@ -262,13 +276,12 @@ Structural passes (in pipeline order):
 
 - `BaseIndexesPass` builds common structural graph indexes and stores them in
   `ExpansionContext.caches`
-- `GlobalShipInfoPass` emits the global ship-info node and `global_member`
-  cross-edges
 - `TraversableClustersPass` computes traversable clusters, stores cluster
   annotations, and emits traversable-cluster super-nodes with `super_member`
   cross-edges; single-part clusters and small clusters (combined walkable-cell
   footprint ≤ 16 2x-cells with no door edges) are filtered out and receive no
-  super-node or cross-edges
+  super-node or cross-edges; each cluster node carries `member_count`,
+  `door_count`, `walkable_cells_2x`, and `centroid_x`/`centroid_y`
 - `Layer1CrewAccessPass` emits direct structural-to-structural `crew_access_reactor`
   and `crew_access_factory` cross-edges. It uses weighted Dijkstra over exact
   walkable 2x cells plus door portals, and may repair legacy isolated crew rooms
@@ -307,7 +320,9 @@ Structural passes (in pipeline order):
   `common.heat_exchanger` and are memoized; isolated parts (no matching opposite
   port) receive no node; the `thermal_network_by_part_id` annotation maps each
   node ID to a list of network IDs (`Dict[int, List[str]]`; most nodes have a
-  single-element list, but multi-network leaf members have longer lists)
+  single-element list, but multi-network leaf members have longer lists); each
+  thermal network node carries `member_count`, `backbone_count` (non-OC conduit
+  members), and `overclocked_count`
 - `HullPerimeterPass` classifies each part as perimeter or interior using 2x
   footprint cell neighbor checks; emits `hull_perimeter` / `interior` virtual
   nodes with `hull_member` / `interior_member` cross-edges
@@ -315,17 +330,23 @@ Structural passes (in pipeline order):
   zones by 2x footprint cell angles from the origin; parts straddling a zone
   boundary receive `zone_member` edges in every touched zone; mirrored parts
   land in opposing zone pairs; the `zone_by_part_id` annotation is
-  `Dict[int, List[str]]`
+  `Dict[int, List[str]]`; each zone node carries `member_count`,
+  `occupied_cells`, and `avg_radius_2x`
 - `SpatialZonesRotatedPass` same semantics as `SpatialZonesPass` but sector
   boundaries rotated 22.5° so they fall on cardinal and semi-cardinal directions;
   zone IDs use the `zone_ene` / `zone_nne` / … 16-point naming convention;
-  cross-edges carry `kind="zone_member_rotated"`
+  cross-edges carry `kind="zone_member_rotated"`; same additional node fields
+  as `SpatialZonesPass`
 - `WeaponGroupsPass` detects weapon parts by `part_id` substring matching,
   groups them by type, and emits `weapon_group_<type>` virtual nodes with
-  `weapon_member` cross-edges
-- `GlobalVirtualLinkerPass` emits `global_virtual_member` cross-edges from the
-  `global_ship` node to every other virtual node in the expansion graph, linking
-  the global anchor to all zone, cluster, hull, thermal-network, and weapon-group nodes
+  `weapon_member` cross-edges; each weapon group node carries `member_count`,
+  `centroid_x`/`centroid_y`, and `spatial_spread`
+- `GlobalVirtualLinkerPass` emits the `global_ship_info` node with the top-level
+  `ship` metadata and computed structural summary (`total_parts`, `occupied_cells`,
+  `footprint_w_2x`/`footprint_h_2x`, and virtual node kind counts), and
+  bidirectional `global_virtual_member` cross-edges between it and every other
+  non-empty virtual node in the expansion graph; runs last so all zone, cluster,
+  hull, thermal-network, and weapon-group nodes are present
 
 Contributor guidelines for graph expansion:
 

@@ -21,7 +21,37 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 VANILLA_PARTS_PATH = DATA_DIR / "vanilla_parts_full_geometry.json"
 VANILLA_NAMESPACE = "cosmoteer."
 PART_ID_ALIASES = {
+    # Legacy / alternate vanilla IDs declared via OtherIDs in terran rules.
+    "ammo_factory": "cosmoteer.factory_ammo",
+    "ammo_storage": "cosmoteer.storage_2x2",
+    "ammo_supply": "cosmoteer.factory_ammo",
+    "armor": "cosmoteer.armor",
+    "armor2": "cosmoteer.armor_2x1",
+    "armor_tri": "cosmoteer.armor_tri",
+    "armor_wedge": "cosmoteer.armor_wedge",
+    "aux_cockpit": "cosmoteer.control_room_small",
+    "big_cannon": "cosmoteer.cannon_large",
+    "big_thruster": "cosmoteer.thruster_large",
+    "bunk": "cosmoteer.crew_quarters_small",
+    "cockpit": "cosmoteer.control_room_small",
+    "conveyor": "cosmoteer.conveyor",
+    "corridor": "cosmoteer.corridor",
+    "cosmoteer.ammo_factory": "cosmoteer.factory_ammo",
+    "cosmoteer.ammo_storage": "cosmoteer.storage_2x2",
+    "cosmoteer.crew_quarters_small_a": "cosmoteer.crew_quarters_small",
+    "cosmoteer.crew_quarters_small_b": "cosmoteer.crew_quarters_small",
+    "cosmoteer.crew_quarters_small_c": "cosmoteer.crew_quarters_small",
+    "cosmoteer.deck_cannon": "cosmoteer.cannon_deck",
     "cosmoteer.electro_bolter": "cosmoteer.disruptor",
+    "cosmoteer.ftl_drive": "cosmoteer.hyperdrive_small",
+    "cosmoteer.heat_pipe": "cosmoteer.heat_pipe_adaptive",
+    "cosmoteer.heat_pipe_3way_junction": "cosmoteer.heat_pipe_adaptive",
+    "cosmoteer.heat_pipe_4way_junction": "cosmoteer.heat_pipe_adaptive",
+    "cosmoteer.heat_pipe_corner": "cosmoteer.heat_pipe_adaptive",
+    "cosmoteer.heat_pipe_junction": "cosmoteer.heat_pipe_adaptive",
+    "cosmoteer.heat_sink": "cosmoteer.heat_exchanger",
+    "cosmoteer.ion_beam_prism_45": "cosmoteer.ion_beam_prism",
+    "cosmoteer.laser_blaster": "cosmoteer.laser_blaster_small",
     # Legacy / alternate factory IDs declared via OtherIDs in vanilla rules.
     "cosmoteer.missile_factory": "cosmoteer.factory_he",
     "missile_factory": "cosmoteer.factory_he",
@@ -29,12 +59,41 @@ PART_ID_ALIASES = {
     "cosmoteer.missile_factory_he": "cosmoteer.factory_he",
     "cosmoteer.missile_factory_emp": "cosmoteer.factory_emp",
     "cosmoteer.missile_factory_nuke": "cosmoteer.factory_nuke",
+    "cosmoteer.missile_storage": "cosmoteer.storage_3x2",
     "cosmoteer.mine_factory": "cosmoteer.factory_mine",
+    "cosmoteer.resource_collector": "cosmoteer.manipulator_beam_emitter",
+    "cosmoteer.thermal_tank": "cosmoteer.thermal_battery",
+    "electro_bolt": "cosmoteer.disruptor",
+    "explosive_charge": "cosmoteer.explosive_charge",
+    "fire_extinguisher": "cosmoteer.fire_extinguisher",
+    "ftl_drive": "cosmoteer.hyperdrive_small",
+    "general_jobs": "cosmoteer.crew_quarters_med",
+    "ion_beam": "cosmoteer.ion_beam_emitter",
+    "med_cannon": "cosmoteer.cannon_med",
+    "med_thruster": "cosmoteer.thruster_med",
+    "missile_launcher": "cosmoteer.missile_launcher",
+    "missile_storage": "cosmoteer.storage_3x2",
+    "point_defense": "cosmoteer.point_defense",
+    "power_storage": "cosmoteer.power_storage",
+    "power_supply": "cosmoteer.power_storage",
+    "quarters": "cosmoteer.crew_quarters_med",
+    "reactor": "cosmoteer.reactor_small",
+    "sensor_array": "cosmoteer.sensor_array",
+    "shield_generator": "cosmoteer.shield_gen_small",
+    "small_laser": "cosmoteer.laser_blaster_small",
+    "small_thruster": "cosmoteer.thruster_small",
+    "structure": "cosmoteer.structure",
+    "structure_wedge": "cosmoteer.structure_wedge",
     # The _L variant of each flippable wedge is identical to the base part.
-    # Confirmed via armor_1x2_wedge.rules / structure_1x2_wedge.rules:
-    #   OtherIDs includes both _L and _R; FlipWhenLoadingIDs lists only _R.
+    # The handed _R variant must stay out of PART_ID_ALIASES because
+    # normalize_part_id() cannot also remap rotation. Those go in
+    # FLIP_H_PART_IDS so geometry lookup preserves the current wedge behavior.
     "cosmoteer.armor_1x2_wedge_L": "cosmoteer.armor_1x2_wedge",
+    "armor2_wedge_L": "cosmoteer.armor_1x2_wedge",
+    "Kroom.Armor_1x3_Wedge_L": "cosmoteer.armor_1x3_wedge",
     "cosmoteer.structure_1x2_wedge_L": "cosmoteer.structure_1x2_wedge",
+    "structure2_wedge_L": "cosmoteer.structure_1x2_wedge",
+    "Kroom.Structure_1x3_Wedge_L": "cosmoteer.structure_1x3_wedge",
 }
 
 # Part IDs that map to a base part with a horizontal flip (mirror) applied on
@@ -46,12 +105,33 @@ PART_ID_ALIASES = {
 # meaning a part saved at rotation r is equivalent to the base part at rotation
 # FLIP_H_ROTATE[r] after mirroring.
 FLIP_H_PART_IDS: Dict[str, str] = {
+    "armor2_wedge_R": "cosmoteer.armor_1x2_wedge",
     "cosmoteer.armor_1x2_wedge_R": "cosmoteer.armor_1x2_wedge",
+    "Kroom.Armor_1x3_Wedge_R": "cosmoteer.armor_1x3_wedge",
+    "structure2_wedge_R": "cosmoteer.structure_1x2_wedge",
     "cosmoteer.structure_1x2_wedge_R": "cosmoteer.structure_1x2_wedge",
+    "Kroom.Structure_1x3_Wedge_R": "cosmoteer.structure_1x3_wedge",
 }
 # Rotation remapping applied together with a horizontal flip (index = saved
 # rotation, value = equivalent base-part rotation after mirroring).
 FLIP_H_ROTATE: Tuple[int, int, int, int] = (0, 3, 2, 1)
+
+# Canonical base part IDs that support a horizontal flip in real ship data.
+# Includes the four wedge types whose right-handed _R variants appear in
+# FLIP_H_PART_IDS, plus the two hybrid wedges which use flip_x=True directly
+# on their base ID without any _R alias.  When a part in this set has
+# flip_x=True in graph data, it should be encoded as a virtual training token
+# via encode_flipped_part_id() so the model learns the flipped geometry as a
+# distinct part type rather than via a separate imbalanced binary head.
+FLIPPABLE_PART_IDS: frozenset[str] = frozenset(FLIP_H_PART_IDS.values()) | {
+    "cosmoteer.armor_structure_hybrid_1x2",
+    "cosmoteer.armor_structure_hybrid_1x3",
+}
+
+# Suffix appended to a base part ID to form the virtual training token for a
+# horizontally-flipped wedge.  Double-underscore prevents collision with any
+# real game ID (which uses single underscores and namespace dots only).
+FLIPPED_PART_ID_SUFFIX: str = "__flipped"
 
 # These fallback substrings are only used for unknown or non-vanilla parts.
 # They are intentionally conservative and derived from the vanilla corpus:
@@ -110,6 +190,8 @@ __all__ = [
     "DATA_DIR",
     "FLIP_H_PART_IDS",
     "FLIP_H_ROTATE",
+    "FLIPPABLE_PART_IDS",
+    "FLIPPED_PART_ID_SUFFIX",
     "NON_TRAVERSABLE_HINTS",
     "PART_ID_ALIASES",
     "PartMeta",
@@ -121,6 +203,8 @@ __all__ = [
     "VANILLA_NAMESPACE",
     "VANILLA_PARTS_PATH",
     "VanillaPartGeometry",
+    "decode_flipped_part_id",
+    "encode_flipped_part_id",
     "infer_meta",
     "is_vanilla_part_id",
     "iter_ship_files",
@@ -546,6 +630,28 @@ def load_vanilla_part_geometry() -> Dict[str, VanillaPartGeometry]:
     return result
 
 
+def encode_flipped_part_id(part_id: str) -> str:
+    """Return the virtual training token for a horizontally-flipped wedge.
+
+    The returned ID uses the lowercased *part_id* so it matches the lowercase
+    vocabulary entries built by ``VocabRegistry.build_from_corpus``.  The
+    caller is responsible for checking that *part_id* belongs to
+    ``FLIPPABLE_PART_IDS`` before calling this function.
+    """
+    return part_id.lower() + FLIPPED_PART_ID_SUFFIX
+
+
+def decode_flipped_part_id(virtual_id: str) -> Optional[str]:
+    """Return the base part ID when *virtual_id* is a flipped virtual token.
+
+    Returns ``None`` when *virtual_id* is not a virtual flipped token.  The
+    returned base ID is lowercased and matches entries in ``FLIPPABLE_PART_IDS``.
+    """
+    if virtual_id.endswith(FLIPPED_PART_ID_SUFFIX):
+        return virtual_id[: -len(FLIPPED_PART_ID_SUFFIX)]
+    return None
+
+
 def normalize_part_id(part: dict) -> Optional[str]:
     """Return the canonical part ID used by extracted ship JSON.
 
@@ -661,5 +767,4 @@ def iter_ship_files(input_dir: Path) -> Iterator[Path]:
     """Yield ship JSON files in deterministic order for corpus processing."""
 
     yield from sorted(p for p in input_dir.glob("*.json") if not p.name.startswith("."))
-
 

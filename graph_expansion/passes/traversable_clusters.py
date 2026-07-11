@@ -135,7 +135,7 @@ class TraversableClustersPass(ExpansionPass):
     """
 
     name = "traversable_clusters"
-    version = 3
+    version = 4
     requires = ("base_indexes",)
     provides = ("traversable_clusters", "cluster_by_part_id")
 
@@ -196,15 +196,34 @@ class TraversableClustersPass(ExpansionPass):
         nodes: List[MutableMapping[str, Any]] = expansion_graph["nodes"]
         cross_edges: List[MutableMapping[str, Any]] = expansion_graph["cross_edges"]
 
+        node_by_id: Dict[int, Mapping[str, Any]] = context.caches.get("node_by_id") or {
+            int(n["id"]): n for n in structural_nodes if isinstance(n.get("id"), int)
+        }
+
         cluster_nodes: List[Dict[str, Any]] = []
         cluster_cross_edges: List[Dict[str, Any]] = []
         for cluster_index, member_ids in enumerate(clusters):
             cluster_id = f"traversable_cluster_{cluster_index}"
+
+            walkable_cells_2x = sum(node_2x_cell_count.get(mid, 0) for mid in member_ids)
+            door_count = sum(1 for mid in member_ids if mid in door_part_ids)
+            locs = [
+                node_by_id[mid]["location_2x"]
+                for mid in member_ids
+                if mid in node_by_id and node_by_id[mid].get("location_2x")
+            ]
+            centroid_x = float(sum(l[0] for l in locs) / len(locs)) if locs else 0.0
+            centroid_y = float(sum(l[1] for l in locs) / len(locs)) if locs else 0.0
+
             cluster_nodes.append(
                 {
                     "id": cluster_id,
                     "kind": "traversable_cluster",
                     "member_count": len(member_ids),
+                    "door_count": door_count,
+                    "walkable_cells_2x": walkable_cells_2x,
+                    "centroid_x": centroid_x,
+                    "centroid_y": centroid_y,
                 }
             )
             for member_id in member_ids:

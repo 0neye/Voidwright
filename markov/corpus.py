@@ -118,6 +118,8 @@ def iter_vanilla_parts_from_graph(
                 rotation=rotation,
                 x=int(location[0]),
                 y=int(location[1]),
+                flip_x=bool(node.get("flip_x", node.get("FlipX", False))),
+                flip_y=bool(node.get("flip_y", node.get("FlipY", False))),
             )
         )
     return parts, node_id_to_index

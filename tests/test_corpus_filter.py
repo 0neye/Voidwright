@@ -302,7 +302,7 @@ class TestRunFilter:
         run_filter(input_dir, output_dir, [MaxSizeRule(max_parts=10)])
 
         manifest = orjson.loads((output_dir / "manifest.json").read_bytes())
-        assert manifest["schema_version"] == 1
+        assert manifest["schema_version"] == 2
         assert manifest["ships_scanned"] == 1
         assert manifest["ships_kept"] == 1
         assert manifest["ships_rejected"] == 0

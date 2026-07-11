@@ -71,6 +71,24 @@ tile-adjacent along the barrel axis (Y-axis for rotation 0/2, X-axis for
 rotation 1/3).  Port-based railgun-to-railgun connections remain subject to
 the same overclocked heat-pipe restriction as any other part.
 
+Thermal-network membership gating
+---------------------------------
+Thermal clusters intentionally include only:
+
+1. Backbone parts (non-overclocked thermal conduits and thermal-canister
+   missile launchers), and
+2. Overclocked parts.
+
+Non-overclocked non-backbone parts (including railgun loaders/accelerators)
+are excluded from thermal clusters even if virtual railgun assembly edges exist.
+
+Railgun assembly membership promotion
+-------------------------------------
+When any railgun component in a barrel-connected railgun assembly is
+overclocked (typically the launcher), every railgun component in that assembly
+is promoted into thermal-network membership. This keeps the full railgun unit
+coherent without admitting unrelated non-overclocked non-backbone parts.
+
 Two-phase thermal clustering
 ----------------------------
 Thermal networks are built in two phases to prevent overclocked parts from
@@ -565,6 +583,41 @@ def _apply_heat_exchanger_radius_to_clusters(
     return [sorted(c) for c in updated], nodes_added
 
 
+def _is_thermal_member_candidate(node: Mapping[str, Any]) -> bool:
+    """Return True when *node* is eligible for thermal-network membership."""
+
+    if node.get("overclocked", False):
+        return True
+    part_id = str(node.get("part_id", ""))
+    return is_thermal_conduit(part_id) or is_thermal_missile_launcher(node)
+
+
+def _railgun_promoted_member_ids(
+    railgun_assembly_edges: List[Tuple[int, int]],
+    node_by_id: Mapping[int, Mapping[str, Any]],
+) -> Set[int]:
+    """Return railgun node IDs promoted by an overclocked assembly member.
+
+    Any connected component in the railgun assembly graph that contains at
+    least one overclocked node is promoted as a whole.
+    """
+
+    railgun_node_ids = {
+        node_id
+        for node_id, node in node_by_id.items()
+        if is_railgun(str(node.get("part_id", "")))
+    }
+    if not railgun_node_ids:
+        return set()
+
+    components = _union_find_clusters(list(railgun_node_ids), railgun_assembly_edges)
+    promoted: Set[int] = set()
+    for members in components:
+        if any(node_by_id[member_id].get("overclocked", False) for member_id in members):
+            promoted.update(members)
+    return promoted
+
+
 # Barrel-axis adjacency deltas (2x-space) for each rotation.
 # Rotation 0/2: barrel runs along the Y-axis; rotation 1/3: along the X-axis.
 _RAILGUN_BARREL_DELTAS: Dict[int, Tuple[Tuple[int, int], ...]] = {
@@ -694,9 +747,10 @@ class ThermalNetworksPass(ExpansionPass):
     yet in any cluster.  Thermal conduits (heat pipes, thermal batteries, etc.)
     are excluded from radius inclusion and must join via direct port connections.
 
-    Railgun assembly: barrel-stacked railgun components (any rotation) receive
-    virtual thermal edges regardless of overclocked status so the whole assembly
-    always forms one thermal unit.
+    Railgun assembly: barrel-stacked railgun components (any rotation) still
+    receive virtual thermal edges. Non-overclocked non-backbone railgun parts
+    are excluded unless they belong to an assembly with at least one
+    overclocked railgun member, in which case the full assembly is included.
 
     Multi-network leaf membership: any non-backbone sub-group (OC parts, railgun
     assemblies, thrusters, etc.) that touches more than one backbone cluster is
@@ -723,7 +777,7 @@ class ThermalNetworksPass(ExpansionPass):
     """
 
     name = "thermal_networks"
-    version = 10
+    version = 12
     requires = ("base_indexes",)
     provides = ("thermal_networks", "thermal_network_by_part_id")
 
@@ -745,14 +799,30 @@ class ThermalNetworksPass(ExpansionPass):
         thermal_edges = _find_thermal_edges(port_map)
         er_thruster_edges = _build_engine_room_thruster_edges(context)
         railgun_assembly_edges = _build_railgun_assembly_edges(context)
+        thermal_edge_set = set(thermal_edges)
+        er_thruster_edge_set = set(er_thruster_edges)
+        railgun_assembly_edge_set = set(railgun_assembly_edges)
 
         # Merge all edge sources, deduplicating in case multiple mechanisms
         # independently produce the same pair.
-        all_edges = sorted(set(thermal_edges) | set(er_thruster_edges) | set(railgun_assembly_edges))
+        all_edges = sorted(thermal_edge_set | er_thruster_edge_set | railgun_assembly_edge_set)
+        node_by_id: Dict[int, Mapping[str, Any]] = context.caches.get("node_by_id") or {}
+        railgun_promoted_ids = _railgun_promoted_member_ids(railgun_assembly_edges, node_by_id)
+        eligible_node_ids = {
+            node_id
+            for node_id, node in node_by_id.items()
+            if _is_thermal_member_candidate(node)
+        } | railgun_promoted_ids
+        filtered_edges = [
+            (a, b)
+            for a, b in all_edges
+            if a in eligible_node_ids and b in eligible_node_ids
+        ]
+        filtered_edge_set = set(filtered_edges)
 
         # Collect all node IDs that participate in at least one thermal edge.
         connected_ids: Set[int] = set()
-        for a, b in all_edges:
+        for a, b in filtered_edges:
             connected_ids.add(a)
             connected_ids.add(b)
 
@@ -769,10 +839,8 @@ class ThermalNetworksPass(ExpansionPass):
                 "network_sizes": [],
             }
 
-        node_by_id: Dict[int, Mapping[str, Any]] = context.caches.get("node_by_id") or {}
-
         # Two-phase clustering: backbone (non-OC conduits) first, then attach leaves.
-        clusters = _build_two_phase_clusters(all_edges, node_by_id)
+        clusters = _build_two_phase_clusters(filtered_edges, node_by_id)
 
         # Expand clusters with nearby unattached overclocked non-conduit parts.
         clusters, heat_exchanger_radius_count = _apply_heat_exchanger_radius_to_clusters(
@@ -793,6 +861,8 @@ class ThermalNetworksPass(ExpansionPass):
 
         for cluster_index, members in enumerate(clusters):
             network_id = f"thermal_network_{cluster_index}"
+            backbone_count = 0
+            overclocked_count = 0
             for member_id in members:
                 network_by_part_id.setdefault(member_id, []).append(network_id)
                 thermal_member_edges.append(
@@ -804,11 +874,18 @@ class ThermalNetworksPass(ExpansionPass):
                         "kind": "thermal_member",
                     }
                 )
+                node = node_by_id.get(member_id, {})
+                if node.get("overclocked", False):
+                    overclocked_count += 1
+                elif is_thermal_conduit(str(node.get("part_id", ""))) or is_thermal_missile_launcher(node):
+                    backbone_count += 1
             thermal_nodes.append(
                 {
                     "id": network_id,
                     "kind": "thermal_network",
                     "member_count": len(members),
+                    "backbone_count": backbone_count,
+                    "overclocked_count": overclocked_count,
                 }
             )
 
@@ -826,9 +903,9 @@ class ThermalNetworksPass(ExpansionPass):
 
         return {
             "parts_with_ports": parts_with_ports,
-            "thermal_edges": len(thermal_edges),
-            "engine_room_thruster_edges": len(er_thruster_edges),
-            "railgun_assembly_edges": len(railgun_assembly_edges),
+            "thermal_edges": len(thermal_edge_set & filtered_edge_set),
+            "engine_room_thruster_edges": len(er_thruster_edge_set & filtered_edge_set),
+            "railgun_assembly_edges": len(railgun_assembly_edge_set & filtered_edge_set),
             "heat_exchanger_radius_edges": heat_exchanger_radius_count,
             "networks": len(clusters),
             "network_sizes": [len(m) for m in clusters],

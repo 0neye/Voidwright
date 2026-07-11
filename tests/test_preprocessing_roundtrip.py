@@ -15,6 +15,7 @@ from generator.backends.markov.export import (
     graph_to_generated_parts_payload,
     make_minimal_ship_dict,
 )
+from graph_expansion.structural import enrich_graph
 from markov.model import ShipPart
 from preprocessing.pipeline import run_pipeline
 
@@ -220,6 +221,19 @@ def _build_two_corridors_with_shared_door(*, name: str) -> dict:
     )
 
 
+def _build_flipped_roundtrip_ship(*, name: str) -> dict:
+    """Build a small ship that exercises both flip fields during graph replay."""
+
+    return _build_normalized_ship(
+        [
+            {"ID": "cosmoteer.armor_tri", "Location": [0, 0], "Rotation": 3, "FlipX": True},
+            {"ID": "cosmoteer.armor", "Location": [-1, 0], "Rotation": 0},
+            {"ID": "cosmoteer.corridor", "Location": [2, 0], "Rotation": 1, "FlipY": True},
+        ],
+        name=name,
+    )
+
+
 def test_pipeline_roundtrip_replays_all_vanilla_parts_from_graph(tmp_path: Path) -> None:
     """The full preprocessing pipeline should replay all vanilla parts exactly."""
 
@@ -349,6 +363,61 @@ def test_pipeline_roundtrip_replays_doors_from_graph(tmp_path: Path) -> None:
     assert _sorted_parts(reparsed_payload["Parts"]) == _sorted_parts(normalized_ship["Parts"])
 
 
+def test_expanded_graph_roundtrip_replays_rotation_and_flip_state(tmp_path: Path) -> None:
+    """Expanded graph payloads must preserve enough structural-node state to replay the ship exactly."""
+
+    normalized_ship = _build_flipped_roundtrip_ship(name="expanded-flip-roundtrip")
+    source_path = tmp_path / "expanded-flip-roundtrip.ship.png"
+    extracted_dir = tmp_path / "extracted"
+    canonical_dir = tmp_path / "canonical"
+    graph_dir = tmp_path / "graphs"
+    exported_path = tmp_path / "expanded-flip-replayed.ship.png"
+
+    source_path.write_bytes(create_ship_png_bytes(normalized_ship))
+
+    pipeline_payload = run_pipeline(
+        input_paths=[source_path],
+        output_dir=graph_dir,
+        extracted_dir=extracted_dir,
+        canonical_dir=canonical_dir,
+        opt_in_csv=tmp_path / "no-opt-in.csv",
+        extract_workers=1,
+        extract_executor="thread",
+        canonicalize_workers=1,
+        canonicalize_executor="thread",
+        graph_workers=1,
+        graph_executor="thread",
+    )
+
+    graph_path = graph_dir / output_name_for_ship_png(source_path)
+    graph_payload = json.loads(graph_path.read_text(encoding="utf-8"))
+    expanded_payload = enrich_graph(graph_payload)
+    graph_nodes = expanded_payload["graphs"]["A_structural_part_graph"]["nodes"]
+    generated_payload = graph_to_generated_parts_payload(expanded_payload, name="expanded-graph-replay")
+
+    assert pipeline_payload["graphs"]["ships_processed"] == 1
+    assert all("flip_x" in node for node in graph_nodes)
+    assert all("flip_y" in node for node in graph_nodes)
+    assert _sorted_parts(
+        [
+            {
+                "ID": part["part_id"],
+                "Location": [part["x"], part["y"]],
+                "Rotation": part["rotation"],
+                "FlipX": part.get("flip_x", False),
+                "FlipY": part.get("flip_y", False),
+            }
+            for part in generated_payload["parts"]
+        ]
+    ) == _sorted_parts(normalized_ship["Parts"])
+
+    export_result = export_ship_png(generated_payload, exported_path, validate=True)
+    reparsed_payload = parse_ship_png(exported_path)
+
+    assert export_result["valid"] is True
+    assert _sorted_parts(reparsed_payload["Parts"]) == _sorted_parts(normalized_ship["Parts"])
+
+
 def test_graph_replay_payload_preserves_unknown_part_nodes() -> None:
     """Graph replay should preserve non-vanilla nodes instead of dropping them."""
 
@@ -362,12 +431,14 @@ def test_graph_replay_payload_preserves_unknown_part_nodes() -> None:
                         "part_id": "cosmoteer.corridor",
                         "location_2x": [0, 0],
                         "rotation": 0,
+                        "flip_x": True,
                     },
                     {
                         "id": 1,
                         "part_id": "mod.custom_corridor",
                         "location_2x": [4, 0],
                         "rotation": 3,
+                        "flip_y": True,
                     },
                 ],
             }
@@ -387,12 +458,14 @@ def test_graph_replay_payload_preserves_unknown_part_nodes() -> None:
             "rotation": 0,
             "x": 0,
             "y": 0,
+            "flip_x": True,
         },
         {
             "part_id": "mod.custom_corridor",
             "rotation": 3,
             "x": 2,
             "y": 0,
+            "flip_y": True,
         },
     ]
 

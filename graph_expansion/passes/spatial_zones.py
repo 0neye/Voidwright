@@ -133,7 +133,7 @@ class SpatialZonesPass(ExpansionPass):
     """Emit spatial zone virtual nodes and membership cross-edges."""
 
     name = "spatial_zones"
-    version = 2
+    version = 3
     requires = ("base_indexes",)
     provides = ("zone_by_part_id",)
 
@@ -178,6 +178,11 @@ class SpatialZonesPass(ExpansionPass):
 
         context.set_annotation("zone_by_part_id", zone_by_part_id)
 
+        # Reuse node-by-id lookup cached by BaseIndexesPass when available.
+        node_by_id: Dict[int, Mapping[str, Any]] = context.caches.get("node_by_id") or {
+            int(n["id"]): n for n in structural_nodes if isinstance(n.get("id"), int)
+        }
+
         # Materialize zone virtual nodes and cross-edges only for zones
         # that have at least one structural member. Zones are emitted in
         # deterministic order.
@@ -193,6 +198,18 @@ class SpatialZonesPass(ExpansionPass):
             if not member_ids:
                 continue
 
+            occupied_cells = 0
+            radius_sum = 0.0
+            radius_count = 0
+            for mid in member_ids:
+                node = node_by_id.get(mid, {})
+                occupied_cells += node.get("footprint", {}).get("cell_count", 0)
+                loc = node.get("location_2x")
+                if loc:
+                    radius_sum += math.sqrt(float(loc[0]) ** 2 + float(loc[1]) ** 2)
+                    radius_count += 1
+            avg_radius_2x = radius_sum / radius_count if radius_count else 0.0
+
             # Emit one virtual node per populated zone
             zone_nodes.append(
                 {
@@ -200,6 +217,8 @@ class SpatialZonesPass(ExpansionPass):
                     "kind": "spatial_zone",
                     "zone_label": zone_name,
                     "member_count": len(member_ids),
+                    "occupied_cells": occupied_cells,
+                    "avg_radius_2x": avg_radius_2x,
                 }
             )
 
@@ -244,7 +263,7 @@ class SpatialZonesRotatedPass(ExpansionPass):
     """
 
     name = "spatial_zones_rotated"
-    version = 2
+    version = 3
     requires = ("base_indexes",)
     provides = ("rotated_zone_by_part_id",)
 
@@ -271,6 +290,10 @@ class SpatialZonesRotatedPass(ExpansionPass):
 
         context.set_annotation("rotated_zone_by_part_id", rotated_zone_by_part_id)
 
+        node_by_id: Dict[int, Mapping[str, Any]] = context.caches.get("node_by_id") or {
+            int(n["id"]): n for n in structural_nodes if isinstance(n.get("id"), int)
+        }
+
         expansion_graph = context.ensure_emitted_graph(EXPANSION_GRAPH_NAME)
         nodes: List[MutableMapping[str, Any]] = expansion_graph["nodes"]
         cross_edges: List[MutableMapping[str, Any]] = expansion_graph["cross_edges"]
@@ -283,12 +306,26 @@ class SpatialZonesRotatedPass(ExpansionPass):
             if not member_ids:
                 continue
 
+            occupied_cells = 0
+            radius_sum = 0.0
+            radius_count = 0
+            for mid in member_ids:
+                node = node_by_id.get(mid, {})
+                occupied_cells += node.get("footprint", {}).get("cell_count", 0)
+                loc = node.get("location_2x")
+                if loc:
+                    radius_sum += math.sqrt(float(loc[0]) ** 2 + float(loc[1]) ** 2)
+                    radius_count += 1
+            avg_radius_2x = radius_sum / radius_count if radius_count else 0.0
+
             zone_nodes.append(
                 {
                     "id": zone_name,
                     "kind": "spatial_zone_rotated",
                     "zone_label": zone_name,
                     "member_count": len(member_ids),
+                    "occupied_cells": occupied_cells,
+                    "avg_radius_2x": avg_radius_2x,
                 }
             )
 

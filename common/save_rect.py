@@ -13,7 +13,11 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from common.geometry import PART_ID_ALIASES, PartRect, load_vanilla_part_geometry
+from common.geometry import (
+    PartRect,
+    load_vanilla_part_geometry,
+    resolve_geometry_part_id_and_rotation,
+)
 
 __all__ = [
     "KNOWN_SAVE_RECTS",
@@ -86,7 +90,8 @@ def _save_rect_from_part_rect(part_id: str, rect: PartRect) -> SaveRect:
 def _canonical_part_id(part_id: str) -> str:
     """Return the canonical vanilla part ID used by geometry-backed rect data."""
 
-    return PART_ID_ALIASES.get(part_id, part_id)
+    resolved_part_id, _resolved_rotation = resolve_geometry_part_id_and_rotation(part_id, 0)
+    return resolved_part_id
 
 
 def _effective_rect_from_geometry(part_id: str) -> SaveRect | None:
@@ -141,7 +146,8 @@ def _offset_for_part(part_id: str, rotation: int, save_rects: dict[str, SaveRect
     if save_rect is None:
         return 0, 0
 
-    geometry = load_vanilla_part_geometry().get(canonical_part_id) or load_vanilla_part_geometry().get(part_id)
+    geom = load_vanilla_part_geometry()
+    geometry = geom.get(canonical_part_id) or geom.get(part_id)
     if geometry is None:
         return 0, 0
     base_geometry = geometry.rotations.get(0)
@@ -202,5 +208,4 @@ def load_live_save_rects(game_root: str | Path) -> dict[str, SaveRect]:
         )
 
     return results
-
 

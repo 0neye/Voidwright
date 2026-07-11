@@ -7,6 +7,7 @@ membership cross-edges into the structural expansion graph.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Mapping, MutableMapping
 
 from graph_expansion.context import EXPANSION_GRAPH_NAME, STRUCTURAL_GRAPH_NAME, ExpansionContext
@@ -54,7 +55,7 @@ class WeaponGroupsPass(ExpansionPass):
     """Emit weapon-group virtual nodes and membership cross-edges."""
 
     name = "weapon_groups"
-    version = 1
+    version = 2
     requires = ("base_indexes",)
     provides = ("weapon_group_by_part_id",)
 
@@ -72,6 +73,10 @@ class WeaponGroupsPass(ExpansionPass):
         if structural_nodes is None:
             structural_graph = context.get_source_graph(STRUCTURAL_GRAPH_NAME)
             structural_nodes = list(structural_graph.get("nodes", []))
+
+        node_by_id: Dict[int, Mapping[str, Any]] = context.caches.get("node_by_id") or {
+            int(n["id"]): n for n in structural_nodes if isinstance(n.get("id"), int)
+        }
 
         # Build mapping from weapon type to sorted list of member node IDs.
         weapon_type_to_member_ids: Dict[str, List[int]] = {}
@@ -111,6 +116,20 @@ class WeaponGroupsPass(ExpansionPass):
             if not member_ids:
                 continue
 
+            locs = [
+                (float(node_by_id[mid]["location_2x"][0]), float(node_by_id[mid]["location_2x"][1]))
+                for mid in member_ids
+                if mid in node_by_id and node_by_id[mid].get("location_2x")
+            ]
+            if locs:
+                cx = sum(l[0] for l in locs) / len(locs)
+                cy = sum(l[1] for l in locs) / len(locs)
+                spread = math.sqrt(
+                    sum((l[0] - cx) ** 2 + (l[1] - cy) ** 2 for l in locs) / len(locs)
+                ) if len(locs) > 1 else 0.0
+            else:
+                cx, cy, spread = 0.0, 0.0, 0.0
+
             group_id = f"weapon_group_{weapon_type}"
             weapon_group_nodes.append(
                 {
@@ -118,6 +137,9 @@ class WeaponGroupsPass(ExpansionPass):
                     "kind": "weapon_group",
                     "weapon_type": weapon_type,
                     "member_count": len(member_ids),
+                    "centroid_x": cx,
+                    "centroid_y": cy,
+                    "spatial_spread": spread,
                 }
             )
 

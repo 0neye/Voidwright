@@ -18,7 +18,6 @@ from common.files import inputs_needing_regeneration, prune_stale_json_outputs, 
 from graph_expansion.context import EXPANSION_GRAPH_NAME, ExpansionContext
 from graph_expansion.passes.base_indexes import BaseIndexesPass
 from graph_expansion.passes.base import ExpansionPass
-from graph_expansion.passes.global_ship_info import GlobalShipInfoPass
 from graph_expansion.passes.traversable_clusters import (
     TraversableClustersPass,
     build_traversable_clusters,
@@ -53,10 +52,9 @@ __all__ = [
 ]
 
 EXPANSION_NAME = "structural"
-EXPANSION_VERSION = 10
+EXPANSION_VERSION = 16
 DEFAULT_PASSES: tuple[type[ExpansionPass], ...] = (
     BaseIndexesPass,
-    GlobalShipInfoPass,
     TraversableClustersPass,
     Layer1CrewAccessPass,
     Layer2CoreSupportPass,
@@ -102,7 +100,6 @@ def read_existing_expansion_summary(output_path: Path) -> dict | None:
         return {
             "output_name": output_path.name,
             "traversable_clusters": summary["traversable_clusters"],
-            "global_member_edges": summary["global_member_edges"],
             "super_member_edges": summary["super_member_edges"],
         }
     except Exception:
@@ -123,7 +120,6 @@ def expand_graph_file(source_path_str: str, output_dir_str: str) -> dict:
     return {
         "output_name": output_path.name,
         "traversable_clusters": summary["traversable_clusters"],
-        "global_member_edges": summary["global_member_edges"],
         "super_member_edges": summary["super_member_edges"],
     }
 

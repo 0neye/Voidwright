@@ -6,7 +6,7 @@ from typing import Any
 
 from graph_expansion.context import EXPANSION_GRAPH_NAME, STRUCTURAL_GRAPH_NAME, ExpansionContext
 from graph_expansion.passes.base_indexes import BaseIndexesPass
-from graph_expansion.passes.global_ship_info import GlobalShipInfoPass
+from graph_expansion.passes.global_virtual_linker import GLOBAL_SHIP_NODE_ID
 from graph_expansion.passes.hull_perimeter import HullPerimeterPass
 from graph_expansion.passes.spatial_zones import SpatialZonesPass, SpatialZonesRotatedPass, ZONE_NAMES, ZONE_NAMES_ROTATED
 from graph_expansion.passes.traversable_clusters import TraversableClustersPass
@@ -172,8 +172,9 @@ def test_base_indexes_pass_populates_expected_caches_and_summary() -> None:
 
 
 
-def test_global_ship_info_pass_emits_exact_node_edges_and_summary() -> None:
-    """GlobalShipInfoPass should emit one node and one edge per structural node."""
+def test_global_virtual_linker_emits_node_and_no_edges_when_run_alone() -> None:
+    """GlobalVirtualLinkerPass run alone (no prior virtual passes) emits the
+    global_ship node and zero linker edges."""
 
     nodes = [make_node(10, part_id=_GENERIC_ID), make_node(20, part_id=_CORRIDOR_ID)]
     ship = {"Name": "TestShip", "Crew": 4}
@@ -182,34 +183,22 @@ def test_global_ship_info_pass_emits_exact_node_edges_and_summary() -> None:
         expansion_name="structural",
         expansion_version=2,
     )
+    BaseIndexesPass().run(context)
 
-    summary = GlobalShipInfoPass().run(context)
+    summary = GlobalVirtualLinkerPass().run(context)
     expansion_graph = context.emitted_graphs[_EXPANSION_GRAPH_NAME]
 
-    assert summary == {"global_nodes": 1, "global_member_edges": 2}
-    assert expansion_graph["nodes"] == [
-        {"id": "global_ship", "kind": "global_ship_info", "ship": ship}
-    ]
-    assert expansion_graph["cross_edges"] == [
-        {
-            "source": "global_ship",
-            "source_graph": _EXPANSION_GRAPH_NAME,
-            "target": 10,
-            "target_graph": _STRUCTURAL_GRAPH_NAME,
-            "kind": "global_member",
-        },
-        {
-            "source": "global_ship",
-            "source_graph": _EXPANSION_GRAPH_NAME,
-            "target": 20,
-            "target_graph": _STRUCTURAL_GRAPH_NAME,
-            "kind": "global_member",
-        },
-    ]
-    assert expansion_graph["summary"] == {
-        "global_ship_nodes": 1,
-        "global_member_edges": 2,
-    }
+    assert summary == {"global_nodes": 1, "global_virtual_member_edges": 0}
+    global_node = expansion_graph["nodes"][0]
+    assert global_node["id"] == GLOBAL_SHIP_NODE_ID
+    assert global_node["kind"] == "global_ship_info"
+    assert global_node["ship"] == ship
+    assert global_node["total_parts"] == 2
+    assert global_node["occupied_cells"] == 0  # make_node nodes have no footprint
+    assert global_node["cluster_count"] == 0
+    assert global_node["thermal_count"] == 0
+    assert expansion_graph["cross_edges"] == []
+    assert expansion_graph["summary"] == {"global_ship_nodes": 1, "global_virtual_member_edges": 0}
 
 
 
@@ -232,9 +221,17 @@ def test_traversable_clusters_pass_records_annotations_and_emits_exact_clusters(
     assert context.get_annotation("traversable_clusters") == [[0, 1, 2]]
     assert context.get_annotation("cluster_by_part_id") == {0: 0, 1: 0, 2: 0}
     assert summary == {"cluster_count": 1, "super_member_edges": 3, "filtered_small_clusters": 0}
-    assert expansion_graph["nodes"] == [
-        {"id": "traversable_cluster_0", "kind": "traversable_cluster", "member_count": 3}
-    ]
+    cluster_node = expansion_graph["nodes"][0]
+    assert cluster_node["id"] == "traversable_cluster_0"
+    assert cluster_node["kind"] == "traversable_cluster"
+    assert cluster_node["member_count"] == 3
+    # All 3 members (0, 1, 2) appear in door edges → door_count == 3
+    assert cluster_node["door_count"] == 3
+    # Nodes 0, 1, 2 each have 1 walkable cell
+    assert cluster_node["walkable_cells_2x"] == 3
+    # make_node nodes have no location_2x → centroid defaults to 0.0
+    assert cluster_node["centroid_x"] == 0.0
+    assert cluster_node["centroid_y"] == 0.0
     assert expansion_graph["cross_edges"] == [
         {
             "source": "traversable_cluster_0",
@@ -1245,7 +1242,7 @@ def _run_global_virtual_linker(
     nodes: list[dict],
     edges: list[dict] | None = None,
 ) -> tuple[ExpansionContext, dict]:
-    """Run BaseIndexes + GlobalShipInfo + TraversableClusters + HullPerimeter + GlobalVirtualLinker."""
+    """Run BaseIndexes + TraversableClusters + HullPerimeter + GlobalVirtualLinker."""
 
     context = ExpansionContext(
         make_graph_payload(nodes, edges),
@@ -1253,7 +1250,6 @@ def _run_global_virtual_linker(
         expansion_version=2,
     )
     BaseIndexesPass().run(context)
-    GlobalShipInfoPass().run(context)
     TraversableClustersPass().run(context)
     HullPerimeterPass().run(context)
     summary = GlobalVirtualLinkerPass().run(context)
@@ -1261,7 +1257,7 @@ def _run_global_virtual_linker(
 
 
 def test_global_virtual_linker_connects_to_all_virtual_nodes() -> None:
-    """GlobalVirtualLinkerPass should emit one edge per non-global virtual node."""
+    """GlobalVirtualLinkerPass should emit one edge per direction per virtual node."""
 
     nodes = [
         make_node(0, [[0, 0]], _CORRIDOR_ID),
@@ -1282,13 +1278,14 @@ def test_global_virtual_linker_connects_to_all_virtual_nodes() -> None:
         e for e in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
         if e.get("kind") == "global_virtual_member"
     ]
-    linked_targets = {e["target"] for e in linker_edges}
+    outbound_targets = {e["target"] for e in linker_edges if e["source"] == "global_ship"}
+    inbound_sources = {e["source"] for e in linker_edges if e["target"] == "global_ship"}
 
-    assert linked_targets == virtual_ids
-    assert all(e["source"] == "global_ship" for e in linker_edges)
+    assert outbound_targets == virtual_ids
+    assert inbound_sources == virtual_ids
     assert all(e["source_graph"] == _EXPANSION_GRAPH_NAME for e in linker_edges)
     assert all(e["target_graph"] == _EXPANSION_GRAPH_NAME for e in linker_edges)
-    assert summary == {"global_virtual_member_edges": len(virtual_ids)}
+    assert summary == {"global_nodes": 1, "global_virtual_member_edges": 2 * len(virtual_ids)}
 
 
 def test_global_virtual_linker_skips_empty_virtual_nodes() -> None:
@@ -1319,7 +1316,9 @@ def test_global_virtual_linker_skips_empty_virtual_nodes() -> None:
         if e.get("kind") == "global_virtual_member"
     ]
     linked_targets = {e["target"] for e in linker_edges}
+    linked_sources = {e["source"] for e in linker_edges}
     assert hull_node["id"] not in linked_targets
+    assert hull_node["id"] not in linked_sources
 
 
 def test_global_virtual_linker_no_self_edge() -> None:
@@ -1330,7 +1329,11 @@ def test_global_virtual_linker_no_self_edge() -> None:
 
     self_edges = [
         e for e in context.emitted_graphs[_EXPANSION_GRAPH_NAME]["cross_edges"]
-        if e.get("kind") == "global_virtual_member" and e["target"] == "global_ship"
+        if (
+            e.get("kind") == "global_virtual_member"
+            and e["source"] == "global_ship"
+            and e["target"] == "global_ship"
+        )
     ]
     assert self_edges == []
 
@@ -1350,7 +1353,7 @@ def test_global_virtual_linker_summary_increments_graph_summary() -> None:
 
 
 def test_global_virtual_linker_empty_expansion_graph() -> None:
-    """GlobalVirtualLinkerPass on a graph with only global_ship emits no linker edges."""
+    """GlobalVirtualLinkerPass with no prior virtual passes emits no linker edges."""
 
     nodes = [make_node(0, part_id=_GENERIC_ID)]
     context = ExpansionContext(
@@ -1359,8 +1362,7 @@ def test_global_virtual_linker_empty_expansion_graph() -> None:
         expansion_version=2,
     )
     BaseIndexesPass().run(context)
-    GlobalShipInfoPass().run(context)
-    # Deliberately skip other passes so global_ship is the only virtual node.
+    # Deliberately skip other virtual passes so global_ship has no peers.
     summary = GlobalVirtualLinkerPass().run(context)
 
     linker_edges = [
@@ -1368,4 +1370,4 @@ def test_global_virtual_linker_empty_expansion_graph() -> None:
         if e.get("kind") == "global_virtual_member"
     ]
     assert linker_edges == []
-    assert summary == {"global_virtual_member_edges": 0}
+    assert summary == {"global_nodes": 1, "global_virtual_member_edges": 0}

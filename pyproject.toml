@@ -26,6 +26,10 @@ scripts = [
   "discord.py>=2.4.0,<3.0.0",
   "python-dotenv>=1.0.1,<2.0.0",
 ]
+ml = [
+  "torch>=2.0",
+  "torch_geometric>=2.5",
+]
 
 [project.scripts]
 voidwright = "main:main"

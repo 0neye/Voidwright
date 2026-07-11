@@ -378,13 +378,13 @@ def test_enrich_graph_global_ship_node_carries_ship_metadata() -> None:
     assert global_node["ship"] == ship
 
 
-def test_enrich_graph_global_member_edges_connect_to_all_parts() -> None:
+def test_enrich_graph_no_global_member_edges_to_parts() -> None:
     result = _enrich_graph(
         make_graph_data([make_node(0, part_id=_GENERIC_ID), make_node(1, part_id=_GENERIC_ID)])
     )
     cross_edges = result["graphs"]["X_expansion_structural"]["cross_edges"]
     global_edges = [e for e in cross_edges if e["kind"] == "global_member"]
-    assert {e["target"] for e in global_edges} == {0, 1}
+    assert global_edges == []
 
 
 def test_enrich_graph_cluster_nodes_for_each_isolated_walkable_part() -> None:
@@ -462,7 +462,6 @@ def test_enrich_graph_summary_counts_are_consistent() -> None:
     summary = result["graphs"]["X_expansion_structural"]["summary"]
     assert summary["global_ship_nodes"] == 1
     assert summary["traversable_clusters"] == 2
-    assert summary["global_member_edges"] == 5
     assert summary["super_member_edges"] == 4
 
 
@@ -528,7 +527,7 @@ def test_enrich_graph_expansion_metadata() -> None:
     assert "X_expansion_structural" in result["expansion"]["graphs_added"]
     pass_names = [p["name"] for p in result["expansion"]["passes"]]
     assert "base_indexes" in pass_names
-    assert "global_ship_info" in pass_names
+    assert "global_virtual_linker" in pass_names
     assert "traversable_clusters" in pass_names
     assert "crew_access_layer1" in pass_names
     assert "core_support_layer2" in pass_names

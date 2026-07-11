@@ -147,7 +147,7 @@ def run_filter(
 
     # Write manifest
     manifest: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
         "ships_scanned": result.ships_scanned,
